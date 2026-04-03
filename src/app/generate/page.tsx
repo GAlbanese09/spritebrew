@@ -1,44 +1,64 @@
-import { Sparkles } from 'lucide-react';
-import Card from '@/components/ui/Card';
-import Badge from '@/components/ui/Badge';
+'use client';
+
+import { useCallback, useState } from 'react';
+import GenerationForm from '@/components/sprites/GenerationForm';
+import GenerationResult, { addToHistory } from '@/components/sprites/GenerationResult';
+import { useSpriteStore } from '@/stores/spriteStore';
 
 export default function GeneratePage() {
-  return (
-    <div className="max-w-3xl mx-auto space-y-8">
-      <div className="flex items-center gap-3">
-        <h1 className="font-display text-sm text-text-muted mb-2">AI Generate</h1>
-        <Badge variant="teal">Phase 2</Badge>
-      </div>
-      <p className="text-sm font-mono text-text-secondary">
-        AI-powered sprite generation is coming in Phase 2. Describe a character and get a full animation sprite sheet.
-      </p>
+  const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
+  const [showForm, setShowForm] = useState(true);
 
-      <Card className="flex flex-col items-center justify-center py-20 border-dashed border-accent-teal/20 bg-accent-teal-muted/5">
-        <div className="flex items-center justify-center w-16 h-16 rounded-lg bg-accent-teal-muted mb-4">
-          <Sparkles size={32} className="text-accent-teal" />
-        </div>
-        <h2 className="text-sm font-mono font-semibold text-text-primary mb-2">
-          AI-Powered Sprite Generation
-        </h2>
-        <p className="text-xs font-mono text-text-secondary mb-4 max-w-md text-center leading-relaxed">
-          Describe your character — style, pose, colors — and SpriteBrew will generate
-          a complete animation sprite sheet using AI. Walk cycles, attacks, idles, and more.
+  const handleGenerated = useCallback(async (dataUrl: string, prompt: string, style: string) => {
+    setShowForm(false);
+    await addToHistory(dataUrl, prompt, style);
+  }, []);
+
+  const handleReset = useCallback(() => {
+    setShowForm(true);
+  }, []);
+
+  return (
+    <div className="max-w-5xl mx-auto space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="font-display text-sm text-accent-amber mb-2">AI Generate</h1>
+        <p className="text-sm font-mono text-text-secondary">
+          Describe a character and generate a pixel art animation sprite sheet
+          using AI. Send the result to the Slicer for frame extraction.
         </p>
-        <Badge variant="teal">Coming in Phase 2</Badge>
-        <div className="mt-8 grid grid-cols-2 gap-4 max-w-sm w-full">
-          {['Text-to-sprite generation', 'Style consistency', 'Multi-animation output', 'Iterative refinement'].map(
-            (feature) => (
-              <div
-                key={feature}
-                className="flex items-center gap-2 text-[11px] font-mono text-text-muted"
-              >
-                <span className="w-1 h-1 rounded-full bg-accent-teal/40" />
-                {feature}
+      </div>
+
+      {/* Two-column layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+        {/* Form — left 3/5 */}
+        <div className="lg:col-span-3">
+          <div className="rounded-lg border border-border-default bg-bg-surface p-6">
+            {(showForm || !generatedImageDataUrl) ? (
+              <GenerationForm onGenerated={handleGenerated} />
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-sm font-mono text-text-secondary mb-3">
+                  Generation complete!
+                </p>
+                <button
+                  onClick={() => setShowForm(true)}
+                  className="text-xs font-mono text-accent-amber hover:text-accent-amber-strong cursor-pointer"
+                >
+                  Show form to generate another
+                </button>
               </div>
-            )
-          )}
+            )}
+          </div>
         </div>
-      </Card>
+
+        {/* Result — right 2/5 */}
+        <div className="lg:col-span-2">
+          <div className="rounded-lg border border-border-default bg-bg-surface p-6">
+            <GenerationResult onReset={handleReset} />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -17,7 +17,7 @@ const NAV_ITEMS = [
   { href: '/upload', label: 'Upload', icon: UploadCloud, soon: false },
   { href: '/preview', label: 'Preview', icon: PlayCircle, soon: false },
   { href: '/export', label: 'Export', icon: Download, soon: false },
-  { href: '/generate', label: 'Generate', icon: Sparkles, soon: true },
+  { href: '/generate', label: 'Generate', icon: Sparkles, soon: false },
 ];
 
 interface SidebarProps {
@@ -97,7 +97,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         {/* Footer */}
         <div className="px-5 py-4 border-t border-border-subtle">
           <p className="text-[10px] text-text-muted font-mono uppercase tracking-widest">
-            Phase 1 &middot; Shell
+            SpriteBrew v0.1
           </p>
         </div>
       </aside>

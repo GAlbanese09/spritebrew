@@ -91,20 +91,22 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Phase 2 teaser */}
+      {/* AI Generation card */}
       <section>
-        <Card className="text-center border-accent-teal/20">
-          <div className="flex items-center justify-center gap-2 mb-2">
-            <Sparkles size={16} className="text-accent-teal" />
-            <Badge variant="teal">Phase 2</Badge>
-          </div>
-          <p className="text-sm font-mono text-text-secondary">
-            AI-powered sprite generation coming soon.
-          </p>
-          <p className="mt-1 text-xs font-mono text-text-muted">
-            Describe a character, get a full animation sheet.
-          </p>
-        </Card>
+        <Link href="/generate" className="block">
+          <Card hover className="text-center border-accent-amber/20">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <Sparkles size={16} className="text-accent-amber" />
+              <Badge variant="amber">New</Badge>
+            </div>
+            <p className="text-sm font-mono text-text-primary font-semibold">
+              AI Sprite Generation
+            </p>
+            <p className="mt-1 text-xs font-mono text-text-muted">
+              Describe a character, get a full animation sheet.
+            </p>
+          </Card>
+        </Link>
       </section>
     </div>
   );

@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Sparkles } from 'lucide-react';
 import UploadZone from '@/components/sprites/UploadZone';
 import SlicerConfig, { type SliceConfig } from '@/components/sprites/SlicerConfig';
 import FrameGrid from '@/components/sprites/FrameGrid';
@@ -33,25 +33,52 @@ export default function UploadPage() {
   const setSpriteSheet = useSpriteStore((s) => s.setSpriteSheet);
   const clearSpriteSheet = useSpriteStore((s) => s.clearSpriteSheet);
   const setFrameDataUrls = useSpriteStore((s) => s.setFrameDataUrls);
+  const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
+  const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
 
   const [uploaded, setUploaded] = useState<UploadedImage | null>(null);
   const [slicing, setSlicing] = useState(false);
+  const [fromGenerated, setFromGenerated] = useState(false);
+
+  // Auto-load generated image from store on mount
+  useEffect(() => {
+    if (generatedImageDataUrl && !uploaded) {
+      const img = new Image();
+      img.onload = () => {
+        const blobUrl = generatedImageDataUrl;
+        setUploaded({
+          file: new File([], 'generated_sprite.png', { type: 'image/png' }),
+          blobUrl,
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+        });
+        setFromGenerated(true);
+        clearSpriteSheet();
+        clearGeneratedImage();
+      };
+      img.src = generatedImageDataUrl;
+    }
+    // Only run on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleImageLoaded = useCallback(
     (file: File, blobUrl: string, width: number, height: number) => {
       setUploaded({ file, blobUrl, width, height });
+      setFromGenerated(false);
       clearSpriteSheet();
     },
     [clearSpriteSheet]
   );
 
   const handleRemove = useCallback(() => {
-    if (uploaded) {
+    if (uploaded && !fromGenerated) {
       URL.revokeObjectURL(uploaded.blobUrl);
     }
     setUploaded(null);
+    setFromGenerated(false);
     clearSpriteSheet();
-  }, [uploaded, clearSpriteSheet]);
+  }, [uploaded, fromGenerated, clearSpriteSheet]);
 
   const handleSlice = useCallback(
     async (config: SliceConfig) => {
@@ -95,7 +122,7 @@ export default function UploadPage() {
 
         const sheet: SpriteSheet = {
           id: `sheet-${Date.now()}`,
-          name: uploaded.file.name.replace(/\.[^.]+$/, ''),
+          name: uploaded.file.name.replace(/\.[^.]+$/, '') || 'generated_sprite',
           sourceImage: uploaded.blobUrl,
           frameWidth: config.frameWidth,
           frameHeight: config.frameHeight,
@@ -139,6 +166,16 @@ export default function UploadPage() {
           individual frames for preview and export.
         </p>
       </div>
+
+      {/* Generated image banner */}
+      {fromGenerated && uploaded && (
+        <div className="flex items-center gap-2 rounded-lg bg-accent-amber-glow border border-accent-amber/20 px-4 py-3">
+          <Sparkles size={14} className="text-accent-amber flex-shrink-0" />
+          <p className="text-xs font-mono text-accent-amber">
+            Generated image loaded — configure frame size and slice.
+          </p>
+        </div>
+      )}
 
       {/* Upload zone */}
       <UploadZone

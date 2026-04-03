@@ -7,6 +7,12 @@ interface SpriteStore {
   animations: SpriteAnimation[];
   frameDataUrls: Map<string, string>;
 
+  // Generation state
+  generatedImageUrl: string | null;
+  generatedImageDataUrl: string | null;
+  isGenerating: boolean;
+  generationError: string | null;
+
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
   setFrameDataUrls: (urls: Map<string, string>) => void;
@@ -17,6 +23,12 @@ interface SpriteStore {
   updateAnimationFps: (animationId: string, fps: number) => void;
   setSelectedFrames: (frameIds: string[]) => void;
   toggleFrameSelection: (frameId: string) => void;
+
+  // Generation actions
+  setGeneratedImage: (url: string, dataUrl: string) => void;
+  clearGeneratedImage: () => void;
+  setGenerating: (loading: boolean) => void;
+  setGenerationError: (error: string | null) => void;
 }
 
 export const useSpriteStore = create<SpriteStore>((set) => ({
@@ -24,6 +36,11 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   selectedFrames: [],
   animations: [],
   frameDataUrls: new Map(),
+
+  generatedImageUrl: null,
+  generatedImageDataUrl: null,
+  isGenerating: false,
+  generationError: null,
 
   setSpriteSheet: (sheet) =>
     set({ spriteSheet: sheet, selectedFrames: [], animations: [] }),
@@ -67,7 +84,6 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
       return {
         animations: state.animations.map((a) => {
           if (a.id !== animationId) return a;
-          // Append new frames, avoid duplicates
           const existingIds = new Set(a.frames.map((f) => f.id));
           const newFrames = framesToAssign.filter((f) => !existingIds.has(f.id));
           return { ...a, frames: [...a.frames, ...newFrames] };
@@ -94,4 +110,14 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
           : [...state.selectedFrames, frameId],
       };
     }),
+
+  setGeneratedImage: (url, dataUrl) =>
+    set({ generatedImageUrl: url, generatedImageDataUrl: dataUrl, generationError: null }),
+
+  clearGeneratedImage: () =>
+    set({ generatedImageUrl: null, generatedImageDataUrl: null }),
+
+  setGenerating: (loading) => set({ isGenerating: loading }),
+
+  setGenerationError: (error) => set({ generationError: error, isGenerating: false }),
 }));

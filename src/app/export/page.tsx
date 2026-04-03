@@ -1,30 +1,51 @@
-import { Download } from 'lucide-react';
+'use client';
+
+import Link from 'next/link';
+import { UploadCloud } from 'lucide-react';
+import { useSpriteStore } from '@/stores/spriteStore';
+import ExportConfig from '@/components/sprites/ExportConfig';
 import Card from '@/components/ui/Card';
-import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
 
 export default function ExportPage() {
+  const animations = useSpriteStore((s) => s.animations);
+
+  const hasData = animations.length > 0 && animations.some((a) => a.frames.length > 0);
+
   return (
-    <div className="max-w-3xl mx-auto space-y-8">
+    <div className="max-w-5xl mx-auto space-y-6">
+      {/* Header */}
       <div>
         <h1 className="font-display text-sm text-accent-amber mb-2">Export</h1>
         <p className="text-sm font-mono text-text-secondary">
-          Export your sprite sheets in the format your game engine expects. Supports Unity, Godot, GameMaker, RPG Maker, Aseprite, and raw PNG frames.
+          Export your sprite sheets in the format your game engine expects.
+          Supports Unity, Godot, GameMaker, RPG Maker, Aseprite, and raw PNG frames.
         </p>
       </div>
 
-      <Card className="flex flex-col items-center justify-center py-16 border-dashed">
-        <div className="flex items-center justify-center w-14 h-14 rounded-lg bg-bg-elevated mb-4">
-          <Download size={28} className="text-text-muted" />
+      {/* Empty state */}
+      {!hasData && (
+        <Card className="flex flex-col items-center justify-center py-16 border-dashed">
+          <div className="flex items-center justify-center w-14 h-14 rounded-lg bg-bg-elevated mb-4">
+            <UploadCloud size={28} className="text-text-muted" />
+          </div>
+          <p className="text-sm font-mono text-text-secondary mb-3">
+            No sprite data loaded.
+          </p>
+          <Link href="/upload">
+            <Button variant="secondary" size="md">
+              Go to Upload
+            </Button>
+          </Link>
+        </Card>
+      )}
+
+      {/* Export configuration */}
+      {hasData && (
+        <div className="rounded-lg border border-border-default bg-bg-surface p-6">
+          <ExportConfig />
         </div>
-        <p className="text-sm font-mono text-text-secondary mb-1">
-          This will be built in the next prompt
-        </p>
-        <Badge variant="amber">Coming Up</Badge>
-        <p className="mt-4 text-xs font-mono text-text-muted max-w-sm text-center leading-relaxed">
-          Choose your target engine, configure padding and power-of-two options,
-          and download ready-to-use sprite sheets with metadata.
-        </p>
-      </Card>
+      )}
     </div>
   );
 }

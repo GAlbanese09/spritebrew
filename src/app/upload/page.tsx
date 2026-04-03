@@ -29,19 +29,18 @@ export default function UploadPage() {
   const router = useRouter();
   const spriteSheet = useSpriteStore((s) => s.spriteSheet);
   const animations = useSpriteStore((s) => s.animations);
+  const frameDataUrls = useSpriteStore((s) => s.frameDataUrls);
   const setSpriteSheet = useSpriteStore((s) => s.setSpriteSheet);
   const clearSpriteSheet = useSpriteStore((s) => s.clearSpriteSheet);
+  const setFrameDataUrls = useSpriteStore((s) => s.setFrameDataUrls);
 
   const [uploaded, setUploaded] = useState<UploadedImage | null>(null);
-  const [frameDataUrls, setFrameDataUrls] = useState<Map<string, string>>(new Map());
   const [slicing, setSlicing] = useState(false);
 
   const handleImageLoaded = useCallback(
     (file: File, blobUrl: string, width: number, height: number) => {
       setUploaded({ file, blobUrl, width, height });
-      // Clear any previous slice data
       clearSpriteSheet();
-      setFrameDataUrls(new Map());
     },
     [clearSpriteSheet]
   );
@@ -52,7 +51,6 @@ export default function UploadPage() {
     }
     setUploaded(null);
     clearSpriteSheet();
-    setFrameDataUrls(new Map());
   }, [uploaded, clearSpriteSheet]);
 
   const handleSlice = useCallback(
@@ -123,7 +121,7 @@ export default function UploadPage() {
         setSlicing(false);
       }
     },
-    [uploaded, setSpriteSheet]
+    [uploaded, setSpriteSheet, setFrameDataUrls]
   );
 
   const canContinue = useMemo(

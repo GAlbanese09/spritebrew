@@ -5,9 +5,11 @@ interface SpriteStore {
   spriteSheet: SpriteSheet | null;
   selectedFrames: string[];
   animations: SpriteAnimation[];
+  frameDataUrls: Map<string, string>;
 
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
+  setFrameDataUrls: (urls: Map<string, string>) => void;
   updateFrameOrder: (animationId: string, frameIds: string[]) => void;
   addAnimation: (animation: SpriteAnimation) => void;
   removeAnimation: (animationId: string) => void;
@@ -21,12 +23,15 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   spriteSheet: null,
   selectedFrames: [],
   animations: [],
+  frameDataUrls: new Map(),
 
   setSpriteSheet: (sheet) =>
     set({ spriteSheet: sheet, selectedFrames: [], animations: [] }),
 
   clearSpriteSheet: () =>
-    set({ spriteSheet: null, selectedFrames: [], animations: [] }),
+    set({ spriteSheet: null, selectedFrames: [], animations: [], frameDataUrls: new Map() }),
+
+  setFrameDataUrls: (urls) => set({ frameDataUrls: urls }),
 
   updateFrameOrder: (animationId, frameIds) =>
     set((state) => {

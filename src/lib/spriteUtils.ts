@@ -214,3 +214,40 @@ export function imageToCanvas(img: HTMLImageElement): HTMLCanvasElement {
   ctx.drawImage(img, 0, 0);
   return canvas;
 }
+
+/**
+ * Create a checkerboard / grid background canvas tile.
+ */
+export function createGridBackground(
+  tileSize: number,
+  color1: string,
+  color2: string
+): HTMLCanvasElement {
+  const size = tileSize * 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = color1;
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = color2;
+  ctx.fillRect(0, 0, tileSize, tileSize);
+  ctx.fillRect(tileSize, tileSize, tileSize, tileSize);
+  return canvas;
+}
+
+/**
+ * Scale a canvas with nearest-neighbor interpolation.
+ */
+export function scaleCanvasNearestNeighbor(
+  source: HTMLCanvasElement,
+  scale: number
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.floor(source.width * scale);
+  canvas.height = Math.floor(source.height * scale);
+  const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}

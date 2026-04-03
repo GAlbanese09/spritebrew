@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+/* ── Theme tokens ── */
+:root {
+  --bg-primary: #121010;
+  --bg-secondary: #1a1714;
+  --bg-surface: #1e1b18;
+  --bg-elevated: #252220;
+  --bg-hover: #2a2725;
+
+  --border-default: rgba(200, 160, 100, 0.12);
+  --border-subtle: rgba(200, 160, 100, 0.06);
+  --border-strong: rgba(200, 160, 100, 0.2);
+
+  --text-primary: #e8e0d6;
+  --text-secondary: #9a918a;
+  --text-muted: #5c5550;
+
+  --accent-amber: #d4871c;
+  --accent-amber-glow: rgba(212, 135, 28, 0.15);
+  --accent-amber-strong: #e8991f;
+  --accent-teal: #3db8a0;
+  --accent-teal-muted: rgba(61, 184, 160, 0.15);
+
+  --sidebar-width: 240px;
+}
+
+/* ── Tailwind v4 theme inline ── */
+@theme inline {
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-secondary: var(--bg-secondary);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-bg-hover: var(--bg-hover);
+
+  --color-border-default: var(--border-default);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+
+  --color-accent-amber: var(--accent-amber);
+  --color-accent-amber-glow: var(--accent-amber-glow);
+  --color-accent-amber-strong: var(--accent-amber-strong);
+  --color-accent-teal: var(--accent-teal);
+  --color-accent-teal-muted: var(--accent-teal-muted);
+
+  --font-display: 'Press Start 2P', cursive;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+/* ── Base ── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+/* Pixel-perfect rendering for all images */
+img,
+canvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* ── Pixel grid background ── */
+.pixel-grid {
+  background-image:
+    linear-gradient(rgba(200, 160, 100, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(200, 160, 100, 0.03) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+/* ── Scrollbar styling ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-elevated);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ── Selection ── */
+::selection {
+  background: var(--accent-amber-glow);
+  color: var(--accent-amber-strong);
+}
+
+/* ── Utilities ── */
+.glow-amber {
+  box-shadow: 0 0 12px var(--accent-amber-glow), inset 0 0 12px var(--accent-amber-glow);
+}
+
+.text-glow-amber {
+  text-shadow: 0 0 8px var(--accent-amber-glow);
+}

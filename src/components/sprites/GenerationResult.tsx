@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight } from 'lucide-react';
+import { useAuth } from '@clerk/nextjs';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import {
@@ -27,6 +28,7 @@ const LOADING_MESSAGES = [
 
 export default function GenerationResult({ onReset }: GenerationResultProps) {
   const router = useRouter();
+  const { userId } = useAuth();
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
@@ -36,10 +38,10 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const [history, setHistory] = useState<GenerationHistoryEntry[]>([]);
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
 
-  // Load history on mount and whenever a new generation arrives
+  // Load history on mount and whenever a new generation arrives or user changes
   useEffect(() => {
-    setHistory(loadHistory());
-  }, [generatedImageDataUrl]);
+    setHistory(loadHistory(userId));
+  }, [generatedImageDataUrl, userId]);
 
   // Rotate loading messages every 3 seconds while generating
   useEffect(() => {
@@ -73,9 +75,9 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   }, [clearGeneratedImage, onReset]);
 
   const handleClearHistory = useCallback(() => {
-    clearHistory();
+    clearHistory(userId);
     setHistory([]);
-  }, []);
+  }, [userId]);
 
   if (isGenerating) {
     return (

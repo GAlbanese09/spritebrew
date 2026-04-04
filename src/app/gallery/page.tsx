@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Download, Scissors, Trash2, Images, Sparkles, Play } from 'lucide-react';
+import { useAuth } from '@clerk/nextjs';
 import {
   loadHistory,
   deleteHistoryEntry,
@@ -20,6 +21,7 @@ type FilterTab = 'all' | 'create' | 'animate';
 
 export default function GalleryPage() {
   const router = useRouter();
+  const { userId } = useAuth();
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
 
@@ -27,8 +29,8 @@ export default function GalleryPage() {
   const [filter, setFilter] = useState<FilterTab>('all');
 
   useEffect(() => {
-    setEntries(loadHistory());
-  }, []);
+    setEntries(loadHistory(userId));
+  }, [userId]);
 
   const counts = useMemo(
     () => ({
@@ -67,15 +69,15 @@ export default function GalleryPage() {
 
   const handleDelete = useCallback((id: string) => {
     if (!confirm('Delete this generation? This cannot be undone.')) return;
-    deleteHistoryEntry(id);
-    setEntries(loadHistory());
-  }, []);
+    deleteHistoryEntry(userId, id);
+    setEntries(loadHistory(userId));
+  }, [userId]);
 
   const handleClearAll = useCallback(() => {
     if (!confirm('Clear all generation history? This cannot be undone.')) return;
-    clearHistory();
+    clearHistory(userId);
     setEntries([]);
-  }, []);
+  }, [userId]);
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">

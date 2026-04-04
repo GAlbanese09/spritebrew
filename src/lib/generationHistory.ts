@@ -18,15 +18,19 @@ export interface GenerationHistoryEntry {
   fullImageDataUrl?: string; // only for recent entries
 }
 
-const HISTORY_KEY = 'spritebrew_gen_history';
 const MAX_HISTORY = 50;
 const FULL_IMAGE_KEEP = 10; // keep full images only for N most recent
 
-/** Read all history entries (newest first). */
-export function loadHistory(): GenerationHistoryEntry[] {
+/** Build the per-user localStorage key. Falls back to "anonymous" when not signed in. */
+function historyKey(userId: string | null | undefined): string {
+  return `spritebrew_generations_${userId || 'anonymous'}`;
+}
+
+/** Read all history entries (newest first) for the given user. */
+export function loadHistory(userId: string | null | undefined): GenerationHistoryEntry[] {
   if (typeof window === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(HISTORY_KEY);
+    const raw = localStorage.getItem(historyKey(userId));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -54,8 +58,9 @@ export function loadHistory(): GenerationHistoryEntry[] {
 }
 
 /** Save entries to localStorage, pruning full images from older entries first. */
-function saveHistory(entries: GenerationHistoryEntry[]) {
+function saveHistory(userId: string | null | undefined, entries: GenerationHistoryEntry[]) {
   if (typeof window === 'undefined') return;
+  const key = historyKey(userId);
 
   // Cap total count
   let trimmed = entries.slice(0, MAX_HISTORY);
@@ -70,7 +75,7 @@ function saveHistory(entries: GenerationHistoryEntry[]) {
   });
 
   try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(trimmed));
+    localStorage.setItem(key, JSON.stringify(trimmed));
   } catch {
     // Quota exceeded — try again with fewer full images
     try {
@@ -80,7 +85,7 @@ function saveHistory(entries: GenerationHistoryEntry[]) {
         void _unused;
         return rest;
       });
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(stripped));
+      localStorage.setItem(key, JSON.stringify(stripped));
     } catch {
       // Still failed — drop full images entirely
       try {
@@ -88,7 +93,7 @@ function saveHistory(entries: GenerationHistoryEntry[]) {
           void _unused;
           return rest;
         });
-        localStorage.setItem(HISTORY_KEY, JSON.stringify(noFull));
+        localStorage.setItem(key, JSON.stringify(noFull));
       } catch {
         // Give up — localStorage unavailable
       }
@@ -118,6 +123,7 @@ export function createThumbnail(dataUrl: string, size: number): Promise<string> 
 }
 
 interface AddHistoryInput {
+  userId: string | null | undefined;
   prompt: string;
   style: string;
   mode: GenerationMode;
@@ -125,7 +131,7 @@ interface AddHistoryInput {
   fullImageDataUrl: string;
 }
 
-/** Add a new entry to history. */
+/** Add a new entry to history for the given user. */
 export async function addToHistory(input: AddHistoryInput): Promise<void> {
   const thumbnail = await createThumbnail(input.fullImageDataUrl, 128);
 
@@ -140,21 +146,21 @@ export async function addToHistory(input: AddHistoryInput): Promise<void> {
     fullImageDataUrl: input.fullImageDataUrl,
   };
 
-  const entries = loadHistory();
+  const entries = loadHistory(input.userId);
   entries.unshift(entry);
-  saveHistory(entries);
+  saveHistory(input.userId, entries);
 }
 
-/** Delete a single entry by id. */
-export function deleteHistoryEntry(id: string): void {
-  const entries = loadHistory().filter((e) => e.id !== id);
-  saveHistory(entries);
+/** Delete a single entry by id for the given user. */
+export function deleteHistoryEntry(userId: string | null | undefined, id: string): void {
+  const entries = loadHistory(userId).filter((e) => e.id !== id);
+  saveHistory(userId, entries);
 }
 
-/** Clear all history. */
-export function clearHistory(): void {
+/** Clear all history for the given user. */
+export function clearHistory(userId: string | null | undefined): void {
   if (typeof window === 'undefined') return;
-  localStorage.removeItem(HISTORY_KEY);
+  localStorage.removeItem(historyKey(userId));
 }
 
 /** Format a timestamp as a relative string. */

@@ -134,6 +134,7 @@ function UserIdentity() {
 
   return (
     <div className="flex items-center gap-2.5 px-2 py-1">
+      {/* afterSignOutUrl is set on ClerkProvider in layout.tsx (Clerk v7 removed it from UserButton) */}
       <UserButton
         appearance={{
           elements: {

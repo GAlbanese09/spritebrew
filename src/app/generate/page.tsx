@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Sparkles, Play, LogIn, X } from 'lucide-react';
-import { Show, SignInButton } from '@clerk/nextjs';
+import { Show, SignInButton, useAuth } from '@clerk/nextjs';
 import GenerationForm from '@/components/sprites/GenerationForm';
 import AnimateForm from '@/components/sprites/AnimateForm';
 import GenerationResult from '@/components/sprites/GenerationResult';
@@ -54,6 +54,7 @@ function EarlyAccessBanner() {
 type GenerateTab = 'create' | 'animate';
 
 export default function GeneratePage() {
+  const { userId } = useAuth();
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
   const setAnimateMode = useSpriteStore((s) => s.setAnimateMode);
 
@@ -81,13 +82,14 @@ export default function GeneratePage() {
     const isAnimate = style.startsWith('any_animation_');
     const action = isAnimate ? style.replace('any_animation_', '') : undefined;
     await addToHistory({
+      userId,
       prompt,
       style,
       mode: isAnimate ? 'animate' : 'create',
       action,
       fullImageDataUrl: dataUrl,
     });
-  }, []);
+  }, [userId]);
 
   const handleReset = useCallback(() => {
     setShowForm(true);

@@ -27,6 +27,15 @@ const STYLE_ROW_NAMES: Record<string, string[]> = {
   any_animation: ['Animation'],
   '8_dir_rotation': ['Down', 'Down-Left', 'Left', 'Up-Left', 'Up', 'Up-Right', 'Right', 'Down-Right'],
   vfx: ['Effect'],
+  // Advanced animation styles — single-direction strips
+  advanced_animation_walking: ['Walk'],
+  advanced_animation_idle: ['Idle'],
+  advanced_animation_attack: ['Attack'],
+  advanced_animation_jump: ['Jump'],
+  advanced_animation_crouch: ['Crouch'],
+  advanced_animation_destroy: ['Death'],
+  advanced_animation_subtle_motion: ['Subtle Motion'],
+  advanced_animation_custom_action: ['Animation'],
 };
 
 // Row type mappings for styles
@@ -37,6 +46,14 @@ const STYLE_ROW_TYPES: Record<string, string[]> = {
   any_animation: ['idle'],
   '8_dir_rotation': ['walk', 'walk', 'walk', 'walk', 'walk', 'walk', 'walk', 'walk'],
   vfx: ['idle'],
+  advanced_animation_walking: ['walk'],
+  advanced_animation_idle: ['idle'],
+  advanced_animation_attack: ['attack'],
+  advanced_animation_jump: ['jump'],
+  advanced_animation_crouch: ['idle'],
+  advanced_animation_destroy: ['death'],
+  advanced_animation_subtle_motion: ['idle'],
+  advanced_animation_custom_action: ['idle'],
 };
 
 // Default row names by row count for user-uploaded sheets

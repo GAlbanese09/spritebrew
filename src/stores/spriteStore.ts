@@ -13,6 +13,8 @@ interface SpriteStore {
   isGenerating: boolean;
   generationError: string | null;
   generationStyle: string | null;
+  animateMode: 'create' | 'animate';
+  originalCharacterDataUrl: string | null;
 
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
@@ -32,6 +34,8 @@ interface SpriteStore {
   setGenerating: (loading: boolean) => void;
   setGenerationError: (error: string | null) => void;
   setGenerationStyle: (style: string | null) => void;
+  setAnimateMode: (mode: 'create' | 'animate') => void;
+  setOriginalCharacter: (dataUrl: string | null) => void;
 }
 
 export const useSpriteStore = create<SpriteStore>((set) => ({
@@ -45,6 +49,8 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   isGenerating: false,
   generationError: null,
   generationStyle: null,
+  animateMode: 'create',
+  originalCharacterDataUrl: null,
 
   setSpriteSheet: (sheet) =>
     set({ spriteSheet: sheet, selectedFrames: [], animations: [] }),
@@ -126,11 +132,15 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
     set({ generatedImageUrl: url, generatedImageDataUrl: dataUrl, generationError: null }),
 
   clearGeneratedImage: () =>
-    set({ generatedImageUrl: null, generatedImageDataUrl: null }),
+    set({ generatedImageUrl: null, generatedImageDataUrl: null, originalCharacterDataUrl: null }),
 
   setGenerating: (loading) => set({ isGenerating: loading }),
 
   setGenerationError: (error) => set({ generationError: error, isGenerating: false }),
 
   setGenerationStyle: (style) => set({ generationStyle: style }),
+
+  setAnimateMode: (mode) => set({ animateMode: mode }),
+
+  setOriginalCharacter: (dataUrl) => set({ originalCharacterDataUrl: dataUrl }),
 }));

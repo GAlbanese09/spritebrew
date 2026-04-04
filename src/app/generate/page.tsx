@@ -1,17 +1,22 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Sparkles, Play } from 'lucide-react';
 import GenerationForm from '@/components/sprites/GenerationForm';
+import AnimateForm from '@/components/sprites/AnimateForm';
 import GenerationResult, { addToHistory } from '@/components/sprites/GenerationResult';
 import { useSpriteStore } from '@/stores/spriteStore';
 
+type GenerateTab = 'create' | 'animate';
+
 export default function GeneratePage() {
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
+  const setAnimateMode = useSpriteStore((s) => s.setAnimateMode);
+
+  const [tab, setTab] = useState<GenerateTab>('create');
   const [showForm, setShowForm] = useState(true);
   const prevDataUrl = useRef(generatedImageDataUrl);
 
-  // Hide the form when a new generation completes — done in useEffect
-  // so the Zustand store update settles before we trigger a React state change
   useEffect(() => {
     if (generatedImageDataUrl && generatedImageDataUrl !== prevDataUrl.current) {
       setShowForm(false);
@@ -19,9 +24,15 @@ export default function GeneratePage() {
     prevDataUrl.current = generatedImageDataUrl;
   }, [generatedImageDataUrl]);
 
+  const handleTabChange = useCallback(
+    (newTab: GenerateTab) => {
+      setTab(newTab);
+      setAnimateMode(newTab);
+    },
+    [setAnimateMode]
+  );
+
   const handleGenerated = useCallback(async (dataUrl: string, prompt: string, style: string) => {
-    // Don't call setShowForm here — the useEffect above handles it after
-    // the store update settles, avoiding a mid-batch component unmount.
     await addToHistory(dataUrl, prompt, style);
   }, []);
 
@@ -35,18 +46,49 @@ export default function GeneratePage() {
       <div>
         <h1 className="font-display text-sm text-accent-amber mb-2">AI Generate</h1>
         <p className="text-sm font-mono text-text-secondary">
-          Describe a character and generate a pixel art animation sprite sheet
-          using AI. Send the result to the Slicer for frame extraction.
+          Create new pixel art characters from text, or animate your own existing
+          character art with AI.
         </p>
       </div>
 
       {/* Two-column layout */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Form — left 3/5 */}
-        <div className="lg:col-span-3">
+        <div className="lg:col-span-3 space-y-4">
+          {/* Tab switcher */}
+          <div className="flex gap-1 rounded-lg bg-bg-secondary p-1 w-fit">
+            <button
+              onClick={() => handleTabChange('create')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono cursor-pointer transition-colors
+                ${tab === 'create'
+                  ? 'bg-accent-amber text-bg-primary'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                }`}
+            >
+              <Sparkles size={14} />
+              Create New
+            </button>
+            <button
+              onClick={() => handleTabChange('animate')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono cursor-pointer transition-colors
+                ${tab === 'animate'
+                  ? 'bg-accent-amber text-bg-primary'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                }`}
+            >
+              <Play size={14} />
+              Animate My Character
+            </button>
+          </div>
+
+          {/* Form content */}
           <div className="rounded-lg border border-border-default bg-bg-surface p-6">
-            {(showForm || !generatedImageDataUrl) ? (
-              <GenerationForm onGenerated={handleGenerated} />
+            {showForm || !generatedImageDataUrl ? (
+              tab === 'create' ? (
+                <GenerationForm onGenerated={handleGenerated} />
+              ) : (
+                <AnimateForm onGenerated={handleGenerated} />
+              )
             ) : (
               <div className="text-center py-8">
                 <p className="text-sm font-mono text-text-secondary mb-3">

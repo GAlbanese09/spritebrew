@@ -72,6 +72,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
+  const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
 
   const [zoom, setZoom] = useState(4);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -230,6 +231,35 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
 
   return (
     <div className="space-y-4">
+      {/* Original → Animated comparison */}
+      {originalCharacterDataUrl && (
+        <div className="flex items-center gap-3 justify-center">
+          <div className="text-center">
+            <p className="text-[9px] font-mono text-text-muted mb-1">Original</p>
+            <div
+              className="inline-block rounded border border-border-subtle overflow-hidden"
+              style={{
+                backgroundImage:
+                  'linear-gradient(45deg, #2a2725 25%, transparent 25%), linear-gradient(-45deg, #2a2725 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2725 75%), linear-gradient(-45deg, transparent 75%, #2a2725 75%)',
+                backgroundSize: '6px 6px',
+                backgroundPosition: '0 0, 0 3px, 3px -3px, -3px 0',
+              }}
+            >
+              <img
+                src={originalCharacterDataUrl}
+                alt="Original character"
+                className="block w-16 h-16 object-contain"
+                style={{ imageRendering: 'pixelated' }}
+              />
+            </div>
+          </div>
+          <span className="text-text-muted text-xs font-mono">&rarr;</span>
+          <div className="text-center">
+            <p className="text-[9px] font-mono text-accent-amber mb-1">Animated</p>
+          </div>
+        </div>
+      )}
+
       {/* Result image */}
       <div className="rounded-lg border border-border-default bg-bg-elevated p-4 overflow-auto">
         <div

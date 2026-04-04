@@ -8,6 +8,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/upload': 'Upload & Slice',
   '/preview': 'Preview & Play',
   '/export': 'Export',
+  '/gallery': 'Gallery',
   '/generate': 'AI Generate',
 };
 

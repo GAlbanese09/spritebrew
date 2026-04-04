@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
+import ImageResizer from './ImageResizer';
 
 const ACTIONS = [
   { id: 'walking', name: 'Walk', desc: 'Walking cycle animation' },
@@ -97,6 +98,30 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setCharWidth(0);
     setCharHeight(0);
     setHasAlpha(false);
+  }, []);
+
+  /** Accept a resized version from the ImageResizer and use it as the character */
+  const handleResizeAccept = useCallback((resizedDataUrl: string, w: number, h: number) => {
+    setCharacterDataUrl(resizedDataUrl);
+    setCharWidth(w);
+    setCharHeight(h);
+
+    // Re-check alpha on the resized image
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0);
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let foundAlpha = false;
+      for (let i = 3; i < imgData.data.length; i += 4) {
+        if (imgData.data[i] < 250) { foundAlpha = true; break; }
+      }
+      setHasAlpha(foundAlpha);
+    };
+    img.src = resizedDataUrl;
   }, []);
 
   /** Convert the uploaded RGBA image to RGB by compositing onto bgColor */
@@ -270,6 +295,19 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
           className="hidden"
         />
       </div>
+
+      {/* Resizer — shown inline when the uploaded image isn't 64x64 */}
+      {characterDataUrl && sizeWarning && (
+        <ImageResizer
+          sourceDataUrl={characterDataUrl}
+          sourceWidth={charWidth}
+          sourceHeight={charHeight}
+          defaultTarget={64}
+          recommendedSize={64}
+          onAccept={handleResizeAccept}
+          onCancel={handleRemoveChar}
+        />
+      )}
 
       {/* Background color for transparency */}
       {hasAlpha && characterDataUrl && (

@@ -341,3 +341,22 @@ export function scaleCanvasNearestNeighbor(
   ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
   return canvas;
 }
+
+/**
+ * Resize pixel art to exact target dimensions using nearest-neighbor.
+ * Returns a data URL of the resized PNG. imageSmoothingEnabled = false is
+ * the critical flag — it prevents the browser from blurring pixel art.
+ */
+export function resizePixelArt(
+  source: HTMLCanvasElement | HTMLImageElement,
+  targetWidth: number,
+  targetHeight: number
+): string {
+  const canvas = document.createElement('canvas');
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+  const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(source, 0, 0, targetWidth, targetHeight);
+  return canvas.toDataURL('image/png');
+}

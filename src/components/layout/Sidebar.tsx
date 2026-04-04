@@ -8,6 +8,7 @@ import {
   PlayCircle,
   Download,
   Sparkles,
+  Images,
   X,
 } from 'lucide-react';
 import Badge from '@/components/ui/Badge';
@@ -17,6 +18,7 @@ const NAV_ITEMS = [
   { href: '/upload', label: 'Upload', icon: UploadCloud, soon: false },
   { href: '/preview', label: 'Preview', icon: PlayCircle, soon: false },
   { href: '/export', label: 'Export', icon: Download, soon: false },
+  { href: '/gallery', label: 'Gallery', icon: Images, soon: false },
   { href: '/generate', label: 'Generate', icon: Sparkles, soon: false },
 ];
 

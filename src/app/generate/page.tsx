@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Sparkles, Play } from 'lucide-react';
 import GenerationForm from '@/components/sprites/GenerationForm';
 import AnimateForm from '@/components/sprites/AnimateForm';
-import GenerationResult, { addToHistory } from '@/components/sprites/GenerationResult';
+import GenerationResult from '@/components/sprites/GenerationResult';
+import { addToHistory } from '@/lib/generationHistory';
 import { useSpriteStore } from '@/stores/spriteStore';
 
 type GenerateTab = 'create' | 'animate';
@@ -33,7 +34,16 @@ export default function GeneratePage() {
   );
 
   const handleGenerated = useCallback(async (dataUrl: string, prompt: string, style: string) => {
-    await addToHistory(dataUrl, prompt, style);
+    // Determine mode + action from the style key
+    const isAnimate = style.startsWith('any_animation_');
+    const action = isAnimate ? style.replace('any_animation_', '') : undefined;
+    await addToHistory({
+      prompt,
+      style,
+      mode: isAnimate ? 'animate' : 'create',
+      action,
+      fullImageDataUrl: dataUrl,
+    });
   }, []);
 
   const handleReset = useCallback(() => {

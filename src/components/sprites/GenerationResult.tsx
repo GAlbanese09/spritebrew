@@ -1,60 +1,18 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Download, Scissors, RefreshCw, Archive, Trash2 } from 'lucide-react';
+import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
+import {
+  loadHistory,
+  clearHistory,
+  type GenerationHistoryEntry,
+} from '@/lib/generationHistory';
 
 const ZOOM_OPTIONS = [1, 2, 4, 8] as const;
-
-interface HistoryEntry {
-  prompt: string;
-  style: string;
-  thumbnail: string;
-  timestamp: number;
-}
-
-const HISTORY_KEY = 'spritebrew_gen_history';
-const MAX_HISTORY = 20;
-
-function loadHistory(): HistoryEntry[] {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveHistory(entries: HistoryEntry[]) {
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(entries.slice(0, MAX_HISTORY)));
-  } catch {
-    // localStorage full or unavailable
-  }
-}
-
-/** Resize an image data URL to a small thumbnail */
-function createThumbnail(dataUrl: string, size: number): Promise<string> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = size;
-      canvas.height = size;
-      const ctx = canvas.getContext('2d')!;
-      ctx.imageSmoothingEnabled = false;
-      const scale = Math.min(size / img.width, size / img.height);
-      const w = img.width * scale;
-      const h = img.height * scale;
-      ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
-      resolve(canvas.toDataURL('image/png'));
-    };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
-  });
-}
 
 interface GenerationResultProps {
   onReset: () => void;
@@ -75,13 +33,13 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
 
   const [zoom, setZoom] = useState(4);
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [history, setHistory] = useState<GenerationHistoryEntry[]>([]);
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
 
-  // Load history on mount
+  // Load history on mount and whenever a new generation arrives
   useEffect(() => {
     setHistory(loadHistory());
-  }, []);
+  }, [generatedImageDataUrl]);
 
   // Rotate loading messages every 3 seconds while generating
   useEffect(() => {
@@ -106,7 +64,6 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   }, [generatedImageDataUrl]);
 
   const handleSendToSlicer = useCallback(() => {
-    // generatedImageDataUrl stays in the store — upload page will read it
     router.push('/upload');
   }, [router]);
 
@@ -116,7 +73,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   }, [clearGeneratedImage, onReset]);
 
   const handleClearHistory = useCallback(() => {
-    localStorage.removeItem(HISTORY_KEY);
+    clearHistory();
     setHistory([]);
   }, []);
 
@@ -181,22 +138,37 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         {history.length > 0 && (
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
-                Recent Generations
-              </label>
-              <button
-                onClick={handleClearHistory}
-                className="text-[10px] font-mono text-text-muted hover:text-text-secondary cursor-pointer"
+              <Link
+                href="/gallery"
+                className="group flex items-center gap-1.5 text-[10px] font-mono text-text-muted
+                  hover:text-accent-amber uppercase tracking-wider cursor-pointer transition-colors"
               >
-                <Trash2 size={10} className="inline mr-1" />
-                Clear
-              </button>
+                Recent Generations
+                <ArrowRight size={10} className="group-hover:translate-x-0.5 transition-transform" />
+              </Link>
+              <div className="flex items-center gap-2">
+                <Link
+                  href="/gallery"
+                  className="text-[10px] font-mono text-accent-amber hover:text-accent-amber-strong cursor-pointer"
+                >
+                  View all &rarr;
+                </Link>
+                <button
+                  onClick={handleClearHistory}
+                  className="text-[10px] font-mono text-text-muted hover:text-text-secondary cursor-pointer"
+                >
+                  <Trash2 size={10} className="inline mr-1" />
+                  Clear
+                </button>
+              </div>
             </div>
             <div className="flex gap-2 overflow-x-auto pb-2">
-              {history.slice(0, 5).map((entry, i) => (
-                <div
-                  key={i}
-                  className="flex-shrink-0 rounded border border-border-subtle bg-bg-surface p-2 w-28"
+              {history.slice(0, 5).map((entry) => (
+                <Link
+                  key={entry.id}
+                  href="/gallery"
+                  className="flex-shrink-0 rounded border border-border-subtle bg-bg-surface p-2 w-28
+                    hover:border-accent-amber/40 transition-colors"
                 >
                   <div
                     className="w-full aspect-square rounded overflow-hidden mb-1.5"
@@ -208,7 +180,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
                     }}
                   >
                     <img
-                      src={entry.thumbnail}
+                      src={entry.thumbnailDataUrl}
                       alt={entry.prompt}
                       className="w-full h-full object-contain"
                       style={{ imageRendering: 'pixelated' }}
@@ -220,7 +192,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
                   <p className="text-[8px] font-mono text-text-muted/60">
                     {entry.style}
                   </p>
-                </div>
+                </Link>
               ))}
             </div>
           </div>
@@ -317,20 +289,24 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           <RefreshCw size={14} />
           Generate Another
         </Button>
-        <Button variant="ghost" size="md" disabled>
-          <Archive size={14} />
-          Save to Gallery
-          <span className="text-[8px] text-text-muted ml-1">Soon</span>
-        </Button>
+        <Link href="/gallery" className="contents">
+          <Button variant="ghost" size="md">
+            <Archive size={14} />
+            View Gallery
+          </Button>
+        </Link>
       </div>
 
       {/* History */}
       {history.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-2">
-            <label className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
-              Recent
-            </label>
+            <Link
+              href="/gallery"
+              className="text-[10px] font-mono text-text-muted hover:text-accent-amber uppercase tracking-wider cursor-pointer"
+            >
+              Recent &rarr;
+            </Link>
             <button
               onClick={handleClearHistory}
               className="text-[10px] font-mono text-text-muted hover:text-text-secondary cursor-pointer"
@@ -339,10 +315,11 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
             </button>
           </div>
           <div className="flex gap-1.5 overflow-x-auto pb-2">
-            {history.slice(0, 5).map((entry, i) => (
-              <div
-                key={i}
-                className="flex-shrink-0 w-12 h-12 rounded border border-border-subtle overflow-hidden"
+            {history.slice(0, 5).map((entry) => (
+              <Link
+                key={entry.id}
+                href="/gallery"
+                className="flex-shrink-0 w-12 h-12 rounded border border-border-subtle overflow-hidden hover:border-accent-amber/40"
                 title={entry.prompt}
                 style={{
                   backgroundImage:
@@ -352,12 +329,12 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
                 }}
               >
                 <img
-                  src={entry.thumbnail}
+                  src={entry.thumbnailDataUrl}
                   alt={entry.prompt}
                   className="w-full h-full object-contain"
                   style={{ imageRendering: 'pixelated' }}
                 />
-              </div>
+              </Link>
             ))}
           </div>
         </div>
@@ -366,10 +343,3 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   );
 }
 
-/** Call this from the parent after a successful generation to add to history */
-export async function addToHistory(dataUrl: string, prompt: string, style: string) {
-  const thumbnail = await createThumbnail(dataUrl, 64);
-  const entries = loadHistory();
-  entries.unshift({ prompt, style, thumbnail, timestamp: Date.now() });
-  saveHistory(entries);
-}

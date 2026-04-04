@@ -45,7 +45,7 @@ function getDefaultRowNames(rowCount: number): string[] {
     case 1: return ['Walk'];
     case 2: return ['Idle', 'Walk'];
     case 3: return ['Idle', 'Walk', 'Run'];
-    case 4: return ['Walk Down', 'Walk Left', 'Walk Right', 'Walk Up'];
+    case 4: return ['Walk Up', 'Walk Right', 'Walk Down', 'Walk Left'];
     case 8: return ['Walk Down', 'Walk Down-Left', 'Walk Left', 'Walk Up-Left', 'Walk Up', 'Walk Up-Right', 'Walk Right', 'Walk Down-Right'];
     default: return Array.from({ length: rowCount }, (_, i) => `Row ${i + 1}`);
   }

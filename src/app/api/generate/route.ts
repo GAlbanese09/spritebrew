@@ -56,17 +56,10 @@ async function callReplicate(
     body: JSON.stringify({ input }),
   });
 
-  if (createRes.status === 429) {
-    return Response.json(
-      { success: false, error: 'Too many requests — please wait a moment and try again.' },
-      { status: 429 }
-    );
-  }
-
   if (!createRes.ok) {
-    const errText = await createRes.text().catch(() => 'Unknown error');
+    const errBody = await createRes.text().catch(() => 'Could not read response body');
     return Response.json(
-      { success: false, error: `Replicate API error (${createRes.status}): ${errText}` },
+      { success: false, error: `Replicate error (${createRes.status}): ${errBody}` },
       { status: createRes.status }
     );
   }

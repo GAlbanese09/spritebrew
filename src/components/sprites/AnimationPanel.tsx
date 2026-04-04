@@ -19,10 +19,54 @@ interface AnimationPanelProps {
   frameDataUrls: Map<string, string>;
 }
 
+// Known Retro Diffusion style → row name mappings
+const STYLE_ROW_NAMES: Record<string, string[]> = {
+  four_angle_walking: ['Walk Down', 'Walk Left', 'Walk Right', 'Walk Up'],
+  walking_and_idle: ['Walk Down', 'Walk Left', 'Walk Right', 'Walk Up', 'Idle Down', 'Idle Left', 'Idle Right', 'Idle Up'],
+  small_sprites: ['Idle', 'Walk', 'Attack', 'Hurt'],
+  any_animation: ['Animation'],
+  '8_dir_rotation': ['Down', 'Down-Left', 'Left', 'Up-Left', 'Up', 'Up-Right', 'Right', 'Down-Right'],
+  vfx: ['Effect'],
+};
+
+// Row type mappings for styles
+const STYLE_ROW_TYPES: Record<string, string[]> = {
+  four_angle_walking: ['walk', 'walk', 'walk', 'walk'],
+  walking_and_idle: ['walk', 'walk', 'walk', 'walk', 'idle', 'idle', 'idle', 'idle'],
+  small_sprites: ['idle', 'walk', 'attack', 'hurt'],
+  any_animation: ['idle'],
+  '8_dir_rotation': ['walk', 'walk', 'walk', 'walk', 'walk', 'walk', 'walk', 'walk'],
+  vfx: ['idle'],
+};
+
+// Default row names by row count for user-uploaded sheets
+function getDefaultRowNames(rowCount: number): string[] {
+  switch (rowCount) {
+    case 1: return ['Walk'];
+    case 2: return ['Idle', 'Walk'];
+    case 3: return ['Idle', 'Walk', 'Run'];
+    case 4: return ['Walk Down', 'Walk Left', 'Walk Right', 'Walk Up'];
+    case 8: return ['Walk Down', 'Walk Down-Left', 'Walk Left', 'Walk Up-Left', 'Walk Up', 'Walk Up-Right', 'Walk Right', 'Walk Down-Right'];
+    default: return Array.from({ length: rowCount }, (_, i) => `Row ${i + 1}`);
+  }
+}
+
+function getDefaultRowTypes(rowCount: number): string[] {
+  switch (rowCount) {
+    case 1: return ['walk'];
+    case 2: return ['idle', 'walk'];
+    case 3: return ['idle', 'walk', 'run'];
+    case 4: return ['walk', 'walk', 'walk', 'walk'];
+    case 8: return ['walk', 'walk', 'walk', 'walk', 'walk', 'walk', 'walk', 'walk'];
+    default: return Array.from({ length: rowCount }, () => 'walk');
+  }
+}
+
 export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
   const spriteSheet = useSpriteStore((s) => s.spriteSheet);
   const animations = useSpriteStore((s) => s.animations);
   const selectedFrames = useSpriteStore((s) => s.selectedFrames);
+  const generationStyle = useSpriteStore((s) => s.generationStyle);
   const addAnimation = useSpriteStore((s) => s.addAnimation);
   const removeAnimation = useSpriteStore((s) => s.removeAnimation);
   const assignFramesToAnimation = useSpriteStore((s) => s.assignFramesToAnimation);
@@ -55,25 +99,39 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
 
     const allFrames = spriteSheet.animations.flatMap((a) => a.frames);
     const { columns } = spriteSheet;
-
-    // Each row = one animation group
     const rowCount = Math.ceil(allFrames.length / columns);
+
+    // Determine row names and types based on generation style or row count
+    let rowNames: string[];
+    let rowTypes: string[];
+
+    if (generationStyle && STYLE_ROW_NAMES[generationStyle]) {
+      rowNames = STYLE_ROW_NAMES[generationStyle];
+      rowTypes = STYLE_ROW_TYPES[generationStyle] ?? getDefaultRowTypes(rowCount);
+    } else {
+      rowNames = getDefaultRowNames(rowCount);
+      rowTypes = getDefaultRowTypes(rowCount);
+    }
+
     for (let r = 0; r < rowCount; r++) {
       const rowFrames = allFrames.slice(r * columns, (r + 1) * columns);
       if (rowFrames.length === 0) continue;
 
-      const preset = r < ANIMATION_TYPES.length ? ANIMATION_TYPES[r] : null;
+      const name = r < rowNames.length ? rowNames[r] : `Row ${r + 1}`;
+      const type = r < rowTypes.length ? rowTypes[r] : 'walk';
+      const preset = ANIMATION_TYPES.find((t) => t.id === type);
+
       const anim: SpriteAnimation = {
         id: generateAnimationId(),
-        name: preset?.label ?? `Row ${r + 1}`,
-        type: preset?.id ?? 'custom',
+        name,
+        type: preset?.id ?? type,
         frames: rowFrames,
         fps: preset?.defaultFps ?? 8,
         loop: true,
       };
       addAnimation(anim);
     }
-  }, [spriteSheet, addAnimation]);
+  }, [spriteSheet, generationStyle, addAnimation]);
 
   const handleRemoveFrame = useCallback(
     (animId: string, frameId: string) => {

@@ -79,6 +79,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const setGenerating = useSpriteStore((s) => s.setGenerating);
   const setGenerationError = useSpriteStore((s) => s.setGenerationError);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
+  const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
 
@@ -152,6 +153,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       }
 
       setGeneratedImage(imageUrl, dataUrl);
+      setGenerationStyle(selectedStyle);
       onGenerated(dataUrl, prompt.trim(), selectedStyle);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -162,7 +164,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   }, [
     prompt, selectedStyle, effectiveWidth, effectiveHeight,
     referenceImage, isGenerating, setGenerating, setGenerationError,
-    setGeneratedImage, onGenerated,
+    setGeneratedImage, setGenerationStyle, onGenerated,
   ]);
 
   return (

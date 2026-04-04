@@ -12,6 +12,7 @@ interface SpriteStore {
   generatedImageDataUrl: string | null;
   isGenerating: boolean;
   generationError: string | null;
+  generationStyle: string | null;
 
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
@@ -29,6 +30,7 @@ interface SpriteStore {
   clearGeneratedImage: () => void;
   setGenerating: (loading: boolean) => void;
   setGenerationError: (error: string | null) => void;
+  setGenerationStyle: (style: string | null) => void;
 }
 
 export const useSpriteStore = create<SpriteStore>((set) => ({
@@ -41,12 +43,13 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   generatedImageDataUrl: null,
   isGenerating: false,
   generationError: null,
+  generationStyle: null,
 
   setSpriteSheet: (sheet) =>
     set({ spriteSheet: sheet, selectedFrames: [], animations: [] }),
 
   clearSpriteSheet: () =>
-    set({ spriteSheet: null, selectedFrames: [], animations: [], frameDataUrls: new Map() }),
+    set({ spriteSheet: null, selectedFrames: [], animations: [], frameDataUrls: new Map(), generationStyle: null }),
 
   setFrameDataUrls: (urls) => set({ frameDataUrls: urls }),
 
@@ -120,4 +123,6 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   setGenerating: (loading) => set({ isGenerating: loading }),
 
   setGenerationError: (error) => set({ generationError: error, isGenerating: false }),
+
+  setGenerationStyle: (style) => set({ generationStyle: style }),
 }));

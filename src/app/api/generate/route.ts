@@ -5,7 +5,7 @@ const REPLICATE_API_URL =
 
 // ── Rate limiting ──
 // TODO: Set back to 15-20 for production, or implement Clerk auth gating.
-const RATE_LIMIT = 0;
+const RATE_LIMIT = 999;
 const RATE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 // In-memory store — resets on every deploy. Move to Redis/KV for persistence.

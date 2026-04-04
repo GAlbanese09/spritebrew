@@ -1,8 +1,7 @@
 // Authentication is enforced via Clerk (see auth() check in POST handler below).
-// Edge runtime removed because Clerk's server-side auth() is more reliable in the
-// Node runtime on Cloudflare via @opennextjs/cloudflare.
-
 import { auth } from '@clerk/nextjs/server';
+
+export const runtime = 'edge';
 
 const REPLICATE_API_URL =
   'https://api.replicate.com/v1/models/retro-diffusion/rd-animation/predictions';

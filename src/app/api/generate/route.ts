@@ -4,7 +4,8 @@ const REPLICATE_API_URL =
   'https://api.replicate.com/v1/models/retro-diffusion/rd-animation/predictions';
 
 // ── Rate limiting ──
-const RATE_LIMIT = 15;
+// TODO: Set back to 15-20 for production, or implement Clerk auth gating.
+const RATE_LIMIT = 999;
 const RATE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 // In-memory store — resets on every deploy. Move to Redis/KV for persistence.

@@ -21,7 +21,7 @@ interface AnimationPanelProps {
 
 // Known Retro Diffusion style → row name mappings
 const STYLE_ROW_NAMES: Record<string, string[]> = {
-  four_angle_walking: ['Walk Down', 'Walk Left', 'Walk Right', 'Walk Up'],
+  four_angle_walking: ['Walk Up', 'Walk Right', 'Walk Down', 'Walk Left'],
   walking_and_idle: ['Walk Down', 'Walk Left', 'Walk Right', 'Walk Up', 'Idle Down', 'Idle Left', 'Idle Right', 'Idle Up'],
   small_sprites: ['Idle', 'Walk', 'Attack', 'Hurt'],
   any_animation: ['Animation'],

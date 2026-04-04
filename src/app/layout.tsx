@@ -30,6 +30,15 @@ export default function RootLayout({
   return (
     <ClerkProvider
       afterSignOutUrl="/"
+      // Disable Clerk's auto-POST to the current page on auth state changes.
+      // Without this, signing out on static pages like /generate or /gallery
+      // triggers a POST to that URL which Cloudflare Pages returns as 405.
+      // We don't rely on middleware re-running on sign-out (protection is
+      // enforced at the API route and page-component level).
+      // Server ClerkProvider types strip this prop via `Without<...>`, but the
+      // underlying client provider still honors it when forwarded via JSX.
+      // @ts-expect-error — intentional: bypass server prop stripping
+      __internal_invokeMiddlewareOnAuthStateChange={false}
       appearance={{
         variables: {
           colorPrimary: '#d4871c',

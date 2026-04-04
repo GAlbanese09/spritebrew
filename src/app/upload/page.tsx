@@ -7,6 +7,7 @@ import UploadZone from '@/components/sprites/UploadZone';
 import SlicerConfig, { type SliceConfig } from '@/components/sprites/SlicerConfig';
 import FrameGrid from '@/components/sprites/FrameGrid';
 import AnimationPanel from '@/components/sprites/AnimationPanel';
+import ImageResizer from '@/components/sprites/ImageResizer';
 import Button from '@/components/ui/Button';
 import { useSpriteStore } from '@/stores/spriteStore';
 import {
@@ -18,11 +19,14 @@ import {
 } from '@/lib/spriteUtils';
 import type { SpriteFrame, SpriteSheet } from '@/lib/types';
 
+const LARGE_IMAGE_THRESHOLD = 128;
+
 interface UploadedImage {
   file: File;
   blobUrl: string;
   width: number;
   height: number;
+  isGif?: boolean;
 }
 
 export default function UploadPage() {
@@ -39,6 +43,8 @@ export default function UploadPage() {
   const [uploaded, setUploaded] = useState<UploadedImage | null>(null);
   const [slicing, setSlicing] = useState(false);
   const [fromGenerated, setFromGenerated] = useState(false);
+  // True once the user has either resized or chosen to keep the original size
+  const [sizeAcknowledged, setSizeAcknowledged] = useState(false);
 
   // Auto-load generated image from store on mount
   useEffect(() => {
@@ -53,6 +59,8 @@ export default function UploadPage() {
           height: img.naturalHeight,
         });
         setFromGenerated(true);
+        // Generated images are already pixel-perfect; skip the size alert
+        setSizeAcknowledged(true);
         clearSpriteSheet();
         clearGeneratedImage();
       };
@@ -64,8 +72,12 @@ export default function UploadPage() {
 
   const handleImageLoaded = useCallback(
     (file: File, blobUrl: string, width: number, height: number) => {
-      setUploaded({ file, blobUrl, width, height });
+      const isGif = file.type === 'image/gif';
+      setUploaded({ file, blobUrl, width, height, isGif });
       setFromGenerated(false);
+      // If the image is larger than the threshold on any side, require acknowledgement
+      const needsAlert = width > LARGE_IMAGE_THRESHOLD || height > LARGE_IMAGE_THRESHOLD;
+      setSizeAcknowledged(!needsAlert);
       clearSpriteSheet();
     },
     [clearSpriteSheet]
@@ -77,8 +89,32 @@ export default function UploadPage() {
     }
     setUploaded(null);
     setFromGenerated(false);
+    setSizeAcknowledged(false);
     clearSpriteSheet();
   }, [uploaded, fromGenerated, clearSpriteSheet]);
+
+  /** User accepted a resized version from the ImageResizer */
+  const handleResizeAccept = useCallback(
+    (resizedDataUrl: string, w: number, h: number) => {
+      if (!uploaded) return;
+      if (!fromGenerated) URL.revokeObjectURL(uploaded.blobUrl);
+      setUploaded({
+        ...uploaded,
+        blobUrl: resizedDataUrl,
+        width: w,
+        height: h,
+      });
+      setFromGenerated(true); // treat as data URL so we don't revoke it
+      setSizeAcknowledged(true);
+      clearSpriteSheet();
+    },
+    [uploaded, fromGenerated, clearSpriteSheet]
+  );
+
+  /** User chose to proceed with the original large image */
+  const handleKeepOriginal = useCallback(() => {
+    setSizeAcknowledged(true);
+  }, []);
 
   const handleSlice = useCallback(
     async (config: SliceConfig) => {
@@ -184,8 +220,24 @@ export default function UploadPage() {
         onRemove={handleRemove}
       />
 
-      {/* Slicer config — shown after upload, before/after slicing */}
-      {uploaded && (
+      {/* Size alert — shown when image exceeds 128px on either side and user hasn't acknowledged */}
+      {uploaded && !sizeAcknowledged && (
+        <ImageResizer
+          sourceDataUrl={uploaded.blobUrl}
+          sourceWidth={uploaded.width}
+          sourceHeight={uploaded.height}
+          defaultTarget={128}
+          allowKeepOriginal
+          keepOriginalWarning="Large images may have slower performance in the editor and preview."
+          onAccept={handleResizeAccept}
+          onKeepOriginal={handleKeepOriginal}
+          isGif={uploaded.isGif}
+          description={`Your image is ${uploaded.width}x${uploaded.height}. For best results with pixel art, images should be 128x128 or smaller. You can resize below, or keep the original size and proceed directly to slicing.`}
+        />
+      )}
+
+      {/* Slicer config — shown after upload and size acknowledged */}
+      {uploaded && sizeAcknowledged && (
         <div className="rounded-lg border border-border-default bg-bg-surface p-6">
           <SlicerConfig
             imageUrl={uploaded.blobUrl}

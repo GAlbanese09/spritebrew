@@ -343,8 +343,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
           sourceHeight={charHeight}
           defaultTarget={64}
           recommendedSize={64}
+          title="Resize Required — 64x64"
+          description={`Your character is ${charWidth}x${charHeight}. Animate My Character requires exactly 64x64. Resize below using nearest-neighbor interpolation (no blurring), or upload a different image.`}
           onAccept={handleResizeAccept}
           onCancel={handleRemoveChar}
+          // No Keep Original Size here — animation only works with 64x64
         />
       )}
 

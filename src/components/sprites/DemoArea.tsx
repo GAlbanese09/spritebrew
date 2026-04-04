@@ -90,6 +90,7 @@ function parseDirectional(name: string): { state: CharState; direction: Directio
 function buildAnimMaps(animations: SpriteAnimation[]) {
   const dirMap = new Map<string, SpriteAnimation>(); // key: "state:direction"
   const flatMap = new Map<CharState, SpriteAnimation>();
+  let hasRealIdle = false; // tracks whether a genuine idle animation exists
 
   for (const anim of animations) {
     // Try type-based mapping first (from ANIM_TYPE_PRIORITY)
@@ -103,11 +104,18 @@ function buildAnimMaps(animations: SpriteAnimation[]) {
       if (!dirMap.has(key)) {
         dirMap.set(key, anim);
       }
+      if (parsed.state === 'idle') hasRealIdle = true;
     }
 
     // Also add to flat map for non-directional fallback
     if (typeState && !flatMap.has(typeState)) {
       flatMap.set(typeState, anim);
+      if (typeState === 'idle') hasRealIdle = true;
+    }
+    // Check non-directional idle by name (e.g. animation named "Idle" with no direction)
+    if (!parsed && anim.name.toLowerCase().replace(/[_\-]/g, ' ').trim() === 'idle') {
+      if (!flatMap.has('idle')) flatMap.set('idle', anim);
+      hasRealIdle = true;
     }
     // If the name parses to a state but isn't in the type map, still add to flat
     if (parsed && !flatMap.has(parsed.state)) {
@@ -115,14 +123,15 @@ function buildAnimMaps(animations: SpriteAnimation[]) {
     }
   }
 
-  // Fallback: if no idle, use first animation
+  // Only set a fallback idle if no real idle animation was found.
+  // Mark it so getAnimForState knows this is synthetic.
   if (!flatMap.has('idle') && animations.length > 0) {
     flatMap.set('idle', animations[0]);
   }
 
   const hasDirectional = dirMap.size > 0;
 
-  return { hasDirectional, dirMap, flatMap };
+  return { hasDirectional, dirMap, flatMap, hasRealIdle };
 }
 
 function dirMapKey(state: CharState, dir: Direction): string {
@@ -152,6 +161,7 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
     hasDirectional: false,
     dirMap: new Map(),
     flatMap: new Map(),
+    hasRealIdle: false,
   });
 
   const [focused, setFocused] = useState(false);
@@ -174,10 +184,9 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
   }, [animations]);
 
   // Get best animation for a state+direction, with fallbacks.
-  // lastMovementDir is used for idle: hold the direction the character last faced.
   const getAnimForState = useCallback(
     (state: CharState, dir: Direction): SpriteAnimation | null => {
-      const { hasDirectional, dirMap, flatMap } = animMapsRef.current;
+      const { hasDirectional, dirMap, flatMap, hasRealIdle } = animMapsRef.current;
 
       if (hasDirectional) {
         // Try exact state+direction
@@ -190,28 +199,40 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           if (walkDir) return walkDir;
         }
 
-        // Idle fallback: if no directional idle exists, try generic idle
         if (state === 'idle') {
-          const flat = flatMap.get('idle');
-          if (flat) return flat;
-          // No idle at all — fall back to the walk animation in the last direction
-          // (the game loop will stop playback on the last frame)
+          // 1) Try directional idle for all 4 dirs (maybe named differently)
+          //    Already tried exact dir above, so this only matters if dir lookup failed.
+          // 2) Try generic non-directional idle — but ONLY if it's a real idle,
+          //    not the animations[0] fallback which could be "Walk Up"
+          if (hasRealIdle) {
+            const flat = flatMap.get('idle');
+            if (flat) return flat;
+          }
+          // 3) No idle animation at all — freeze the walk animation for this direction.
+          //    The game loop detects this case and calls gotoAndStop(0).
           const walkDir = dirMap.get(dirMapKey('walking', dir));
           if (walkDir) return walkDir;
+          // 4) Try any walk animation as last resort
+          const anyWalk = flatMap.get('walking');
+          if (anyWalk) return anyWalk;
         }
 
-        // Fallback: try the state without direction (flat map)
+        // For non-idle states: try the state without direction (flat map)
         const flat = flatMap.get(state);
         if (flat) return flat;
 
-        // Fallback: idle in this direction, then generic idle
+        // Fallback to directional idle, then generic idle
         if (state !== 'idle') {
           const idleDir = dirMap.get(dirMapKey('idle', dir));
           if (idleDir) return idleDir;
+          if (hasRealIdle) {
+            const flatIdle = flatMap.get('idle');
+            if (flatIdle) return flatIdle;
+          }
         }
       }
 
-      // Non-directional fallbacks (original behavior)
+      // Non-directional fallbacks (original behavior for side-scroller sheets)
       if (flatMap.has(state)) return flatMap.get(state)!;
       if (state === 'running') return flatMap.get('walking') ?? flatMap.get('idle') ?? null;
       if (state === 'attacking' || state === 'jumping' || state === 'hurt')

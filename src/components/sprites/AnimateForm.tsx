@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   UploadCloud,
   X,
@@ -9,9 +9,17 @@ import {
   AlertCircle,
   Play,
 } from 'lucide-react';
+import { useAuth } from '@clerk/nextjs';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import ImageResizer from './ImageResizer';
+import {
+  getGenerationCount,
+  incrementGenerationCount,
+  isAtDailyLimit,
+  remainingGenerations,
+  FREE_DAILY_LIMIT,
+} from '@/lib/generationLimits';
 
 const ACTIONS = [
   { id: 'walking', name: 'Walk', desc: 'Walking cycle animation' },
@@ -38,13 +46,29 @@ interface AnimateFormProps {
 }
 
 export default function AnimateForm({ onGenerated }: AnimateFormProps) {
+  const { userId } = useAuth();
   const setGenerating = useSpriteStore((s) => s.setGenerating);
   const setGenerationError = useSpriteStore((s) => s.setGenerationError);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
   const setOriginalCharacter = useSpriteStore((s) => s.setOriginalCharacter);
+  const setGenerationCount = useSpriteStore((s) => s.setGenerationCount);
+  const generationCount = useSpriteStore((s) => s.generationCount);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
+
+  // Sync count from localStorage on mount / user change
+  useEffect(() => {
+    if (userId) {
+      const count = getGenerationCount(userId);
+      const today = new Date().toISOString().slice(0, 10);
+      setGenerationCount(count, today);
+    }
+  }, [userId, setGenerationCount]);
+
+  const remaining = remainingGenerations(userId);
+  const atLimit = isAtDailyLimit(userId);
+  void generationCount; // trigger re-render on count change
 
   const [characterDataUrl, setCharacterDataUrl] = useState<string | null>(null);
   const [charWidth, setCharWidth] = useState(0);
@@ -151,6 +175,14 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const handleGenerate = useCallback(async () => {
     if (!characterDataUrl || isGenerating) return;
 
+    // Client-side daily limit check
+    if (isAtDailyLimit(userId)) {
+      setGenerationError(
+        `You've used all ${FREE_DAILY_LIMIT} free generations today. Your limit resets tomorrow. Pro plan with unlimited generations coming soon!`
+      );
+      return;
+    }
+
     const rgbBase64 = convertToRgbBase64();
     if (!rgbBase64) return;
 
@@ -193,6 +225,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
       setGeneratedImage(dataUrl, dataUrl);
       setGenerationStyle(`any_animation_${selectedAction}`);
+      // Increment daily count (client-side soft limit)
+      const newCount = incrementGenerationCount(userId);
+      setGenerationCount(newCount, new Date().toISOString().slice(0, 10));
       onGenerated(dataUrl, motionPrompt.trim() || selectedAction, `any_animation_${selectedAction}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -202,14 +237,14 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     }
   }, [
     characterDataUrl, isGenerating, selectedAction, charWidth, charHeight,
-    frameCount, motionPrompt, convertToRgbBase64,
+    frameCount, motionPrompt, convertToRgbBase64, userId,
     setGenerating, setGenerationError, setGeneratedImage, setGenerationStyle,
-    setOriginalCharacter, onGenerated,
+    setOriginalCharacter, setGenerationCount, onGenerated,
   ]);
 
   const sizeWarning = charWidth > 0 && (charWidth !== 64 || charHeight !== 64);
   const isCustomAction = selectedAction === 'custom_action';
-  const canGenerate = characterDataUrl && !sizeWarning && (!isCustomAction || motionPrompt.trim());
+  const canGenerate = characterDataUrl && !sizeWarning && (!isCustomAction || motionPrompt.trim()) && !atLimit;
 
   return (
     <div className="space-y-6">
@@ -449,6 +484,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-mono text-text-muted">
           {charWidth > 0 ? `64x64 · ${frameCount} frames` : 'Upload a 64x64 character to begin'}
+          {userId && (
+            <span className={`ml-2 ${atLimit ? 'text-red-400' : 'text-accent-amber'}`}>
+              &middot; {remaining}/{FREE_DAILY_LIMIT} remaining today
+            </span>
+          )}
         </p>
         <Button
           size="lg"
@@ -461,10 +501,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
               <Loader2 size={16} className="animate-spin" />
               Animating...
             </>
+          ) : atLimit ? (
+            <>
+              <Play size={16} />
+              Daily limit reached
+            </>
           ) : (
             <>
               <Play size={16} />
-              Animate Character
+              Animate ({remaining}/{FREE_DAILY_LIMIT} remaining)
             </>
           )}
         </Button>

@@ -1,9 +1,17 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { Sparkles, UploadCloud, X, Check, Loader2, AlertCircle } from 'lucide-react';
+import { useAuth } from '@clerk/nextjs';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
+import {
+  getGenerationCount,
+  incrementGenerationCount,
+  isAtDailyLimit,
+  remainingGenerations,
+  FREE_DAILY_LIMIT,
+} from '@/lib/generationLimits';
 
 const STYLES = [
   {
@@ -76,12 +84,29 @@ interface GenerationFormProps {
 }
 
 export default function GenerationForm({ onGenerated }: GenerationFormProps) {
+  const { userId } = useAuth();
   const setGenerating = useSpriteStore((s) => s.setGenerating);
   const setGenerationError = useSpriteStore((s) => s.setGenerationError);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
+  const setGenerationCount = useSpriteStore((s) => s.setGenerationCount);
+  const generationCount = useSpriteStore((s) => s.generationCount);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
+
+  // Sync store count from localStorage on mount / when user changes
+  useEffect(() => {
+    if (userId) {
+      const count = getGenerationCount(userId);
+      const today = new Date().toISOString().slice(0, 10);
+      setGenerationCount(count, today);
+    }
+  }, [userId, setGenerationCount]);
+
+  const remaining = remainingGenerations(userId);
+  const atLimit = isAtDailyLimit(userId);
+  // generationCount is used to force re-render when the count changes (satisfies the subscription)
+  void generationCount;
 
   const [prompt, setPrompt] = useState('');
   const [selectedStyle, setSelectedStyle] = useState('four_angle_walking');
@@ -107,6 +132,14 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim() || isGenerating) return;
+
+    // Client-side daily limit check
+    if (isAtDailyLimit(userId)) {
+      setGenerationError(
+        `You've used all ${FREE_DAILY_LIMIT} free generations today. Your limit resets tomorrow. Pro plan with unlimited generations coming soon!`
+      );
+      return;
+    }
 
     setGenerating(true);
     setGenerationError(null);
@@ -158,6 +191,9 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
       setGeneratedImage(imageUrl, dataUrl);
       setGenerationStyle(selectedStyle);
+      // Increment daily count (client-side soft limit)
+      const newCount = incrementGenerationCount(userId);
+      setGenerationCount(newCount, new Date().toISOString().slice(0, 10));
       onGenerated(dataUrl, prompt.trim(), selectedStyle);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -167,8 +203,8 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     }
   }, [
     prompt, selectedStyle, effectiveWidth, effectiveHeight,
-    referenceImage, isGenerating, setGenerating, setGenerationError,
-    setGeneratedImage, setGenerationStyle, onGenerated,
+    referenceImage, isGenerating, userId, setGenerating, setGenerationError,
+    setGeneratedImage, setGenerationStyle, setGenerationCount, onGenerated,
   ]);
 
   return (
@@ -339,22 +375,32 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-mono text-text-muted">
           Output: {effectiveWidth}x{effectiveHeight}px
+          {userId && (
+            <span className={`ml-2 ${atLimit ? 'text-red-400' : 'text-accent-amber'}`}>
+              &middot; {remaining}/{FREE_DAILY_LIMIT} remaining today
+            </span>
+          )}
         </p>
         <Button
           size="lg"
           onClick={handleGenerate}
-          disabled={!prompt.trim() || isGenerating}
-          className={!isGenerating && prompt.trim() ? 'animate-pulse' : ''}
+          disabled={!prompt.trim() || isGenerating || atLimit}
+          className={!isGenerating && prompt.trim() && !atLimit ? 'animate-pulse' : ''}
         >
           {isGenerating ? (
             <>
               <Loader2 size={16} className="animate-spin" />
               Generating...
             </>
+          ) : atLimit ? (
+            <>
+              <Sparkles size={16} />
+              Daily limit reached
+            </>
           ) : (
             <>
               <Sparkles size={16} />
-              Generate Sprite Sheet
+              Generate ({remaining}/{FREE_DAILY_LIMIT} remaining)
             </>
           )}
         </Button>

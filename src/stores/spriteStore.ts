@@ -15,6 +15,8 @@ interface SpriteStore {
   generationStyle: string | null;
   animateMode: 'create' | 'animate';
   originalCharacterDataUrl: string | null;
+  generationCount: number; // today's count (mirrored from localStorage for reactivity)
+  generationCountDate: string; // YYYY-MM-DD of the count
 
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
@@ -36,6 +38,7 @@ interface SpriteStore {
   setGenerationStyle: (style: string | null) => void;
   setAnimateMode: (mode: 'create' | 'animate') => void;
   setOriginalCharacter: (dataUrl: string | null) => void;
+  setGenerationCount: (count: number, date: string) => void;
 }
 
 export const useSpriteStore = create<SpriteStore>((set) => ({
@@ -51,6 +54,8 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   generationStyle: null,
   animateMode: 'create',
   originalCharacterDataUrl: null,
+  generationCount: 0,
+  generationCountDate: '',
 
   setSpriteSheet: (sheet) =>
     set({ spriteSheet: sheet, selectedFrames: [], animations: [] }),
@@ -143,4 +148,6 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   setAnimateMode: (mode) => set({ animateMode: mode }),
 
   setOriginalCharacter: (dataUrl) => set({ originalCharacterDataUrl: dataUrl }),
+
+  setGenerationCount: (count, date) => set({ generationCount: count, generationCountDate: date }),
 }));

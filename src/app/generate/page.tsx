@@ -1,13 +1,55 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Sparkles, Play, LogIn } from 'lucide-react';
+import { Sparkles, Play, LogIn, X } from 'lucide-react';
 import { Show, SignInButton } from '@clerk/nextjs';
 import GenerationForm from '@/components/sprites/GenerationForm';
 import AnimateForm from '@/components/sprites/AnimateForm';
 import GenerationResult from '@/components/sprites/GenerationResult';
 import { addToHistory } from '@/lib/generationHistory';
 import { useSpriteStore } from '@/stores/spriteStore';
+
+const EARLY_ACCESS_DISMISS_KEY = 'spritebrew_early_access_dismissed';
+
+function EarlyAccessBanner() {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const dismissed = localStorage.getItem(EARLY_ACCESS_DISMISS_KEY);
+      setVisible(!dismissed);
+    } catch {
+      setVisible(true);
+    }
+  }, []);
+
+  const handleDismiss = useCallback(() => {
+    try {
+      localStorage.setItem(EARLY_ACCESS_DISMISS_KEY, '1');
+    } catch {
+      // ignore
+    }
+    setVisible(false);
+  }, []);
+
+  if (!visible) return null;
+
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-accent-amber/30 bg-accent-amber-glow px-4 py-2.5">
+      <p className="flex-1 text-xs font-mono text-accent-amber">
+        🧪 Early Access — Free users get 5 generations per day. Pro plan coming soon.
+      </p>
+      <button
+        onClick={handleDismiss}
+        className="p-1 rounded text-accent-amber/70 hover:text-accent-amber hover:bg-accent-amber/10 cursor-pointer"
+        title="Dismiss"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
 
 type GenerateTab = 'create' | 'animate';
 
@@ -93,6 +135,7 @@ export default function GeneratePage() {
 
       {/* Two-column layout — signed-in only */}
       <Show when="signed-in">
+      <EarlyAccessBanner />
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Form — left 3/5 */}
         <div className="lg:col-span-3 space-y-4">

@@ -219,9 +219,33 @@ async function handleCreate(token: string, body: GenerateBody): Promise<Response
 }
 
 // ── Advanced "Animate My Character" flow ──
+// Uses Retro Diffusion direct API (not Replicate) because Replicate's wrapper
+// does not support advanced animation styles.
 
-async function handleAnimate(token: string, body: GenerateBody): Promise<Response> {
-  const { inputImage, action, width, height, framesDuration, motionPrompt } = body;
+const RD_DIRECT_API_URL = 'https://api.retrodiffusion.ai/v1/inferences';
+
+// Map action IDs to descriptive prompt prefixes
+const ACTION_PROMPT_PREFIX: Record<string, string> = {
+  walking: 'walking animation, smooth steps',
+  idle: 'idle breathing animation, subtle movement',
+  attack: 'attack animation, melee swing',
+  jump: 'jump animation, rising and falling',
+  crouch: 'crouching animation, ducking down',
+  destroy: 'death animation, falling and fading',
+  subtle_motion: 'subtle ambient motion, wind effect',
+  custom_action: '', // user provides full description
+};
+
+async function handleAnimate(_replicateToken: string, body: GenerateBody): Promise<Response> {
+  const rdToken = process.env.RETRO_DIFFUSION_API_KEY;
+  if (!rdToken) {
+    return Response.json(
+      { success: false, error: 'Retro Diffusion API key not configured — contact the administrator.' },
+      { status: 500 }
+    );
+  }
+
+  const { inputImage, action, width, height, motionPrompt } = body;
 
   if (!inputImage) {
     return Response.json(
@@ -237,39 +261,81 @@ async function handleAnimate(token: string, body: GenerateBody): Promise<Respons
     );
   }
 
-  if (!width || !height || width < 32 || height < 32 || width > 256 || height > 256) {
+  // animation__any_animation is locked to 64x64
+  if (width !== 64 || height !== 64) {
     return Response.json(
-      { success: false, error: 'Image dimensions must be between 32x32 and 256x256.' },
+      {
+        success: false,
+        error: `Animate My Character currently supports 64x64 images only. Your image is ${width}x${height} — please resize to 64x64.`,
+      },
       { status: 400 }
     );
   }
-
-  if (framesDuration && !VALID_FRAME_DURATIONS.includes(framesDuration)) {
-    return Response.json(
-      { success: false, error: `Frame count must be one of: ${VALID_FRAME_DURATIONS.join(', ')}` },
-      { status: 400 }
-    );
-  }
-
-  const advancedStyle = `rd_advanced_animation__${action}`;
 
   // Strip data URL prefix if present
   const rawBase64 = inputImage.replace(/^data:image\/[a-z]+;base64,/, '');
 
-  const prompt = motionPrompt?.trim() || 'smooth animation';
+  // Build prompt: action prefix + optional user motion description
+  const prefix = ACTION_PROMPT_PREFIX[action] ?? '';
+  const userMotion = motionPrompt?.trim() ?? '';
+  const prompt = action === 'custom_action'
+    ? (userMotion || 'smooth animation')
+    : [prefix, userMotion].filter(Boolean).join(', ');
 
-  // Animate mode payload — uses `style` field, same as Create New mode.
-  // Fields sent: style, input_image (raw base64), width, height, frames_duration,
-  //              return_spritesheet, prompt (motion description)
-  const input: Record<string, unknown> = {
-    style: advancedStyle,
-    input_image: rawBase64,
-    width,
-    height,
-    frames_duration: framesDuration ?? 4,
-    return_spritesheet: true,
+  const rdPayload = {
     prompt,
+    width: 64,
+    height: 64,
+    num_images: 1,
+    prompt_style: 'animation__any_animation',
+    return_spritesheet: true,
+    input_image: rawBase64,
   };
 
-  return callReplicate(token, input);
+  try {
+    const rdRes = await fetch(RD_DIRECT_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-RD-Token': rdToken,
+      },
+      body: JSON.stringify(rdPayload),
+    });
+
+    if (!rdRes.ok) {
+      const errBody = await rdRes.text().catch(() => 'Could not read response body');
+      return Response.json(
+        { success: false, error: `Retro Diffusion error (${rdRes.status}): ${errBody}` },
+        { status: rdRes.status }
+      );
+    }
+
+    const rdData = await rdRes.json();
+
+    if (!rdData.base64_images || rdData.base64_images.length === 0) {
+      return Response.json(
+        { success: false, error: 'Generation completed but no image was returned.' },
+        { status: 500 }
+      );
+    }
+
+    // Convert base64 response to a data URL for the frontend
+    const imageDataUrl = `data:image/png;base64,${rdData.base64_images[0]}`;
+
+    return Response.json({
+      success: true,
+      imageUrl: imageDataUrl,
+      prediction: {
+        status: 'succeeded',
+        cost: rdData.balance_cost,
+        remaining_balance: rdData.remaining_balance,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return Response.json(
+      { success: false, error: `Connection to Retro Diffusion failed — ${message}` },
+      { status: 500 }
+    );
+  }
 }

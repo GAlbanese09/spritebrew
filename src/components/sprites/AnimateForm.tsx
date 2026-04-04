@@ -138,9 +138,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         mode: 'animate',
         inputImage: rgbBase64,
         action: selectedAction,
-        width: charWidth,
-        height: charHeight,
-        framesDuration: frameCount,
+        width: 64,
+        height: 64,
       };
 
       if (motionPrompt.trim()) {
@@ -160,22 +159,10 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         return;
       }
 
-      const imageUrl = data.imageUrl;
-      let dataUrl = imageUrl;
+      // Retro Diffusion direct API returns a data URL directly (not a remote URL)
+      const dataUrl = data.imageUrl;
 
-      try {
-        const imgRes = await fetch(imageUrl);
-        const blob = await imgRes.blob();
-        dataUrl = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.readAsDataURL(blob);
-        });
-      } catch {
-        // Fall back to URL
-      }
-
-      setGeneratedImage(imageUrl, dataUrl);
+      setGeneratedImage(dataUrl, dataUrl);
       setGenerationStyle(`advanced_animation_${selectedAction}`);
       onGenerated(dataUrl, motionPrompt.trim() || selectedAction, `advanced_${selectedAction}`);
     } catch (err) {
@@ -191,8 +178,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setOriginalCharacter, onGenerated,
   ]);
 
-  const sizeWarning = charWidth > 256 || charHeight > 256;
-  const squareWarning = charWidth !== charHeight && charWidth > 0;
+  const sizeWarning = charWidth > 0 && (charWidth !== 64 || charHeight !== 64);
   const isCustomAction = selectedAction === 'custom_action';
   const canGenerate = characterDataUrl && !sizeWarning && (!isCustomAction || motionPrompt.trim());
 
@@ -230,12 +216,12 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
                 </p>
                 {sizeWarning && (
                   <p className="text-[10px] font-mono text-red-400 mt-1">
-                    Image must be 256x256 or smaller for animation
+                    Your image is {charWidth}x{charHeight} — animation requires exactly 64x64. Please resize first.
                   </p>
                 )}
-                {squareWarning && !sizeWarning && (
-                  <p className="text-[10px] font-mono text-amber-400 mt-1">
-                    Square images work best (e.g., {Math.min(charWidth, charHeight)}x{Math.min(charWidth, charHeight)})
+                {!sizeWarning && (charWidth === 64 && charHeight === 64) && (
+                  <p className="text-[10px] font-mono text-green-400 mt-1">
+                    64x64 — perfect size
                   </p>
                 )}
               </div>
@@ -261,7 +247,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
               Drop your pixel art character here
             </p>
             <p className="text-[10px] font-mono text-text-muted mb-3">
-              PNG only &middot; 32x32 to 256x256
+              PNG only &middot; 64x64 recommended
             </p>
             <Button
               variant="secondary"
@@ -390,10 +376,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         />
       </div>
 
-      {/* Note about single-direction */}
+      {/* Note about constraints */}
       <p className="text-[9px] font-mono text-text-muted/70 border-t border-border-subtle pt-3">
-        Advanced animation generates a single-direction sprite strip. Generate
-        separately for each direction if you need a full 4-direction sheet.
+        Character animation is optimized for 64x64 sprites. Generates a
+        single-direction sprite strip — generate separately for each direction
+        if you need a full 4-direction sheet.
       </p>
 
       {/* Error */}
@@ -413,7 +400,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       {/* Generate button */}
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-mono text-text-muted">
-          {charWidth > 0 ? `${charWidth}x${charHeight} · ${frameCount} frames` : 'Upload a character to begin'}
+          {charWidth > 0 ? `64x64 · ${frameCount} frames` : 'Upload a 64x64 character to begin'}
         </p>
         <Button
           size="lg"

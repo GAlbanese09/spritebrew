@@ -17,6 +17,7 @@ import type { SpriteAnimation } from '@/lib/types';
 TextureSource.defaultOptions.scaleMode = 'nearest';
 
 type CharState = 'idle' | 'walking' | 'running' | 'attacking' | 'jumping' | 'hurt';
+type Direction = 'up' | 'down' | 'left' | 'right';
 type BgPreset = 'grid' | 'grass' | 'dungeon' | 'black' | 'white';
 
 const CANVAS_W = 640;
@@ -32,6 +33,101 @@ const ANIM_TYPE_PRIORITY: Record<string, CharState> = {
   jump: 'jumping',
   hurt: 'hurt',
 };
+
+// ── Directional detection ──
+
+const DIR_KEYWORDS: Record<string, Direction> = {
+  up: 'up',
+  north: 'up',
+  down: 'down',
+  south: 'down',
+  left: 'left',
+  west: 'left',
+  right: 'right',
+  east: 'right',
+};
+
+const ACTION_KEYWORDS: Record<string, CharState> = {
+  idle: 'idle',
+  walk: 'walking',
+  run: 'running',
+  attack: 'attacking',
+  jump: 'jumping',
+  hurt: 'hurt',
+};
+
+/**
+ * Parse an animation name like "Walk Up", "walk_down", "run_left" into
+ * { state, direction } or null if no directional keyword found.
+ */
+function parseDirectional(name: string): { state: CharState; direction: Direction } | null {
+  const normalized = name.toLowerCase().replace(/[_\-]/g, ' ').trim();
+  const words = normalized.split(/\s+/);
+
+  let direction: Direction | null = null;
+  let state: CharState | null = null;
+
+  for (const word of words) {
+    if (!direction && DIR_KEYWORDS[word]) {
+      direction = DIR_KEYWORDS[word];
+    }
+    if (!state && ACTION_KEYWORDS[word]) {
+      state = ACTION_KEYWORDS[word];
+    }
+  }
+
+  if (!direction) return null;
+  // Default to walking if we found a direction but no action keyword
+  return { state: state ?? 'walking', direction };
+}
+
+/**
+ * Analyze all animations and determine:
+ * - hasDirectional: whether directional variants were detected
+ * - dirMap: state+direction → SpriteAnimation
+ * - flatMap: state → SpriteAnimation (non-directional fallback)
+ */
+function buildAnimMaps(animations: SpriteAnimation[]) {
+  const dirMap = new Map<string, SpriteAnimation>(); // key: "state:direction"
+  const flatMap = new Map<CharState, SpriteAnimation>();
+
+  for (const anim of animations) {
+    // Try type-based mapping first (from ANIM_TYPE_PRIORITY)
+    const typeState = ANIM_TYPE_PRIORITY[anim.type];
+
+    // Try name-based directional parsing
+    const parsed = parseDirectional(anim.name);
+
+    if (parsed) {
+      const key = `${parsed.state}:${parsed.direction}`;
+      if (!dirMap.has(key)) {
+        dirMap.set(key, anim);
+      }
+    }
+
+    // Also add to flat map for non-directional fallback
+    if (typeState && !flatMap.has(typeState)) {
+      flatMap.set(typeState, anim);
+    }
+    // If the name parses to a state but isn't in the type map, still add to flat
+    if (parsed && !flatMap.has(parsed.state)) {
+      flatMap.set(parsed.state, anim);
+    }
+  }
+
+  // Fallback: if no idle, use first animation
+  if (!flatMap.has('idle') && animations.length > 0) {
+    flatMap.set('idle', animations[0]);
+  }
+
+  const hasDirectional = dirMap.size > 0;
+
+  return { hasDirectional, dirMap, flatMap };
+}
+
+function dirMapKey(state: CharState, dir: Direction): string {
+  return `${state}:${dir}`;
+}
 
 interface DemoAreaProps {
   frameDataUrls: Map<string, string>;
@@ -49,7 +145,14 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
   const stateRef = useRef<CharState>('idle');
   const posRef = useRef({ x: CANVAS_W / 2, y: CANVAS_H / 2 });
   const facingRef = useRef<1 | -1>(1);
-  const lockedRef = useRef(false); // locked during one-shot animations
+  const directionRef = useRef<Direction>('down');
+  const lockedRef = useRef(false);
+
+  const animMapsRef = useRef<ReturnType<typeof buildAnimMaps>>({
+    hasDirectional: false,
+    dirMap: new Map(),
+    flatMap: new Map(),
+  });
 
   const [focused, setFocused] = useState(false);
   const [bgPreset, setBgPreset] = useState<BgPreset>('grid');
@@ -58,39 +161,51 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
   const [overlayInfo, setOverlayInfo] = useState({
     animation: 'idle',
     state: 'idle' as CharState,
+    direction: 'down' as Direction,
     x: 0,
     y: 0,
     fps: 0,
+    directional: false,
   });
 
-  // Map animation type names to store animations
-  const animMap = useRef<Map<CharState, SpriteAnimation>>(new Map());
-
+  // Build animation maps when animations change
   useEffect(() => {
-    const map = new Map<CharState, SpriteAnimation>();
-    for (const a of animations) {
-      const state = ANIM_TYPE_PRIORITY[a.type];
-      if (state && !map.has(state)) {
-        map.set(state, a);
-      }
-    }
-    // Fallback: if no idle, use first animation
-    if (!map.has('idle') && animations.length > 0) {
-      map.set('idle', animations[0]);
-    }
-    animMap.current = map;
+    animMapsRef.current = buildAnimMaps(animations);
   }, [animations]);
 
-  // Get best animation for a state, with fallbacks
+  // Get best animation for a state+direction, with fallbacks
   const getAnimForState = useCallback(
-    (state: CharState): SpriteAnimation | null => {
-      const map = animMap.current;
-      if (map.has(state)) return map.get(state)!;
-      // Fallbacks
-      if (state === 'running') return map.get('walking') ?? map.get('idle') ?? null;
+    (state: CharState, dir: Direction): SpriteAnimation | null => {
+      const { hasDirectional, dirMap, flatMap } = animMapsRef.current;
+
+      if (hasDirectional) {
+        // Try exact state+direction
+        const exact = dirMap.get(dirMapKey(state, dir));
+        if (exact) return exact;
+
+        // Fallback: running → walking in same direction
+        if (state === 'running') {
+          const walkDir = dirMap.get(dirMapKey('walking', dir));
+          if (walkDir) return walkDir;
+        }
+
+        // Fallback: try the state without direction (flat map)
+        const flat = flatMap.get(state);
+        if (flat) return flat;
+
+        // Fallback: idle in this direction
+        if (state !== 'idle') {
+          const idleDir = dirMap.get(dirMapKey('idle', dir));
+          if (idleDir) return idleDir;
+        }
+      }
+
+      // Non-directional fallbacks (original behavior)
+      if (flatMap.has(state)) return flatMap.get(state)!;
+      if (state === 'running') return flatMap.get('walking') ?? flatMap.get('idle') ?? null;
       if (state === 'attacking' || state === 'jumping' || state === 'hurt')
-        return map.get('idle') ?? null;
-      return map.get('idle') ?? null;
+        return flatMap.get('idle') ?? null;
+      return flatMap.get('idle') ?? null;
     },
     []
   );
@@ -116,7 +231,6 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
       case 'grass': {
         ctx.fillStyle = '#2d5a1e';
         ctx.fillRect(0, 0, size, size);
-        // Simple grass detail
         ctx.fillStyle = '#3a7228';
         for (let i = 0; i < 6; i++) {
           const gx = (i * 7 + 3) % size;
@@ -137,7 +251,6 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
         ctx.strokeStyle = '#2a221a';
         ctx.lineWidth = 1;
         ctx.strokeRect(0.5, 0.5, size - 1, size - 1);
-        // Brick pattern
         ctx.fillStyle = '#221c14';
         ctx.fillRect(0, 0, size, 1);
         ctx.fillRect(size / 2, size / 2, 1, size / 2);
@@ -181,7 +294,6 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
 
       appRef.current = app;
 
-      // Style the canvas
       const cv = app.canvas as HTMLCanvasElement;
       cv.style.imageRendering = 'pixelated';
       cv.style.display = 'block';
@@ -190,7 +302,6 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
       cv.style.outline = 'none';
       cv.tabIndex = 0;
 
-      // Focus management
       cv.addEventListener('focus', () => setFocused(true));
       cv.addEventListener('blur', () => setFocused(false));
 
@@ -222,7 +333,6 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           const url = frameDataUrls.get(frame.id);
           if (!url) continue;
 
-          // Load the data URL as a texture
           const img = new Image();
           img.src = url;
           await new Promise<void>((r) => {
@@ -251,12 +361,15 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
 
       spritesRef.current = spriteMap;
 
-      // Show initial animation (idle or first)
-      const idleAnim = getAnimForState('idle');
+      // Show initial animation (idle facing down, or first)
+      const idleAnim = getAnimForState('idle', 'down');
       if (idleAnim) {
         const s = spriteMap.get(idleAnim.id);
         if (s) s.visible = true;
       }
+
+      // Track previous resolved anim ID to detect changes
+      let prevAnimId: string | null = null;
 
       // Game loop
       let lastFpsTime = performance.now();
@@ -276,21 +389,16 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
         }
 
         const keys = keysRef.current;
-        const prevState = stateRef.current;
+        const { hasDirectional } = animMapsRef.current;
 
         // Don't process movement input if locked into one-shot
         if (!lockedRef.current) {
-          // Determine direction and movement
           let dx = 0;
           let dy = 0;
-          const left =
-            keys.has('ArrowLeft') || keys.has('a');
-          const right =
-            keys.has('ArrowRight') || keys.has('d');
-          const up =
-            keys.has('ArrowUp') || keys.has('w');
-          const down =
-            keys.has('ArrowDown') || keys.has('s');
+          const left = keys.has('ArrowLeft') || keys.has('a');
+          const right = keys.has('ArrowRight') || keys.has('d');
+          const up = keys.has('ArrowUp') || keys.has('w');
+          const down = keys.has('ArrowDown') || keys.has('s');
           const shifting = keys.has('Shift');
 
           if (left) dx -= 1;
@@ -301,18 +409,25 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           if (dx !== 0 || dy !== 0) {
             const isRunning = shifting;
             const speed = isRunning ? RUN_SPEED : WALK_SPEED;
-            // Normalize diagonal
             const len = Math.sqrt(dx * dx + dy * dy);
             posRef.current.x += Math.round((dx / len) * speed);
             posRef.current.y += Math.round((dy / len) * speed);
 
-            // Clamp to canvas
             posRef.current.x = Math.max(0, Math.min(CANVAS_W, posRef.current.x));
             posRef.current.y = Math.max(0, Math.min(CANVAS_H, posRef.current.y));
 
-            // Facing
-            if (dx < 0) facingRef.current = -1;
-            if (dx > 0) facingRef.current = 1;
+            // Update direction
+            if (hasDirectional) {
+              // Vertical takes priority for top-down RPGs on diagonal
+              if (dy < 0) directionRef.current = 'up';
+              else if (dy > 0) directionRef.current = 'down';
+              else if (dx < 0) directionRef.current = 'left';
+              else if (dx > 0) directionRef.current = 'right';
+            } else {
+              // Non-directional: track left/right facing for flip
+              if (dx < 0) facingRef.current = -1;
+              if (dx > 0) facingRef.current = 1;
+            }
 
             stateRef.current = isRunning ? 'running' : 'walking';
           } else {
@@ -321,20 +436,29 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
         }
 
         // Resolve which animation to show
-        const targetAnim = getAnimForState(stateRef.current);
         const currentState = stateRef.current;
+        const currentDir = directionRef.current;
+        const targetAnim = getAnimForState(currentState, currentDir);
+        const targetAnimId = targetAnim?.id ?? null;
 
         // Hide all, show active
         for (const [animId, sprite] of spriteMap) {
-          const isActive = targetAnim?.id === animId;
+          const isActive = targetAnimId === animId;
           sprite.visible = isActive;
           if (isActive) {
             sprite.x = Math.round(posRef.current.x);
             sprite.y = Math.round(posRef.current.y);
-            const absScale = Math.abs(sprite.scale.x);
-            sprite.scale.x = facingRef.current * absScale;
 
-            // Update animation speed from store
+            if (hasDirectional) {
+              // No flipping when directional animations exist
+              const absScale = Math.abs(sprite.scale.x);
+              sprite.scale.x = absScale;
+            } else {
+              // Flip horizontally based on facing direction
+              const absScale = Math.abs(sprite.scale.x);
+              sprite.scale.x = facingRef.current * absScale;
+            }
+
             const storeAnim = animations.find((a) => a.id === animId);
             if (storeAnim) {
               sprite.animationSpeed = storeAnim.fps / 60;
@@ -342,25 +466,27 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           }
         }
 
-        // If state changed, restart the new animation
-        if (currentState !== prevState && targetAnim) {
+        // If resolved animation changed, restart it
+        if (targetAnimId !== prevAnimId && targetAnim) {
           const s = spriteMap.get(targetAnim.id);
           if (s) {
             s.gotoAndPlay(0);
           }
         }
+        prevAnimId = targetAnimId;
 
         // Update overlay
         setOverlayInfo({
           animation: targetAnim?.name ?? 'none',
           state: currentState,
+          direction: currentDir,
           x: posRef.current.x,
           y: posRef.current.y,
           fps: currentFps,
+          directional: hasDirectional,
         });
       });
 
-      // Focus canvas automatically
       cv.focus();
     };
 
@@ -390,26 +516,22 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!focused) return;
 
-      // Prevent scrolling
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
         e.preventDefault();
       }
 
       keysRef.current.add(e.key);
 
-      // Toggle overlay
       if (e.key === 'h' || e.key === 'H') {
         setShowOverlay((v) => !v);
         return;
       }
 
-      // Reset position
       if (e.key === 'r' || e.key === 'R') {
         posRef.current = { x: CANVAS_W / 2, y: CANVAS_H / 2 };
         return;
       }
 
-      // One-shot animations
       if (!lockedRef.current) {
         if (e.key === ' ') {
           triggerOneShot('attacking');
@@ -436,7 +558,8 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
 
   const triggerOneShot = useCallback(
     (state: CharState) => {
-      const anim = getAnimForState(state);
+      const dir = directionRef.current;
+      const anim = getAnimForState(state, dir);
       if (!anim) return;
 
       stateRef.current = state;
@@ -452,7 +575,6 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           stateRef.current = 'idle';
         };
       } else {
-        // No sprite for this state — unlock immediately
         const frameDuration = (anim.frames.length / anim.fps) * 1000;
         setTimeout(() => {
           lockedRef.current = false;
@@ -491,6 +613,10 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
             </p>
             <p className="text-[10px] font-mono text-text-muted">
               State: {overlayInfo.state}
+            </p>
+            <p className="text-[10px] font-mono text-text-muted">
+              Dir: {overlayInfo.direction.charAt(0).toUpperCase() + overlayInfo.direction.slice(1)}
+              {overlayInfo.directional && ' (4-dir)'}
             </p>
             <p className="text-[10px] font-mono text-text-muted">
               Pos: {overlayInfo.x}, {overlayInfo.y}
@@ -555,50 +681,56 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           {showControls ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
         {showControls && (
-          <div className="px-4 pb-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {Object.entries(DEMO_CONTROLS).map(([action, config]) => (
-              <div key={action} className="flex items-center gap-3">
-                <div className="flex gap-1 flex-shrink-0">
-                  {config.keys.slice(0, 2).map((key) => (
-                    <kbd
-                      key={key}
-                      className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5
-                        rounded bg-bg-elevated border border-border-default text-[10px] font-mono text-text-primary"
-                    >
-                      {(key as string).replace('Arrow', '').slice(0, 5)}
-                    </kbd>
-                  ))}
-                  {'alt' in config && (
-                    <>
-                      <span className="text-[10px] text-text-muted">/</span>
-                      {(config.alt as readonly string[]).slice(0, 2).map((key) => (
-                        <kbd
-                          key={key}
-                          className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5
-                            rounded bg-bg-elevated border border-border-default text-[10px] font-mono text-text-primary"
-                        >
-                          {key}
-                        </kbd>
-                      ))}
-                    </>
-                  )}
+          <div className="px-4 pb-4 space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {Object.entries(DEMO_CONTROLS).map(([action, config]) => (
+                <div key={action} className="flex items-center gap-3">
+                  <div className="flex gap-1 flex-shrink-0">
+                    {config.keys.slice(0, 2).map((key) => (
+                      <kbd
+                        key={key}
+                        className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5
+                          rounded bg-bg-elevated border border-border-default text-[10px] font-mono text-text-primary"
+                      >
+                        {(key as string).replace('Arrow', '').slice(0, 5)}
+                      </kbd>
+                    ))}
+                    {'alt' in config && (
+                      <>
+                        <span className="text-[10px] text-text-muted">/</span>
+                        {(config.alt as readonly string[]).slice(0, 2).map((key) => (
+                          <kbd
+                            key={key}
+                            className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5
+                              rounded bg-bg-elevated border border-border-default text-[10px] font-mono text-text-primary"
+                          >
+                            {key}
+                          </kbd>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                  <span className="text-[10px] font-mono text-text-muted">
+                    {config.description}
+                  </span>
                 </div>
+              ))}
+              <div className="flex items-center gap-3">
+                <kbd
+                  className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5
+                    rounded bg-bg-elevated border border-border-default text-[10px] font-mono text-text-primary"
+                >
+                  H
+                </kbd>
                 <span className="text-[10px] font-mono text-text-muted">
-                  {config.description}
+                  Toggle info overlay
                 </span>
               </div>
-            ))}
-            <div className="flex items-center gap-3">
-              <kbd
-                className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5
-                  rounded bg-bg-elevated border border-border-default text-[10px] font-mono text-text-primary"
-              >
-                H
-              </kbd>
-              <span className="text-[10px] font-mono text-text-muted">
-                Toggle info overlay
-              </span>
             </div>
+            <p className="text-[9px] font-mono text-text-muted/70 pt-1 border-t border-border-subtle">
+              Arrow keys control direction when directional animations (Walk Up/Down/Left/Right) are available.
+              Vertical direction takes priority on diagonals.
+            </p>
           </div>
         )}
       </div>

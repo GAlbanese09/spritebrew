@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Grid3X3, Scan, Scissors } from 'lucide-react';
 import { SPRITE_SIZES } from '@/lib/constants';
 import { detectFrameGrid, loadImage, imageToCanvas } from '@/lib/spriteUtils';
+import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 
 interface SlicerConfigProps {
@@ -29,6 +30,7 @@ export default function SlicerConfig({
   imageHeight,
   onSlice,
 }: SlicerConfigProps) {
+  const generationStyle = useSpriteStore((s) => s.generationStyle);
   const [frameWidth, setFrameWidth] = useState(32);
   const [frameHeight, setFrameHeight] = useState(32);
   const [padding, setPadding] = useState(0);
@@ -50,6 +52,17 @@ export default function SlicerConfig({
   const handleAutoDetect = useCallback(async () => {
     setDetecting(true);
     try {
+      // Animate My Character results use animation__any_animation which always
+      // outputs 64x64 frames in a grid. Skip detection and force 64x64.
+      if (generationStyle && generationStyle.startsWith('any_animation_')) {
+        setFrameWidth(64);
+        setFrameHeight(64);
+        setPadding(0);
+        setOffsetX(0);
+        setOffsetY(0);
+        return;
+      }
+
       const img = await loadImage(imageUrl);
       const canvas = imageToCanvas(img);
       const ctx = canvas.getContext('2d')!;
@@ -67,7 +80,7 @@ export default function SlicerConfig({
     } finally {
       setDetecting(false);
     }
-  }, [imageUrl]);
+  }, [imageUrl, generationStyle]);
 
   // Draw preview with grid overlay
   useEffect(() => {

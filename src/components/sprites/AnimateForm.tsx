@@ -163,8 +163,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       const dataUrl = data.imageUrl;
 
       setGeneratedImage(dataUrl, dataUrl);
-      setGenerationStyle(`advanced_animation_${selectedAction}`);
-      onGenerated(dataUrl, motionPrompt.trim() || selectedAction, `advanced_${selectedAction}`);
+      setGenerationStyle(`any_animation_${selectedAction}`);
+      onGenerated(dataUrl, motionPrompt.trim() || selectedAction, `any_animation_${selectedAction}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       setGenerationError(`Connection failed — ${msg}`);
@@ -377,11 +377,17 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       </div>
 
       {/* Note about constraints */}
-      <p className="text-[9px] font-mono text-text-muted/70 border-t border-border-subtle pt-3">
-        Character animation is optimized for 64x64 sprites. Generates a
-        single-direction sprite strip — generate separately for each direction
-        if you need a full 4-direction sheet.
-      </p>
+      <div className="text-[9px] font-mono text-text-muted/70 border-t border-border-subtle pt-3 space-y-1">
+        <p>
+          Character animation is optimized for 64x64 sprites. Generates a
+          single-direction sprite strip — generate separately for each direction
+          if you need a full 4-direction sheet.
+        </p>
+        <p>
+          For best results, your character should be on a solid color background
+          that contrasts with the character.
+        </p>
+      </div>
 
       {/* Error */}
       {generationError && (

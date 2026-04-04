@@ -118,6 +118,35 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
     const { columns } = spriteSheet;
     const rowCount = Math.ceil(allFrames.length / columns);
 
+    // Special case: "Animate My Character" results (any_animation_{action}) are
+    // a single-animation sheet. Put ALL frames into one group named after the action.
+    if (generationStyle && generationStyle.startsWith('any_animation_')) {
+      const action = generationStyle.replace('any_animation_', '');
+      const nameMap: Record<string, { name: string; type: string; fps: number }> = {
+        walking: { name: 'Walking', type: 'walk', fps: 8 },
+        idle: { name: 'Idle', type: 'idle', fps: 6 },
+        attack: { name: 'Attack', type: 'attack', fps: 12 },
+        jump: { name: 'Jump', type: 'jump', fps: 10 },
+        crouch: { name: 'Crouch', type: 'idle', fps: 6 },
+        destroy: { name: 'Death', type: 'death', fps: 8 },
+        subtle_motion: { name: 'Subtle Motion', type: 'idle', fps: 4 },
+        custom_action: { name: 'Animation', type: 'idle', fps: 8 },
+      };
+      const info = nameMap[action] ?? { name: 'Animation', type: 'idle', fps: 8 };
+      const preset = ANIMATION_TYPES.find((t) => t.id === info.type);
+
+      const anim: SpriteAnimation = {
+        id: generateAnimationId(),
+        name: info.name,
+        type: preset?.id ?? info.type,
+        frames: allFrames,
+        fps: preset?.defaultFps ?? info.fps,
+        loop: true,
+      };
+      addAnimation(anim);
+      return;
+    }
+
     // Determine row names and types based on generation style or row count
     let rowNames: string[];
     let rowTypes: string[];

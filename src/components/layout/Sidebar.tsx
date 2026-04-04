@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   Home,
   UploadCloud,
@@ -12,7 +12,7 @@ import {
   X,
   LogIn,
 } from 'lucide-react';
-import { Show, SignInButton, UserButton, useUser } from '@clerk/nextjs';
+import { Show, SignInButton, useClerk, useUser } from '@clerk/nextjs';
 import Badge from '@/components/ui/Badge';
 
 const NAV_ITEMS = [
@@ -126,28 +126,55 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
   );
 }
 
-/** Avatar + email row for the signed-in user */
+/** Avatar + email row + custom sign-out button for the signed-in user.
+ *
+ * Clerk's built-in <UserButton> POSTs to the current page URL during sign-out,
+ * which returns 405 on Cloudflare Pages static routes. Using useClerk().signOut()
+ * directly avoids the POST entirely and gives us a manual router.push('/') after.
+ */
 function UserIdentity() {
   const { user } = useUser();
+  const { signOut } = useClerk();
+  const router = useRouter();
+
   const email = user?.primaryEmailAddress?.emailAddress ?? '';
   const name = user?.firstName ?? user?.username ?? email.split('@')[0] ?? 'User';
+  const imageUrl = user?.imageUrl;
+
+  const handleSignOut = async () => {
+    await signOut();
+    router.push('/');
+  };
 
   return (
-    <div className="flex items-center gap-2.5 px-2 py-1">
-      {/* afterSignOutUrl is set on ClerkProvider in layout.tsx (Clerk v7 removed it from UserButton) */}
-      <UserButton
-        appearance={{
-          elements: {
-            avatarBox: 'w-8 h-8',
-          },
-        }}
-      />
-      <div className="flex-1 min-w-0">
-        <p className="text-[11px] font-mono text-text-primary truncate">{name}</p>
-        {email && email !== name && (
-          <p className="text-[9px] font-mono text-text-muted truncate">{email}</p>
+    <div className="px-2 py-1 space-y-2">
+      <div className="flex items-center gap-2.5">
+        {imageUrl ? (
+          <img
+            src={imageUrl}
+            alt="Profile"
+            className="w-8 h-8 rounded-full border border-border-default flex-shrink-0"
+          />
+        ) : (
+          <div className="w-8 h-8 rounded-full bg-accent-amber-glow border border-border-default flex items-center justify-center flex-shrink-0">
+            <span className="text-[11px] font-mono text-accent-amber">
+              {name.charAt(0).toUpperCase()}
+            </span>
+          </div>
         )}
+        <div className="flex-1 min-w-0">
+          <p className="text-[11px] font-mono text-text-primary truncate">{name}</p>
+          {email && email !== name && (
+            <p className="text-[9px] font-mono text-text-muted truncate">{email}</p>
+          )}
+        </div>
       </div>
+      <button
+        onClick={handleSignOut}
+        className="text-[10px] font-mono text-text-muted hover:text-accent-amber cursor-pointer transition-colors"
+      >
+        Sign out
+      </button>
     </div>
   );
 }

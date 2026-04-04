@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Download, Scissors, Trash2, Images, Sparkles, Play } from 'lucide-react';
-import { useAuth } from '@clerk/nextjs';
+import { useAuth } from '@clerk/react';
 import {
   loadHistory,
   deleteHistoryEntry,

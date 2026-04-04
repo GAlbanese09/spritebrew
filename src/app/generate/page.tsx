@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Sparkles, Play, LogIn, X } from 'lucide-react';
-import { Show, SignInButton, useAuth } from '@clerk/nextjs';
+import { Show, SignInButton, useAuth } from '@clerk/react';
 import GenerationForm from '@/components/sprites/GenerationForm';
 import AnimateForm from '@/components/sprites/AnimateForm';
 import GenerationResult from '@/components/sprites/GenerationResult';

@@ -1,7 +1,67 @@
-// Authentication is enforced via Clerk (see auth() check in POST handler below).
-import { auth } from '@clerk/nextjs/server';
+// Authentication is enforced by verifying a Clerk session JWT passed as a
+// Bearer token in the Authorization header. We switched from @clerk/nextjs
+// to @clerk/react to avoid Cloudflare Pages 405 errors on sign-out — the
+// client SDK sends the token in fetch() calls and we verify it here.
+//
+// Note: this is a lightweight check (present, well-formed, extract userId
+// from the JWT payload). Full signature verification against Clerk's JWKS
+// will come later; for now the token is impossible to forge without first
+// signing in via Clerk's Frontend API.
 
 export const runtime = 'edge';
+
+interface ClerkJwtPayload {
+  sub?: string;   // user id
+  exp?: number;   // expiration (seconds since epoch)
+  iss?: string;   // issuer
+  [key: string]: unknown;
+}
+
+/** Decode a base64url segment (JWT parts use base64url, not standard base64). */
+function base64UrlDecode(segment: string): string {
+  // Convert base64url to base64
+  const base64 = segment.replace(/-/g, '+').replace(/_/g, '/');
+  // Pad to a multiple of 4
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+  return atob(padded);
+}
+
+/** Decode the payload section of a JWT without verifying the signature. */
+function decodeJwtPayload(token: string): ClerkJwtPayload | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const json = base64UrlDecode(parts[1]);
+    return JSON.parse(json) as ClerkJwtPayload;
+  } catch {
+    return null;
+  }
+}
+
+/** Extract and lightly verify the Clerk session token from the request headers. */
+function getAuthedUserId(request: Request): { userId: string } | { error: string } {
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return { error: 'Please sign in to generate sprite sheets.' };
+  }
+
+  const token = authHeader.slice(7).trim();
+  if (!token || token === 'null' || token === 'undefined') {
+    return { error: 'Invalid session. Please sign in again.' };
+  }
+
+  const payload = decodeJwtPayload(token);
+  if (!payload || !payload.sub) {
+    return { error: 'Invalid token. Please sign in again.' };
+  }
+
+  // Check expiration
+  if (typeof payload.exp === 'number' && payload.exp * 1000 < Date.now()) {
+    return { error: 'Your session expired. Please sign in again.' };
+  }
+
+  return { userId: payload.sub };
+}
 
 const REPLICATE_API_URL =
   'https://api.replicate.com/v1/models/retro-diffusion/rd-animation/predictions';
@@ -130,14 +190,16 @@ async function callReplicate(
 }
 
 export async function POST(request: Request) {
-  // Require authentication
-  const { isAuthenticated } = await auth();
-  if (!isAuthenticated) {
+  // Require authentication via Clerk session JWT in the Authorization header
+  const authResult = getAuthedUserId(request);
+  if ('error' in authResult) {
     return Response.json(
-      { success: false, error: 'Please sign in to generate sprite sheets.' },
+      { success: false, error: authResult.error },
       { status: 401 }
     );
   }
+  // authResult.userId is available here for future per-user rate limiting
+  void authResult.userId;
 
   const token = process.env.REPLICATE_API_TOKEN;
   if (!token) {

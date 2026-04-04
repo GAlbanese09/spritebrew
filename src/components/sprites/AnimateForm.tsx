@@ -9,7 +9,7 @@ import {
   AlertCircle,
   Play,
 } from 'lucide-react';
-import { useAuth } from '@clerk/nextjs';
+import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import ImageResizer from './ImageResizer';
@@ -46,7 +46,7 @@ interface AnimateFormProps {
 }
 
 export default function AnimateForm({ onGenerated }: AnimateFormProps) {
-  const { userId } = useAuth();
+  const { userId, getToken } = useAuth();
   const setGenerating = useSpriteStore((s) => s.setGenerating);
   const setGenerationError = useSpriteStore((s) => s.setGenerationError);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
@@ -203,9 +203,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         body.motionPrompt = motionPrompt.trim();
       }
 
+      // Get Clerk session token for Bearer auth on the API route
+      const sessionToken = await getToken();
+
       const res = await fetch('/api/generate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+        },
         body: JSON.stringify(body),
       });
 
@@ -237,7 +243,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     }
   }, [
     characterDataUrl, isGenerating, selectedAction, charWidth, charHeight,
-    frameCount, motionPrompt, convertToRgbBase64, userId,
+    frameCount, motionPrompt, convertToRgbBase64, userId, getToken,
     setGenerating, setGenerationError, setGeneratedImage, setGenerationStyle,
     setOriginalCharacter, setGenerationCount, onGenerated,
   ]);

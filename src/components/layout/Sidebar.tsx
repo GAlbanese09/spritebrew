@@ -12,7 +12,7 @@ import {
   X,
   LogIn,
 } from 'lucide-react';
-import { Show, SignInButton, useClerk, useUser } from '@clerk/nextjs';
+import { Show, SignInButton, useClerk, useUser } from '@clerk/react';
 import Badge from '@/components/ui/Badge';
 
 const NAV_ITEMS = [

@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Sparkles, UploadCloud, X, Check, Loader2, AlertCircle } from 'lucide-react';
-import { useAuth } from '@clerk/nextjs';
+import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import {
@@ -84,7 +84,7 @@ interface GenerationFormProps {
 }
 
 export default function GenerationForm({ onGenerated }: GenerationFormProps) {
-  const { userId } = useAuth();
+  const { userId, getToken } = useAuth();
   const setGenerating = useSpriteStore((s) => s.setGenerating);
   const setGenerationError = useSpriteStore((s) => s.setGenerationError);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
@@ -156,9 +156,15 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         body.referenceImage = referenceImage;
       }
 
+      // Get Clerk session token for Bearer auth on the API route
+      const sessionToken = await getToken();
+
       const res = await fetch('/api/generate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+        },
         body: JSON.stringify(body),
       });
 
@@ -203,7 +209,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     }
   }, [
     prompt, selectedStyle, effectiveWidth, effectiveHeight,
-    referenceImage, isGenerating, userId, setGenerating, setGenerationError,
+    referenceImage, isGenerating, userId, getToken, setGenerating, setGenerationError,
     setGeneratedImage, setGenerationStyle, setGenerationCount, onGenerated,
   ]);
 

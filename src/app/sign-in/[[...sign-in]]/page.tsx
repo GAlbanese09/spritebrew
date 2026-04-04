@@ -1,6 +1,6 @@
-import { SignIn } from '@clerk/nextjs';
+'use client';
 
-export const runtime = 'edge';
+import { SignIn } from '@clerk/react';
 
 export default function SignInPage() {
   return (

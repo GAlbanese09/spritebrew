@@ -258,6 +258,9 @@ async function handleAnimate(token: string, body: GenerateBody): Promise<Respons
 
   const prompt = motionPrompt?.trim() || 'smooth animation';
 
+  // Animate mode payload — uses `style` field, same as Create New mode.
+  // Fields sent: style, input_image (raw base64), width, height, frames_duration,
+  //              return_spritesheet, prompt (motion description)
   const input: Record<string, unknown> = {
     style: advancedStyle,
     input_image: rawBase64,
@@ -268,20 +271,5 @@ async function handleAnimate(token: string, body: GenerateBody): Promise<Respons
     prompt,
   };
 
-  // Try with `style` field first
-  const result = await callReplicate(token, input);
-
-  // If it failed due to invalid style, retry with prompt_style
-  const resultData = await result.clone().json();
-  if (
-    !resultData.success &&
-    typeof resultData.error === 'string' &&
-    (resultData.error.includes('style') || resultData.error.includes('invalid'))
-  ) {
-    delete input.style;
-    input.prompt_style = advancedStyle;
-    return callReplicate(token, input);
-  }
-
-  return result;
+  return callReplicate(token, input);
 }

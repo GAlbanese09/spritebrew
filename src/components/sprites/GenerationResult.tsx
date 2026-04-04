@@ -122,32 +122,30 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   if (isGenerating) {
     return (
       <div className="flex flex-col items-center justify-center py-12 space-y-6">
-        {/* Pixel blocks animation */}
-        <div className="grid grid-cols-4 gap-1">
-          {Array.from({ length: 16 }).map((_, i) => (
-            <div
-              key={i}
-              className="w-3 h-3 rounded-sm"
-              style={{
-                backgroundColor: 'var(--accent-amber)',
-                animation: `pixelPulse 1.6s ease-in-out ${i * 0.1}s infinite`,
-                opacity: 0.15,
-              }}
-            />
-          ))}
+        {/* Pixel blocks animation — 4x4 grid with staggered pulse */}
+        <div className="grid grid-cols-4 gap-1.5">
+          {Array.from({ length: 16 }).map((_, i) => {
+            const row = Math.floor(i / 4);
+            const col = i % 4;
+            const delay = (row + col) * 0.15;
+            return (
+              <div
+                key={i}
+                className="w-4 h-4 rounded-sm animate-[pixelBrew_1.2s_ease-in-out_infinite]"
+                style={{
+                  backgroundColor: 'var(--accent-amber)',
+                  animationDelay: `${delay}s`,
+                }}
+              />
+            );
+          })}
         </div>
-        <p className="text-sm font-mono text-accent-amber animate-pulse">
+        <p className="text-sm font-mono text-accent-amber font-semibold animate-pulse">
           {LOADING_MESSAGES[loadingMsgIdx]}
         </p>
         <p className="text-[10px] font-mono text-text-muted">
-          This usually takes 10-30 seconds
+          This usually takes 15-30 seconds
         </p>
-        <style>{`
-          @keyframes pixelPulse {
-            0%, 100% { opacity: 0.15; transform: scale(1); }
-            50% { opacity: 1; transform: scale(1.2); }
-          }
-        `}</style>
       </div>
     );
   }

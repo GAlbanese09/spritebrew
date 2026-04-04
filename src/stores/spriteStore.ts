@@ -24,6 +24,7 @@ interface SpriteStore {
   updateAnimationFps: (animationId: string, fps: number) => void;
   setSelectedFrames: (frameIds: string[]) => void;
   toggleFrameSelection: (frameId: string) => void;
+  updateFrameData: (frameId: string, newDataUrl: string) => void;
 
   // Generation actions
   setGeneratedImage: (url: string, dataUrl: string) => void;
@@ -112,6 +113,13 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
           ? state.selectedFrames.filter((id) => id !== frameId)
           : [...state.selectedFrames, frameId],
       };
+    }),
+
+  updateFrameData: (frameId, newDataUrl) =>
+    set((state) => {
+      const urls = new Map(state.frameDataUrls);
+      urls.set(frameId, newDataUrl);
+      return { frameDataUrls: urls };
     }),
 
   setGeneratedImage: (url, dataUrl) =>

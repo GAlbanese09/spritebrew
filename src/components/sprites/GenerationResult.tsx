@@ -60,18 +60,39 @@ interface GenerationResultProps {
   onReset: () => void;
 }
 
+const LOADING_MESSAGES = [
+  'Brewing your sprites...',
+  'Mixing pixels...',
+  'Almost there...',
+  'Adding final details...',
+];
+
 export default function GenerationResult({ onReset }: GenerationResultProps) {
   const router = useRouter();
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
+  const isGenerating = useSpriteStore((s) => s.isGenerating);
   const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
 
   const [zoom, setZoom] = useState(4);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
 
   // Load history on mount
   useEffect(() => {
     setHistory(loadHistory());
   }, []);
+
+  // Rotate loading messages every 3 seconds while generating
+  useEffect(() => {
+    if (!isGenerating) {
+      setLoadingMsgIdx(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setLoadingMsgIdx((prev) => (prev + 1) % LOADING_MESSAGES.length);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [isGenerating]);
 
   const handleDownload = useCallback(() => {
     if (!generatedImageDataUrl) return;
@@ -97,6 +118,39 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     localStorage.removeItem(HISTORY_KEY);
     setHistory([]);
   }, []);
+
+  if (isGenerating) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 space-y-6">
+        {/* Pixel blocks animation */}
+        <div className="grid grid-cols-4 gap-1">
+          {Array.from({ length: 16 }).map((_, i) => (
+            <div
+              key={i}
+              className="w-3 h-3 rounded-sm"
+              style={{
+                backgroundColor: 'var(--accent-amber)',
+                animation: `pixelPulse 1.6s ease-in-out ${i * 0.1}s infinite`,
+                opacity: 0.15,
+              }}
+            />
+          ))}
+        </div>
+        <p className="text-sm font-mono text-accent-amber animate-pulse">
+          {LOADING_MESSAGES[loadingMsgIdx]}
+        </p>
+        <p className="text-[10px] font-mono text-text-muted">
+          This usually takes 10-30 seconds
+        </p>
+        <style>{`
+          @keyframes pixelPulse {
+            0%, 100% { opacity: 0.15; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.2); }
+          }
+        `}</style>
+      </div>
+    );
+  }
 
   if (!generatedImageDataUrl) {
     // Tips / empty state

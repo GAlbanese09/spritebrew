@@ -173,7 +173,8 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
     animMapsRef.current = buildAnimMaps(animations);
   }, [animations]);
 
-  // Get best animation for a state+direction, with fallbacks
+  // Get best animation for a state+direction, with fallbacks.
+  // lastMovementDir is used for idle: hold the direction the character last faced.
   const getAnimForState = useCallback(
     (state: CharState, dir: Direction): SpriteAnimation | null => {
       const { hasDirectional, dirMap, flatMap } = animMapsRef.current;
@@ -189,11 +190,21 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           if (walkDir) return walkDir;
         }
 
+        // Idle fallback: if no directional idle exists, try generic idle
+        if (state === 'idle') {
+          const flat = flatMap.get('idle');
+          if (flat) return flat;
+          // No idle at all — fall back to the walk animation in the last direction
+          // (the game loop will stop playback on the last frame)
+          const walkDir = dirMap.get(dirMapKey('walking', dir));
+          if (walkDir) return walkDir;
+        }
+
         // Fallback: try the state without direction (flat map)
         const flat = flatMap.get(state);
         if (flat) return flat;
 
-        // Fallback: idle in this direction
+        // Fallback: idle in this direction, then generic idle
         if (state !== 'idle') {
           const idleDir = dirMap.get(dirMapKey('idle', dir));
           if (idleDir) return idleDir;
@@ -441,6 +452,14 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
         const targetAnim = getAnimForState(currentState, currentDir);
         const targetAnimId = targetAnim?.id ?? null;
 
+        // Detect idle-with-walk-fallback: we're idle but using a non-idle anim
+        // because no idle animation exists. In this case, freeze on last frame.
+        const idleFallback =
+          currentState === 'idle' &&
+          targetAnim != null &&
+          parseDirectional(targetAnim.name)?.state !== 'idle' &&
+          targetAnim.type !== 'idle';
+
         // Hide all, show active
         for (const [animId, sprite] of spriteMap) {
           const isActive = targetAnimId === animId;
@@ -450,18 +469,16 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
             sprite.y = Math.round(posRef.current.y);
 
             if (hasDirectional) {
-              // No flipping when directional animations exist
               const absScale = Math.abs(sprite.scale.x);
               sprite.scale.x = absScale;
             } else {
-              // Flip horizontally based on facing direction
               const absScale = Math.abs(sprite.scale.x);
               sprite.scale.x = facingRef.current * absScale;
             }
 
             const storeAnim = animations.find((a) => a.id === animId);
             if (storeAnim) {
-              sprite.animationSpeed = storeAnim.fps / 60;
+              sprite.animationSpeed = idleFallback ? 0 : storeAnim.fps / 60;
             }
           }
         }
@@ -470,7 +487,12 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
         if (targetAnimId !== prevAnimId && targetAnim) {
           const s = spriteMap.get(targetAnim.id);
           if (s) {
-            s.gotoAndPlay(0);
+            if (idleFallback) {
+              // Freeze on frame 0 (standing pose) rather than animating
+              s.gotoAndStop(0);
+            } else {
+              s.gotoAndPlay(0);
+            }
           }
         }
         prevAnimId = targetAnimId;

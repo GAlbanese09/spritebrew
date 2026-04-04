@@ -1,5 +1,8 @@
-// TODO: Add Clerk auth gating before production launch — no rate limiter needed once auth is in place.
-export const runtime = 'edge';
+// Authentication is enforced via Clerk (see auth() check in POST handler below).
+// Edge runtime removed because Clerk's server-side auth() is more reliable in the
+// Node runtime on Cloudflare via @opennextjs/cloudflare.
+
+import { auth } from '@clerk/nextjs/server';
 
 const REPLICATE_API_URL =
   'https://api.replicate.com/v1/models/retro-diffusion/rd-animation/predictions';
@@ -128,6 +131,15 @@ async function callReplicate(
 }
 
 export async function POST(request: Request) {
+  // Require authentication
+  const { isAuthenticated } = await auth();
+  if (!isAuthenticated) {
+    return Response.json(
+      { success: false, error: 'Please sign in to generate sprite sheets.' },
+      { status: 401 }
+    );
+  }
+
   const token = process.env.REPLICATE_API_TOKEN;
   if (!token) {
     return Response.json(

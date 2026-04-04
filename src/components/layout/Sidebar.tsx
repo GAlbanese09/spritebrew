@@ -10,7 +10,9 @@ import {
   Sparkles,
   Images,
   X,
+  LogIn,
 } from 'lucide-react';
+import { Show, SignInButton, UserButton, useUser } from '@clerk/nextjs';
 import Badge from '@/components/ui/Badge';
 
 const NAV_ITEMS = [
@@ -96,14 +98,56 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           })}
         </nav>
 
+        {/* Auth section */}
+        <div className="px-3 py-3 border-t border-border-subtle">
+          <Show when="signed-out">
+            <SignInButton mode="modal">
+              <button className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-md
+                bg-accent-amber text-bg-primary text-xs font-mono font-semibold
+                hover:bg-accent-amber-strong cursor-pointer transition-colors">
+                <LogIn size={14} />
+                Sign In to Generate
+              </button>
+            </SignInButton>
+          </Show>
+          <Show when="signed-in">
+            <UserIdentity />
+          </Show>
+        </div>
+
         {/* Footer */}
-        <div className="px-5 py-4 border-t border-border-subtle">
+        <div className="px-5 py-3 border-t border-border-subtle">
           <p className="text-[10px] text-text-muted font-mono uppercase tracking-widest">
             SpriteBrew v0.1
           </p>
         </div>
       </aside>
     </>
+  );
+}
+
+/** Avatar + email row for the signed-in user */
+function UserIdentity() {
+  const { user } = useUser();
+  const email = user?.primaryEmailAddress?.emailAddress ?? '';
+  const name = user?.firstName ?? user?.username ?? email.split('@')[0] ?? 'User';
+
+  return (
+    <div className="flex items-center gap-2.5 px-2 py-1">
+      <UserButton
+        appearance={{
+          elements: {
+            avatarBox: 'w-8 h-8',
+          },
+        }}
+      />
+      <div className="flex-1 min-w-0">
+        <p className="text-[11px] font-mono text-text-primary truncate">{name}</p>
+        {email && email !== name && (
+          <p className="text-[9px] font-mono text-text-muted truncate">{email}</p>
+        )}
+      </div>
+    </div>
   );
 }
 

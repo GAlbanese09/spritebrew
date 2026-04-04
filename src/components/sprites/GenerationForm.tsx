@@ -132,7 +132,11 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       const data = await res.json();
 
       if (!data.success) {
-        setGenerationError(data.error || 'Generation failed — try a different prompt.');
+        if (res.status === 401) {
+          setGenerationError('Your session expired. Please sign in again to continue generating.');
+        } else {
+          setGenerationError(data.error || 'Generation failed — try a different prompt.');
+        }
         return;
       }
 

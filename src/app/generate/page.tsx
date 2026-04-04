@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Sparkles, Play } from 'lucide-react';
+import { Sparkles, Play, LogIn } from 'lucide-react';
+import { Show, SignInButton } from '@clerk/nextjs';
 import GenerationForm from '@/components/sprites/GenerationForm';
 import AnimateForm from '@/components/sprites/AnimateForm';
 import GenerationResult from '@/components/sprites/GenerationResult';
@@ -61,7 +62,37 @@ export default function GeneratePage() {
         </p>
       </div>
 
-      {/* Two-column layout */}
+      {/* Signed-out gate */}
+      <Show when="signed-out">
+        <div className="max-w-xl mx-auto rounded-lg border-2 border-accent-amber/40 bg-bg-surface p-10 text-center glow-amber">
+          <div className="flex items-center justify-center w-16 h-16 rounded-lg bg-accent-amber-glow mx-auto mb-5">
+            <Sparkles size={32} className="text-accent-amber" />
+          </div>
+          <h2 className="font-display text-[11px] text-accent-amber mb-3 leading-relaxed">
+            Sign in to Generate
+          </h2>
+          <p className="text-sm font-mono text-text-secondary mb-1">
+            Create a free account to start generating AI pixel art sprite sheets.
+          </p>
+          <p className="text-xs font-mono text-text-muted mb-6">
+            Upload, slice, preview, and export are always free — no login needed.
+          </p>
+          <SignInButton mode="modal">
+            <button className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-md
+              bg-accent-amber text-bg-primary text-sm font-mono font-semibold
+              hover:bg-accent-amber-strong cursor-pointer transition-colors animate-pulse">
+              <LogIn size={16} />
+              Sign In — It&apos;s Free
+            </button>
+          </SignInButton>
+          <p className="mt-4 text-[10px] font-mono text-text-muted">
+            Google, GitHub, or email — takes 10 seconds
+          </p>
+        </div>
+      </Show>
+
+      {/* Two-column layout — signed-in only */}
+      <Show when="signed-in">
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Form — left 3/5 */}
         <div className="lg:col-span-3 space-y-4">
@@ -122,6 +153,7 @@ export default function GeneratePage() {
           </div>
         </div>
       </div>
+      </Show>
     </div>
   );
 }

@@ -180,7 +180,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       const data = await res.json();
 
       if (!data.success) {
-        setGenerationError(data.error || 'Animation failed — try again.');
+        if (res.status === 401) {
+          setGenerationError('Your session expired. Please sign in again to continue generating.');
+        } else {
+          setGenerationError(data.error || 'Animation failed — try again.');
+        }
         return;
       }
 

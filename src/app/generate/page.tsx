@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import GenerationForm from '@/components/sprites/GenerationForm';
 import GenerationResult, { addToHistory } from '@/components/sprites/GenerationResult';
 import { useSpriteStore } from '@/stores/spriteStore';
@@ -8,9 +8,20 @@ import { useSpriteStore } from '@/stores/spriteStore';
 export default function GeneratePage() {
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
   const [showForm, setShowForm] = useState(true);
+  const prevDataUrl = useRef(generatedImageDataUrl);
+
+  // Hide the form when a new generation completes — done in useEffect
+  // so the Zustand store update settles before we trigger a React state change
+  useEffect(() => {
+    if (generatedImageDataUrl && generatedImageDataUrl !== prevDataUrl.current) {
+      setShowForm(false);
+    }
+    prevDataUrl.current = generatedImageDataUrl;
+  }, [generatedImageDataUrl]);
 
   const handleGenerated = useCallback(async (dataUrl: string, prompt: string, style: string) => {
-    setShowForm(false);
+    // Don't call setShowForm here — the useEffect above handles it after
+    // the store update settles, avoiding a mid-batch component unmount.
     await addToHistory(dataUrl, prompt, style);
   }, []);
 

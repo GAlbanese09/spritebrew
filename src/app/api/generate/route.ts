@@ -3,6 +3,36 @@ export const runtime = 'edge';
 const REPLICATE_API_URL =
   'https://api.replicate.com/v1/models/retro-diffusion/rd-animation/predictions';
 
+// ── Rate limiting ──
+const RATE_LIMIT = 10;
+const RATE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+const rateLimitMap = new Map<string, number[]>();
+
+function getClientIp(request: Request): string {
+  const headers = request.headers;
+  return (
+    headers.get('cf-connecting-ip') ??
+    headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+    headers.get('x-real-ip') ??
+    'unknown'
+  );
+}
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const timestamps = rateLimitMap.get(ip) ?? [];
+
+  // Prune entries older than the window
+  const recent = timestamps.filter((t) => now - t < RATE_WINDOW_MS);
+  rateLimitMap.set(ip, recent);
+
+  if (recent.length >= RATE_LIMIT) return false;
+
+  recent.push(now);
+  return true;
+}
+
 // Style constraints: each style locks to specific dimensions
 const STYLE_CONSTRAINTS: Record<string, { width: number; height: number } | null> = {
   four_angle_walking: { width: 48, height: 48 },
@@ -30,6 +60,18 @@ export async function POST(request: Request) {
     return Response.json(
       { success: false, error: 'API not configured — contact the administrator.' },
       { status: 500 }
+    );
+  }
+
+  // Rate limit check
+  const clientIp = getClientIp(request);
+  if (!checkRateLimit(clientIp)) {
+    return Response.json(
+      {
+        success: false,
+        error: 'Rate limit exceeded. You can generate up to 10 sprite sheets per day. Try again tomorrow.',
+      },
+      { status: 429 }
     );
   }
 

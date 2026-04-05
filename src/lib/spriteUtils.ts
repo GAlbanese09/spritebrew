@@ -362,6 +362,36 @@ export function resizePixelArt(
 }
 
 /**
+ * Fit an image into a square canvas, preserving aspect ratio, leaving the
+ * padded area fully transparent. Same geometry as `fitToSquare` but skips
+ * the background fill — used by the animation auto-prep pipeline where the
+ * API call will composite onto a solid color later.
+ */
+export function fitToTransparentSquare(
+  image: HTMLCanvasElement | HTMLImageElement,
+  targetSize: number
+): string {
+  const canvas = document.createElement('canvas');
+  canvas.width = targetSize;
+  canvas.height = targetSize;
+  const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingEnabled = false;
+  // Canvas is transparent by default — no fill
+
+  const srcW = 'naturalWidth' in image ? image.naturalWidth : image.width;
+  const srcH = 'naturalHeight' in image ? image.naturalHeight : image.height;
+
+  const scale = Math.min(targetSize / srcW, targetSize / srcH);
+  const scaledW = Math.max(1, Math.round(srcW * scale));
+  const scaledH = Math.max(1, Math.round(srcH * scale));
+  const offsetX = Math.round((targetSize - scaledW) / 2);
+  const offsetY = Math.round((targetSize - scaledH) / 2);
+
+  ctx.drawImage(image, offsetX, offsetY, scaledW, scaledH);
+  return canvas.toDataURL('image/png');
+}
+
+/**
  * Fit an image into a square canvas, preserving aspect ratio. The longest
  * side scales to `targetSize`, the shorter side scales proportionally and is
  * centered, with the remaining area filled by `bgColor`. Uses nearest-neighbor

@@ -12,7 +12,7 @@ import {
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
-import FitPadResizer from './FitPadResizer';
+import CharacterAutoPrep from './CharacterAutoPrep';
 import {
   getGenerationCount,
   incrementGenerationCount,
@@ -74,10 +74,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const atLimit = isAtDailyLimit(userId);
   void generationCount; // trigger re-render on count change
 
+  // Final prepared 64x64 character ready for animation
   const [characterDataUrl, setCharacterDataUrl] = useState<string | null>(null);
   const [charWidth, setCharWidth] = useState(0);
   const [charHeight, setCharHeight] = useState(0);
   const [hasAlpha, setHasAlpha] = useState(false);
+  // Raw upload awaiting auto-prep review (before becoming the character)
+  const [pendingDataUrl, setPendingDataUrl] = useState<string | null>(null);
+  const [pendingWidth, setPendingWidth] = useState(0);
+  const [pendingHeight, setPendingHeight] = useState(0);
   const [bgColor, setBgColor] = useState('#000000');
   const [selectedAction, setSelectedAction] = useState('walking');
   const [frameCount, setFrameCount] = useState<number>(4);
@@ -99,22 +104,17 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       const dataUrl = reader.result as string;
       const img = new Image();
       img.onload = () => {
-        setCharWidth(img.naturalWidth);
-        setCharHeight(img.naturalHeight);
-        setCharacterDataUrl(dataUrl);
-
-        // Check for alpha channel
-        const canvas = document.createElement('canvas');
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(img, 0, 0);
-        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        let foundAlpha = false;
-        for (let i = 3; i < imgData.data.length; i += 4) {
-          if (imgData.data[i] < 250) { foundAlpha = true; break; }
-        }
-        setHasAlpha(foundAlpha);
+        // Upload goes into the "pending" slot — the CharacterAutoPrep panel
+        // runs the detect → crop → bg-remove → resize pipeline and emits a
+        // prepared 64x64 data URL via `handleAutoPrepAccept`.
+        setPendingDataUrl(dataUrl);
+        setPendingWidth(img.naturalWidth);
+        setPendingHeight(img.naturalHeight);
+        // Clear any previously confirmed character
+        setCharacterDataUrl(null);
+        setCharWidth(0);
+        setCharHeight(0);
+        setHasAlpha(false);
       };
       img.src = dataUrl;
     };
@@ -126,30 +126,31 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setCharWidth(0);
     setCharHeight(0);
     setHasAlpha(false);
+    setPendingDataUrl(null);
+    setPendingWidth(0);
+    setPendingHeight(0);
   }, []);
 
-  /** Accept a resized version from the ImageResizer and use it as the character */
-  const handleResizeAccept = useCallback((resizedDataUrl: string, w: number, h: number) => {
-    setCharacterDataUrl(resizedDataUrl);
-    setCharWidth(w);
-    setCharHeight(h);
+  /** User approved the auto-prepped character. It's already 64x64 with
+   *  transparent padding — promote it to the confirmed character slot. */
+  const handleAutoPrepAccept = useCallback(
+    (preparedDataUrl: string, w: number, h: number) => {
+      setCharacterDataUrl(preparedDataUrl);
+      setCharWidth(w);
+      setCharHeight(h);
+      setHasAlpha(true); // prepared image always has transparent padding
+      setPendingDataUrl(null);
+      setPendingWidth(0);
+      setPendingHeight(0);
+    },
+    []
+  );
 
-    // Re-check alpha on the resized image
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0);
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      let foundAlpha = false;
-      for (let i = 3; i < imgData.data.length; i += 4) {
-        if (imgData.data[i] < 250) { foundAlpha = true; break; }
-      }
-      setHasAlpha(foundAlpha);
-    };
-    img.src = resizedDataUrl;
+  /** User rejected the auto-prepped character — return to the upload zone. */
+  const handleAutoPrepCancel = useCallback(() => {
+    setPendingDataUrl(null);
+    setPendingWidth(0);
+    setPendingHeight(0);
   }, []);
 
   /** Convert the uploaded RGBA image to RGB by compositing onto bgColor */
@@ -284,20 +285,13 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
                 />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-mono text-text-primary">Character loaded</p>
+                <p className="text-xs font-mono text-text-primary">Character ready</p>
                 <p className="text-[10px] font-mono text-text-muted mt-1">
-                  Detected: {charWidth}x{charHeight}
+                  {charWidth}x{charHeight} · transparent background
                 </p>
-                {sizeWarning && (
-                  <p className="text-[10px] font-mono text-red-400 mt-1">
-                    Your image is {charWidth}x{charHeight} — animation requires exactly 64x64. Please resize first.
-                  </p>
-                )}
-                {!sizeWarning && (charWidth === 64 && charHeight === 64) && (
-                  <p className="text-[10px] font-mono text-green-400 mt-1">
-                    64x64 — perfect size
-                  </p>
-                )}
+                <p className="text-[10px] font-mono text-green-400 mt-1">
+                  Ready for animation
+                </p>
               </div>
               <button
                 onClick={handleRemoveChar}
@@ -307,7 +301,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
               </button>
             </div>
           </div>
-        ) : (
+        ) : pendingDataUrl ? null : (
           <div
             onClick={() => fileInputRef.current?.click()}
             className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed
@@ -321,7 +315,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
               Drop your pixel art character here
             </p>
             <p className="text-[10px] font-mono text-text-muted mb-3">
-              PNG only &middot; 64x64 recommended
+              PNG only &middot; any size — we&apos;ll auto-crop and resize
             </p>
             <Button
               variant="secondary"
@@ -345,18 +339,17 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         />
       </div>
 
-      {/* Resizer — shown inline when the uploaded image isn't 64x64.
-          FitPadResizer preserves aspect ratio and pads with a background color
-          for non-square sources, so a 64x171 character is NOT squashed. */}
-      {characterDataUrl && sizeWarning && (
-        <FitPadResizer
-          sourceDataUrl={characterDataUrl}
-          sourceWidth={charWidth}
-          sourceHeight={charHeight}
+      {/* Auto-prep pipeline — runs detect → crop → bg-remove → fit 64x64
+          on any uploaded image. User reviews the before/after and clicks
+          Use This to confirm, or Upload Different to try another file. */}
+      {pendingDataUrl && (
+        <CharacterAutoPrep
+          sourceDataUrl={pendingDataUrl}
+          sourceWidth={pendingWidth}
+          sourceHeight={pendingHeight}
           targetSize={64}
-          defaultBgColor={bgColor}
-          onAccept={handleResizeAccept}
-          onCancel={handleRemoveChar}
+          onAccept={handleAutoPrepAccept}
+          onCancel={handleAutoPrepCancel}
         />
       )}
 

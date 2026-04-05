@@ -118,7 +118,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         {/* Footer */}
         <div className="px-5 py-3 border-t border-border-subtle">
           <p className="text-[10px] text-text-muted font-mono uppercase tracking-widest">
-            SpriteBrew v0.1
+            SpriteBrew v0.2.0
           </p>
         </div>
       </aside>

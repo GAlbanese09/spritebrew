@@ -7,7 +7,7 @@ import UploadZone from '@/components/sprites/UploadZone';
 import SlicerConfig, { type SliceConfig } from '@/components/sprites/SlicerConfig';
 import FrameGrid from '@/components/sprites/FrameGrid';
 import AnimationPanel from '@/components/sprites/AnimationPanel';
-import ImageResizer from '@/components/sprites/ImageResizer';
+import FrameSizeResizer from '@/components/sprites/FrameSizeResizer';
 import Button from '@/components/ui/Button';
 import { useSpriteStore } from '@/stores/spriteStore';
 import {
@@ -45,6 +45,9 @@ export default function UploadPage() {
   const [fromGenerated, setFromGenerated] = useState(false);
   // True once the user has either resized or chosen to keep the original size
   const [sizeAcknowledged, setSizeAcknowledged] = useState(false);
+  // Pre-populated frame size after a FrameSizeResizer accept
+  const [preferredFrameW, setPreferredFrameW] = useState<number | undefined>();
+  const [preferredFrameH, setPreferredFrameH] = useState<number | undefined>();
 
   // Auto-load generated image from store on mount
   useEffect(() => {
@@ -75,6 +78,8 @@ export default function UploadPage() {
       const isGif = file.type === 'image/gif';
       setUploaded({ file, blobUrl, width, height, isGif });
       setFromGenerated(false);
+      setPreferredFrameW(undefined);
+      setPreferredFrameH(undefined);
       // If the image is larger than the threshold on any side, require acknowledgement
       const needsAlert = width > LARGE_IMAGE_THRESHOLD || height > LARGE_IMAGE_THRESHOLD;
       setSizeAcknowledged(!needsAlert);
@@ -90,21 +95,26 @@ export default function UploadPage() {
     setUploaded(null);
     setFromGenerated(false);
     setSizeAcknowledged(false);
+    setPreferredFrameW(undefined);
+    setPreferredFrameH(undefined);
     clearSpriteSheet();
   }, [uploaded, fromGenerated, clearSpriteSheet]);
 
-  /** User accepted a resized version from the ImageResizer */
+  /** User accepted a resized sheet from FrameSizeResizer. Includes the chosen
+   *  frame dimensions so the slicer can pre-populate its grid. */
   const handleResizeAccept = useCallback(
-    (resizedDataUrl: string, w: number, h: number) => {
+    (resizedDataUrl: string, sheetW: number, sheetH: number, frameW: number, frameH: number) => {
       if (!uploaded) return;
       if (!fromGenerated) URL.revokeObjectURL(uploaded.blobUrl);
       setUploaded({
         ...uploaded,
         blobUrl: resizedDataUrl,
-        width: w,
-        height: h,
+        width: sheetW,
+        height: sheetH,
       });
       setFromGenerated(true); // treat as data URL so we don't revoke it
+      setPreferredFrameW(frameW);
+      setPreferredFrameH(frameH);
       setSizeAcknowledged(true);
       clearSpriteSheet();
     },
@@ -220,19 +230,15 @@ export default function UploadPage() {
         onRemove={handleRemove}
       />
 
-      {/* Size alert — shown when image exceeds 128px on either side and user hasn't acknowledged */}
+      {/* Size alert — shown when image exceeds 128px on either side and user hasn't acknowledged.
+          User picks a FRAME size; we calculate the sheet target that divides evenly. */}
       {uploaded && !sizeAcknowledged && (
-        <ImageResizer
+        <FrameSizeResizer
           sourceDataUrl={uploaded.blobUrl}
           sourceWidth={uploaded.width}
           sourceHeight={uploaded.height}
-          defaultTarget={128}
-          allowKeepOriginal
-          keepOriginalWarning="Large images may have slower performance in the editor and preview."
           onAccept={handleResizeAccept}
           onKeepOriginal={handleKeepOriginal}
-          isGif={uploaded.isGif}
-          description={`Your image is ${uploaded.width}x${uploaded.height}. For best results with pixel art, images should be 128x128 or smaller. You can resize below, or keep the original size and proceed directly to slicing.`}
         />
       )}
 
@@ -243,6 +249,8 @@ export default function UploadPage() {
             imageUrl={uploaded.blobUrl}
             imageWidth={uploaded.width}
             imageHeight={uploaded.height}
+            initialFrameWidth={preferredFrameW}
+            initialFrameHeight={preferredFrameH}
             onSlice={handleSlice}
           />
           {slicing && (

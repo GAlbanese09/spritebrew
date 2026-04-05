@@ -12,6 +12,9 @@ interface SlicerConfigProps {
   imageWidth: number;
   imageHeight: number;
   onSlice: (config: SliceConfig) => void;
+  /** Pre-populate frame dimensions (from FrameSizeResizer). Skips auto-detect. */
+  initialFrameWidth?: number;
+  initialFrameHeight?: number;
 }
 
 export interface SliceConfig {
@@ -29,10 +32,12 @@ export default function SlicerConfig({
   imageWidth,
   imageHeight,
   onSlice,
+  initialFrameWidth,
+  initialFrameHeight,
 }: SlicerConfigProps) {
   const generationStyle = useSpriteStore((s) => s.generationStyle);
-  const [frameWidth, setFrameWidth] = useState(32);
-  const [frameHeight, setFrameHeight] = useState(32);
+  const [frameWidth, setFrameWidth] = useState(initialFrameWidth ?? 32);
+  const [frameHeight, setFrameHeight] = useState(initialFrameHeight ?? 32);
   const [padding, setPadding] = useState(0);
   const [offsetX, setOffsetX] = useState(0);
   const [offsetY, setOffsetY] = useState(0);
@@ -43,11 +48,20 @@ export default function SlicerConfig({
   const rows = Math.max(1, Math.floor((imageHeight - offsetY) / (frameHeight + padding)));
   const totalFrames = columns * rows;
 
-  // Auto-detect on mount
+  // Auto-detect on mount — unless the caller pre-populated frame dimensions
+  // (e.g. from FrameSizeResizer), in which case trust those and skip detect.
   useEffect(() => {
+    if (initialFrameWidth && initialFrameHeight) {
+      setFrameWidth(initialFrameWidth);
+      setFrameHeight(initialFrameHeight);
+      setPadding(0);
+      setOffsetX(0);
+      setOffsetY(0);
+      return;
+    }
     handleAutoDetect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageUrl]);
+  }, [imageUrl, initialFrameWidth, initialFrameHeight]);
 
   const handleAutoDetect = useCallback(async () => {
     setDetecting(true);

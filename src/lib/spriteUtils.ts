@@ -371,6 +371,24 @@ export function fitToTransparentSquare(
   image: HTMLCanvasElement | HTMLImageElement,
   targetSize: number
 ): string {
+  return fitToTransparentSquarePadded(image, targetSize, 100);
+}
+
+/**
+ * Like `fitToTransparentSquare`, but the character occupies only
+ * `characterSizePct` percent of the canvas, leaving a transparent margin
+ * around it for weapon swings, motion effects, etc. Used by the Animation
+ * Padding feature on the Animate My Character tab.
+ *
+ * At 100 this is identical to `fitToTransparentSquare`. At 75 the character
+ * fills a centered 48×48 region of a 64×64 canvas (48 = round(64 * 0.75)),
+ * with 8px of transparent margin on each side.
+ */
+export function fitToTransparentSquarePadded(
+  image: HTMLCanvasElement | HTMLImageElement,
+  targetSize: number,
+  characterSizePct: number
+): string {
   const canvas = document.createElement('canvas');
   canvas.width = targetSize;
   canvas.height = targetSize;
@@ -381,9 +399,16 @@ export function fitToTransparentSquare(
   const srcW = 'naturalWidth' in image ? image.naturalWidth : image.width;
   const srcH = 'naturalHeight' in image ? image.naturalHeight : image.height;
 
-  const scale = Math.min(targetSize / srcW, targetSize / srcH);
+  // Inner box the character fits into
+  const clampedPct = Math.max(1, Math.min(100, characterSizePct));
+  const innerSize = Math.max(1, Math.round(targetSize * (clampedPct / 100)));
+
+  // Scale to fit inside innerSize preserving aspect ratio
+  const scale = Math.min(innerSize / srcW, innerSize / srcH);
   const scaledW = Math.max(1, Math.round(srcW * scale));
   const scaledH = Math.max(1, Math.round(srcH * scale));
+
+  // Center on the full target canvas (not just the inner region)
   const offsetX = Math.round((targetSize - scaledW) / 2);
   const offsetY = Math.round((targetSize - scaledH) / 2);
 

@@ -1,14 +1,14 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
-import { Wand2, Check, Loader2, AlertCircle } from 'lucide-react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { Wand2, Check, Loader2, AlertCircle, Info } from 'lucide-react';
 import {
   loadImage,
   imageToCanvas,
   detectSprites,
   extractSpriteRegion,
   removeBackgroundColor,
-  fitToTransparentSquare,
+  fitToTransparentSquarePadded,
   type DetectedSprite,
 } from '@/lib/spriteUtils';
 import Button from '@/components/ui/Button';
@@ -21,11 +21,16 @@ import Button from '@/components/ui/Button';
  *   3. Remove the background (solid-color matching) and leave alpha=0
  *   4. Scale-to-fit the result inside a `targetSize × targetSize` canvas,
  *      centered, with transparent padding around shorter sides
- *   5. Emit the prepared PNG data URL via `onAccept`
+ *   5. Optionally shrink the character within the canvas (Animation Padding)
+ *      to leave room for weapon swings and motion effects
+ *   6. Emit the prepared PNG data URL via `onAccept`
  *
  * The prepared image is RGBA with a transparent background. The API route
  * composites it onto a solid background color at call time (Retro Diffusion
  * requires RGB), so the transparent version is what we hand off here.
+ *
+ * Detection work is cached in a ref keyed by sourceDataUrl — adjusting the
+ * padding slider only re-runs the fit step, not the expensive flood-fill.
  */
 
 interface CharacterAutoPrepProps {
@@ -38,6 +43,14 @@ interface CharacterAutoPrepProps {
   onAccept: (preparedDataUrl: string, width: number, height: number) => void;
   /** Called when the user wants to upload a different image. */
   onCancel: () => void;
+  /** Controlled: whether Animation Padding is enabled. */
+  paddingEnabled: boolean;
+  /** Controlled: character size as a percentage of target canvas (50-100). */
+  characterSizePct: number;
+  /** Called when the user toggles the padding switch. */
+  onPaddingEnabledChange: (enabled: boolean) => void;
+  /** Called when the user moves the character size slider. */
+  onCharacterSizePctChange: (pct: number) => void;
 }
 
 type Stage = 'processing' | 'ready' | 'error';
@@ -49,6 +62,10 @@ export default function CharacterAutoPrep({
   targetSize,
   onAccept,
   onCancel,
+  paddingEnabled,
+  characterSizePct,
+  onPaddingEnabledChange,
+  onCharacterSizePctChange,
 }: CharacterAutoPrepProps) {
   const [stage, setStage] = useState<Stage>('processing');
   const [preparedDataUrl, setPreparedDataUrl] = useState<string | null>(null);
@@ -57,11 +74,34 @@ export default function CharacterAutoPrep({
   const [sourceHasAlpha, setSourceHasAlpha] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Run the pipeline whenever the source changes
+  // Cache of the post-background-removal canvas keyed by the source data URL.
+  // Lets the padding slider re-fit cheaply without re-running detection.
+  const bgRemovedRef = useRef<HTMLCanvasElement | null>(null);
+  const lastSourceRef = useRef<string | null>(null);
+
+  // Run the pipeline whenever the source OR padding params change.
+  // When only padding changes, we skip detection and re-fit from the cache.
   useEffect(() => {
     let cancelled = false;
 
+    const effectivePct = paddingEnabled ? characterSizePct : 100;
+
     (async () => {
+      // Fast path: source hasn't changed, just re-fit
+      if (lastSourceRef.current === sourceDataUrl && bgRemovedRef.current) {
+        const prepared = fitToTransparentSquarePadded(
+          bgRemovedRef.current,
+          targetSize,
+          effectivePct
+        );
+        if (!cancelled) {
+          setPreparedDataUrl(prepared);
+          setStage('ready');
+        }
+        return;
+      }
+
+      // Slow path: full pipeline
       setStage('processing');
       setPreparedDataUrl(null);
       setCropBBox(null);
@@ -130,8 +170,16 @@ export default function CharacterAutoPrep({
           bgRemovedCanvas = imageToCanvas(removedImg);
         }
 
-        // 6. Fit to targetSize × targetSize with transparent padding
-        const prepared = fitToTransparentSquare(bgRemovedCanvas, targetSize);
+        // Cache for cheap re-fits on slider change
+        bgRemovedRef.current = bgRemovedCanvas;
+        lastSourceRef.current = sourceDataUrl;
+
+        // 6. Fit to targetSize × targetSize with optional animation padding
+        const prepared = fitToTransparentSquarePadded(
+          bgRemovedCanvas,
+          targetSize,
+          effectivePct
+        );
 
         if (cancelled) return;
         setPreparedDataUrl(prepared);
@@ -147,7 +195,7 @@ export default function CharacterAutoPrep({
     return () => {
       cancelled = true;
     };
-  }, [sourceDataUrl, targetSize]);
+  }, [sourceDataUrl, targetSize, paddingEnabled, characterSizePct]);
 
   const handleAccept = useCallback(() => {
     if (!preparedDataUrl) return;
@@ -272,7 +320,72 @@ export default function CharacterAutoPrep({
               label="Background"
               value={sourceHasAlpha ? 'Already transparent' : 'Removed (corner-sampled, ±15)'}
             />
-            <DetailRow label="Final size" value={`${targetSize}x${targetSize} (transparent padding)`} />
+            <DetailRow
+              label="Character size"
+              value={
+                paddingEnabled
+                  ? `${characterSizePct}% (${Math.round(targetSize * (characterSizePct / 100))}x${Math.round(targetSize * (characterSizePct / 100))} of ${targetSize}x${targetSize})`
+                  : `100% (fills ${targetSize}x${targetSize})`
+              }
+            />
+          </div>
+
+          {/* Animation Padding control */}
+          <div className="rounded border border-border-default bg-bg-elevated p-3 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <label
+                className="flex items-center gap-2 cursor-pointer"
+                title="Shrinks character to leave room for weapon swings and motion effects"
+              >
+                <input
+                  type="checkbox"
+                  checked={paddingEnabled}
+                  onChange={(e) => onPaddingEnabledChange(e.target.checked)}
+                  className="accent-[var(--accent-amber)] cursor-pointer"
+                />
+                <span className="text-[11px] font-mono font-semibold text-text-primary">
+                  Animation Padding
+                </span>
+                <Info
+                  size={11}
+                  className="text-text-muted"
+                />
+              </label>
+              {paddingEnabled && (
+                <span className="text-[10px] font-mono text-accent-amber">
+                  {characterSizePct}%
+                </span>
+              )}
+            </div>
+            <p className="text-[9px] font-mono text-text-muted leading-relaxed">
+              Shrinks character to leave room for weapon swings and motion effects.
+              Recommended for attack, jump, and destroy animations.
+            </p>
+            {paddingEnabled && (
+              <div className="space-y-1">
+                <div className="flex items-center gap-3">
+                  <span className="text-[9px] font-mono text-text-muted w-16">
+                    Character Size
+                  </span>
+                  <input
+                    type="range"
+                    min={50}
+                    max={95}
+                    step={5}
+                    value={characterSizePct}
+                    onChange={(e) => onCharacterSizePctChange(Number(e.target.value))}
+                    className="flex-1 accent-[var(--accent-amber)]"
+                  />
+                  <span className="text-[10px] font-mono text-text-primary w-10 text-right">
+                    {characterSizePct}%
+                  </span>
+                </div>
+                <div className="flex justify-between text-[8px] font-mono text-text-muted/70 px-[4.25rem]">
+                  <span>50%</span>
+                  <span>95%</span>
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}

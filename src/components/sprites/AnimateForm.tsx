@@ -33,6 +33,14 @@ const ACTIONS = [
   { id: 'custom_action', name: 'Custom Action', desc: 'Describe any action' },
 ] as const;
 
+/** Actions where the character needs margin for weapon swings / motion FX. */
+const PADDING_ON_ACTIONS = new Set([
+  'attack',
+  'jump',
+  'destroy',
+  'custom_action',
+]);
+
 const FRAME_COUNTS = [4, 6, 8, 10, 12, 16] as const;
 
 const BG_COLORS = [
@@ -82,10 +90,21 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const [pendingWidth, setPendingWidth] = useState(0);
   const [pendingHeight, setPendingHeight] = useState(0);
   const [bgColor, setBgColor] = useState('#000000');
+  // Animation padding — shrinks character on canvas to leave room for
+  // weapon swings and motion FX. Auto-toggles based on selected action,
+  // but user manual toggles stick until they pick a different action.
+  const [paddingEnabled, setPaddingEnabled] = useState(false);
+  const [characterSizePct, setCharacterSizePct] = useState(75);
   const [selectedAction, setSelectedAction] = useState('walking');
   const [frameCount, setFrameCount] = useState<number>(4);
   const [motionPrompt, setMotionPrompt] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-toggle animation padding based on selected action.
+  // User manual toggles (after this fires) stick until the next action change.
+  useEffect(() => {
+    setPaddingEnabled(PADDING_ON_ACTIONS.has(selectedAction));
+  }, [selectedAction]);
 
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -339,7 +358,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
       {/* Auto-prep pipeline — runs detect → crop → bg-remove → fit 64x64
           on any uploaded image. User reviews the before/after and clicks
-          Use This to confirm, or Upload Different to try another file. */}
+          Use This to confirm, or Upload Different to try another file.
+          Animation Padding shrinks the character within the 64x64 canvas
+          to leave margin for weapon swings and motion effects. */}
       {pendingDataUrl && (
         <CharacterAutoPrep
           sourceDataUrl={pendingDataUrl}
@@ -348,6 +369,10 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
           targetSize={64}
           onAccept={handleAutoPrepAccept}
           onCancel={handleAutoPrepCancel}
+          paddingEnabled={paddingEnabled}
+          characterSizePct={characterSizePct}
+          onPaddingEnabledChange={setPaddingEnabled}
+          onCharacterSizePctChange={setCharacterSizePct}
         />
       )}
 

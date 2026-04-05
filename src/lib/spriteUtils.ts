@@ -708,6 +708,44 @@ export function extractSpriteRegion(
 }
 
 /**
+ * Crop a sprite region and scale it proportionally to fit inside a target
+ * box (transparent background, centered). Preserves aspect ratio — the
+ * longest side of the sprite scales to match the corresponding target side,
+ * and the shorter side scales to maintain the ratio. Nearest-neighbor only.
+ */
+export function fitSpriteToBox(
+  sourceCanvas: HTMLCanvasElement,
+  sprite: DetectedSprite,
+  targetWidth: number,
+  targetHeight: number
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+  const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingEnabled = false;
+
+  const scale = Math.min(targetWidth / sprite.width, targetHeight / sprite.height);
+  const scaledW = Math.max(1, Math.round(sprite.width * scale));
+  const scaledH = Math.max(1, Math.round(sprite.height * scale));
+  const offsetX = Math.floor((targetWidth - scaledW) / 2);
+  const offsetY = Math.floor((targetHeight - scaledH) / 2);
+
+  ctx.drawImage(
+    sourceCanvas,
+    sprite.x,
+    sprite.y,
+    sprite.width,
+    sprite.height,
+    offsetX,
+    offsetY,
+    scaledW,
+    scaledH
+  );
+  return canvas;
+}
+
+/**
  * Remove a background color from an image by making matching pixels transparent.
  *
  * Auto-detects the dominant background color by sampling the four corners

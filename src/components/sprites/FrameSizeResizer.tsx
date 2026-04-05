@@ -2,8 +2,202 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Grid3X3, Check, Scan, AlertCircle } from 'lucide-react';
-import { loadImage, imageToCanvas, detectFrameGrid, resizePixelArt } from '@/lib/spriteUtils';
+import { loadImage, imageToCanvas, resizePixelArt } from '@/lib/spriteUtils';
 import Button from '@/components/ui/Button';
+
+// ─────────────────────────────────────────────────────────────────────────
+// Grid detection for the FrameSizeResizer.
+//
+// This is intentionally separate from `detectFrameGrid` in spriteUtils.ts —
+// that function is tuned for the slicer's "find frame size from gutters"
+// problem. Here we want the opposite: figure out the GRID (cols × rows)
+// for a sheet the user will resize next.
+//
+// Priority order:
+//   1. Common grid layouts (4×4, 3×4, 8×8, etc.) that divide the image
+//      evenly with a reasonable per-frame size. This catches the 800×800 →
+//      4×4 case that the old algorithm missed.
+//   2. Standard SPRITE_SIZES that divide the image evenly (for sheets that
+//      are already at pixel-art resolutions like 192×192 → 48×48 frames).
+//   3. Transparent/uniform gutter detection.
+//   4. Dimension-based fallback (square → 4×4, strip → W÷H columns, etc.)
+// ─────────────────────────────────────────────────────────────────────────
+
+type DetectionConfidence = 'high' | 'medium' | 'low';
+
+interface DetectionResult {
+  cols: number;
+  rows: number;
+  confidence: DetectionConfidence;
+}
+
+/** Preferred grid layouts in order of commonality for sprite sheets. */
+const COMMON_GRIDS: ReadonlyArray<readonly [number, number]> = [
+  [4, 4],
+  [3, 4],
+  [4, 3],
+  [8, 8],
+  [4, 8],
+  [8, 4],
+  [2, 2],
+  [3, 3],
+  [2, 4],
+  [4, 2],
+  [5, 5],
+  [6, 6],
+  [2, 3],
+  [3, 2],
+];
+
+const STANDARD_FRAME_SIZES = [128, 64, 48, 32, 24, 16] as const;
+
+/** Validate a (cols, rows) candidate produces a sensible sprite sheet. */
+function isValidGrid(imgW: number, imgH: number, cols: number, rows: number): boolean {
+  if (cols < 1 || rows < 1 || cols > 16 || rows > 16) return false;
+  const count = cols * rows;
+  if (count < 2 || count > 256) return false;
+  const fw = imgW / cols;
+  const fh = imgH / rows;
+  if (!Number.isInteger(fw) || !Number.isInteger(fh)) return false;
+  if (fw < 8 || fh < 8 || fw > 512 || fh > 512) return false;
+  // Reject extreme aspect ratios unless the grid itself is non-square
+  const frameRatio = fw / fh;
+  if (frameRatio < 0.4 || frameRatio > 2.5) return false;
+  return true;
+}
+
+/** Priority 1: check common grid layouts first. */
+function detectByCommonGrid(imgW: number, imgH: number): DetectionResult | null {
+  for (const [c, r] of COMMON_GRIDS) {
+    if (isValidGrid(imgW, imgH, c, r)) {
+      return { cols: c, rows: r, confidence: 'high' };
+    }
+  }
+  return null;
+}
+
+/** Priority 2: standard frame sizes that divide the image evenly. */
+function detectByStandardSize(imgW: number, imgH: number): DetectionResult | null {
+  for (const fw of STANDARD_FRAME_SIZES) {
+    for (const fh of STANDARD_FRAME_SIZES) {
+      if (imgW % fw !== 0 || imgH % fh !== 0) continue;
+      const cols = imgW / fw;
+      const rows = imgH / fh;
+      if (!isValidGrid(imgW, imgH, cols, rows)) continue;
+      return { cols, rows, confidence: 'high' };
+    }
+  }
+  return null;
+}
+
+/** Priority 3: transparent/uniform gutter analysis. */
+function detectByGutters(imgData: ImageData): DetectionResult | null {
+  const { width: W, height: H, data } = imgData;
+
+  const isTransparentColumn = (x: number): boolean => {
+    for (let y = 0; y < H; y++) {
+      if (data[(y * W + x) * 4 + 3] > 10) return false;
+    }
+    return true;
+  };
+  const isTransparentRow = (y: number): boolean => {
+    for (let x = 0; x < W; x++) {
+      if (data[(y * W + x) * 4 + 3] > 10) return false;
+    }
+    return true;
+  };
+
+  // Collect transparent column/row indices, group into bands
+  const groupBands = (indices: number[]): number[] => {
+    if (indices.length === 0) return [];
+    const bands: number[] = [];
+    let bandStart = indices[0];
+    let prev = indices[0];
+    for (let i = 1; i < indices.length; i++) {
+      if (indices[i] === prev + 1) {
+        prev = indices[i];
+      } else {
+        bands.push(Math.floor((bandStart + prev) / 2));
+        bandStart = indices[i];
+        prev = indices[i];
+      }
+    }
+    bands.push(Math.floor((bandStart + prev) / 2));
+    return bands;
+  };
+
+  const transparentCols: number[] = [];
+  for (let x = 0; x < W; x++) if (isTransparentColumn(x)) transparentCols.push(x);
+  const transparentRows: number[] = [];
+  for (let y = 0; y < H; y++) if (isTransparentRow(y)) transparentRows.push(y);
+
+  const colBands = groupBands(transparentCols);
+  const rowBands = groupBands(transparentRows);
+
+  // Number of frames = bands between edges. If the image has edge gutters,
+  // bands will include start and end; otherwise they're interior dividers.
+  // Interior-divider case: cols = bands.length + 1
+  // Edge-inclusive case: cols = bands.length - 1 (if first/last band is at 0/W)
+  let cols = 0;
+  let rows = 0;
+  if (colBands.length >= 1) {
+    const hasLeftEdge = colBands[0] < 5;
+    const hasRightEdge = colBands[colBands.length - 1] > W - 5;
+    cols = colBands.length + 1 - (hasLeftEdge ? 1 : 0) - (hasRightEdge ? 1 : 0);
+  }
+  if (rowBands.length >= 1) {
+    const hasTopEdge = rowBands[0] < 5;
+    const hasBottomEdge = rowBands[rowBands.length - 1] > H - 5;
+    rows = rowBands.length + 1 - (hasTopEdge ? 1 : 0) - (hasBottomEdge ? 1 : 0);
+  }
+
+  if (cols >= 2 && rows >= 2 && cols <= 16 && rows <= 16) {
+    return { cols, rows, confidence: 'medium' };
+  }
+  if (cols >= 2 && cols <= 16 && rows === 0 && H > 0) {
+    return { cols, rows: 1, confidence: 'medium' };
+  }
+  if (rows >= 2 && rows <= 16 && cols === 0 && W > 0) {
+    return { cols: 1, rows, confidence: 'medium' };
+  }
+  return null;
+}
+
+/** Priority 4: dimension-based heuristic. */
+function detectByDimensions(imgW: number, imgH: number): DetectionResult {
+  if (imgW === imgH) {
+    // Square — 4×4 is by far the most common sprite sheet layout
+    return { cols: 4, rows: 4, confidence: 'low' };
+  }
+  if (imgW > 2 * imgH) {
+    // Horizontal strip
+    const c = Math.max(2, Math.min(16, Math.round(imgW / imgH)));
+    return { cols: c, rows: 1, confidence: 'low' };
+  }
+  if (imgH > 2 * imgW) {
+    // Vertical strip
+    const r = Math.max(2, Math.min(16, Math.round(imgH / imgW)));
+    return { cols: 1, rows: r, confidence: 'low' };
+  }
+  // Rectangular but not extreme — guess 4×4
+  return { cols: 4, rows: 4, confidence: 'low' };
+}
+
+/** Main detection entry point. Runs all priorities and returns the first match. */
+function detectGridSmart(imgData: ImageData): DetectionResult {
+  const { width: W, height: H } = imgData;
+
+  const p1 = detectByCommonGrid(W, H);
+  if (p1) return p1;
+
+  const p2 = detectByStandardSize(W, H);
+  if (p2) return p2;
+
+  const p3 = detectByGutters(imgData);
+  if (p3) return p3;
+
+  return detectByDimensions(W, H);
+}
 
 /**
  * Grid-first sprite sheet resizer.
@@ -69,6 +263,7 @@ export default function FrameSizeResizer({
   const [rows, setRows] = useState(1);
   const [detecting, setDetecting] = useState(false);
   const [detectionRan, setDetectionRan] = useState(false);
+  const [detectionConfidence, setDetectionConfidence] = useState<DetectionConfidence | null>(null);
 
   const [targetFrameW, setTargetFrameW] = useState(64);
   const [targetFrameH, setTargetFrameH] = useState(64);
@@ -103,22 +298,17 @@ export default function FrameSizeResizer({
       const canvas = imageToCanvas(img);
       const ctx = canvas.getContext('2d')!;
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const result = detectFrameGrid(imgData);
-      if (result && result.columns > 0 && result.rows > 0) {
-        setCols(result.columns);
-        setRows(result.rows);
-      } else if (sourceWidth === sourceHeight) {
-        // Square image — guess 4x4
-        setCols(4);
-        setRows(4);
-      }
+      const result = detectGridSmart(imgData);
+      setCols(result.cols);
+      setRows(result.rows);
+      setDetectionConfidence(result.confidence);
     } catch {
       // ignore
     } finally {
       setDetecting(false);
       setDetectionRan(true);
     }
-  }, [sourceDataUrl, sourceWidth, sourceHeight]);
+  }, [sourceDataUrl]);
 
   useEffect(() => {
     handleAutoDetect();
@@ -190,6 +380,7 @@ export default function FrameSizeResizer({
   const handleGridPreset = useCallback((c: number, r: number) => {
     setCols(c);
     setRows(r);
+    setDetectionConfidence(null); // manual override clears the detection label
   }, []);
 
   const handleFrameSizePreset = useCallback((w: number, h: number) => {
@@ -242,6 +433,22 @@ export default function FrameSizeResizer({
           </Button>
         </div>
 
+        {/* Detection result label */}
+        {detectionConfidence && (
+          <p
+            className={`text-[10px] font-mono mb-2 ${
+              detectionConfidence === 'high' ? 'text-green-400' : 'text-amber-400'
+            }`}
+          >
+            {detectionConfidence === 'high' ? 'Detected' : 'Best guess'}:{' '}
+            <span className="font-semibold">
+              {cols}x{rows}
+            </span>{' '}
+            ({cols * rows} frames)
+            {detectionConfidence !== 'high' && ' — adjust if needed'}
+          </p>
+        )}
+
         {/* Grid presets */}
         <div className="flex flex-wrap gap-1.5 mb-3">
           {GRID_PRESETS.map((p) => {
@@ -272,7 +479,10 @@ export default function FrameSizeResizer({
               min={1}
               max={32}
               value={cols}
-              onChange={(e) => setCols(Math.max(1, Math.min(32, Number(e.target.value))))}
+              onChange={(e) => {
+                setCols(Math.max(1, Math.min(32, Number(e.target.value))));
+                setDetectionConfidence(null);
+              }}
               className="w-20 rounded bg-bg-elevated border border-border-default px-2 py-1
                 text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
             />
@@ -284,7 +494,10 @@ export default function FrameSizeResizer({
               min={1}
               max={32}
               value={rows}
-              onChange={(e) => setRows(Math.max(1, Math.min(32, Number(e.target.value))))}
+              onChange={(e) => {
+                setRows(Math.max(1, Math.min(32, Number(e.target.value))));
+                setDetectionConfidence(null);
+              }}
               className="w-20 rounded bg-bg-elevated border border-border-default px-2 py-1
                 text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
             />

@@ -121,8 +121,11 @@ export default function UploadPage() {
     [uploaded, fromGenerated, clearSpriteSheet]
   );
 
-  /** User chose to proceed with the original large image */
-  const handleKeepOriginal = useCallback(() => {
+  /** User chose to proceed with the original large image. The resizer passes
+   *  the grid-derived current frame dimensions so the slicer pre-populates. */
+  const handleKeepOriginal = useCallback((frameW: number, frameH: number) => {
+    setPreferredFrameW(frameW);
+    setPreferredFrameH(frameH);
     setSizeAcknowledged(true);
   }, []);
 

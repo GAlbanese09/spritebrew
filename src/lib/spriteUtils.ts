@@ -360,3 +360,421 @@ export function resizePixelArt(
   ctx.drawImage(source, 0, 0, targetWidth, targetHeight);
   return canvas.toDataURL('image/png');
 }
+
+/**
+ * Fit an image into a square canvas, preserving aspect ratio. The longest
+ * side scales to `targetSize`, the shorter side scales proportionally and is
+ * centered, with the remaining area filled by `bgColor`. Uses nearest-neighbor
+ * scaling. Returns a PNG data URL.
+ */
+export function fitToSquare(
+  image: HTMLCanvasElement | HTMLImageElement,
+  targetSize: number,
+  bgColor: string
+): string {
+  const canvas = document.createElement('canvas');
+  canvas.width = targetSize;
+  canvas.height = targetSize;
+  const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingEnabled = false;
+
+  // Fill background
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, 0, targetSize, targetSize);
+
+  const srcW = 'naturalWidth' in image ? image.naturalWidth : image.width;
+  const srcH = 'naturalHeight' in image ? image.naturalHeight : image.height;
+
+  // Scale so the longest side fits exactly in targetSize
+  const scale = Math.min(targetSize / srcW, targetSize / srcH);
+  const scaledW = Math.max(1, Math.round(srcW * scale));
+  const scaledH = Math.max(1, Math.round(srcH * scale));
+  const offsetX = Math.round((targetSize - scaledW) / 2);
+  const offsetY = Math.round((targetSize - scaledH) / 2);
+
+  ctx.drawImage(image, offsetX, offsetY, scaledW, scaledH);
+  return canvas.toDataURL('image/png');
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sprite detection (contour/blob detection for non-grid sprite sheets).
+//
+// Used by the Upload page's "Auto-detect Sprites" mode. Produces a list of
+// axis-aligned bounding boxes for every distinct sprite in an image,
+// regardless of layout.
+// ─────────────────────────────────────────────────────────────────────────
+
+export interface DetectedSprite {
+  /** 1-based index in the original detection order. */
+  id: number;
+  /** Position in the source image (pixels). */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface SpriteDetectionResult {
+  sprites: DetectedSprite[];
+  /** The ImageData used for detection, so callers can re-crop from it. */
+  imageData: ImageData;
+}
+
+/** Build a binary content mask from the image data. `true` = sprite pixel. */
+function buildContentMask(imageData: ImageData): Uint8Array {
+  const { width: W, height: H, data } = imageData;
+  const mask = new Uint8Array(W * H);
+
+  // Detect transparency usage: if any pixel has alpha < 10 we consider the
+  // image to use transparency, and treat transparent as background.
+  let hasTransparency = false;
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] < 10) {
+      hasTransparency = true;
+      break;
+    }
+  }
+
+  if (hasTransparency) {
+    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+      mask[p] = data[i + 3] >= 10 ? 1 : 0;
+    }
+    return mask;
+  }
+
+  // No transparency — sample the four corners and treat that color (±15) as bg
+  const cornerIdx = (x: number, y: number) => (y * W + x) * 4;
+  const corners = [
+    cornerIdx(0, 0),
+    cornerIdx(W - 1, 0),
+    cornerIdx(0, H - 1),
+    cornerIdx(W - 1, H - 1),
+  ];
+  let sr = 0, sg = 0, sb = 0;
+  for (const c of corners) {
+    sr += data[c];
+    sg += data[c + 1];
+    sb += data[c + 2];
+  }
+  const bgR = Math.round(sr / corners.length);
+  const bgG = Math.round(sg / corners.length);
+  const bgB = Math.round(sb / corners.length);
+  const TOL = 15;
+
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    const dr = Math.abs(data[i] - bgR);
+    const dg = Math.abs(data[i + 1] - bgG);
+    const db = Math.abs(data[i + 2] - bgB);
+    mask[p] = dr <= TOL && dg <= TOL && db <= TOL ? 0 : 1;
+  }
+  return mask;
+}
+
+/**
+ * 8-connectivity flood fill using an iterative stack. Returns the bounding
+ * box of the connected region and marks all visited pixels in `visited`.
+ */
+function floodFillBoundingBox(
+  mask: Uint8Array,
+  visited: Uint8Array,
+  W: number,
+  H: number,
+  startX: number,
+  startY: number
+): { minX: number; minY: number; maxX: number; maxY: number } {
+  let minX = startX, minY = startY, maxX = startX, maxY = startY;
+
+  // Use a typed-array stack of packed (y * W + x) indices for speed
+  const stack: number[] = [startY * W + startX];
+  visited[startY * W + startX] = 1;
+
+  while (stack.length > 0) {
+    const idx = stack.pop()!;
+    const x = idx % W;
+    const y = (idx - x) / W;
+
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+
+    // 8-connectivity neighbors
+    for (let dy = -1; dy <= 1; dy++) {
+      const ny = y + dy;
+      if (ny < 0 || ny >= H) continue;
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = x + dx;
+        if (nx < 0 || nx >= W) continue;
+        const nIdx = ny * W + nx;
+        if (visited[nIdx] || !mask[nIdx]) continue;
+        visited[nIdx] = 1;
+        stack.push(nIdx);
+      }
+    }
+  }
+
+  return { minX, minY, maxX, maxY };
+}
+
+interface BBox {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/** Do two bounding boxes overlap or sit within `gap` pixels of each other? */
+function bboxesNear(a: BBox, b: BBox, gap: number): boolean {
+  return (
+    a.minX <= b.maxX + gap &&
+    a.maxX >= b.minX - gap &&
+    a.minY <= b.maxY + gap &&
+    a.maxY >= b.minY - gap
+  );
+}
+
+/** Merge two bounding boxes into their union. */
+function bboxUnion(a: BBox, b: BBox): BBox {
+  return {
+    minX: Math.min(a.minX, b.minX),
+    minY: Math.min(a.minY, b.minY),
+    maxX: Math.max(a.maxX, b.maxX),
+    maxY: Math.max(a.maxY, b.maxY),
+  };
+}
+
+/**
+ * Merge boxes that are within `gap` pixels of each other. Runs until no more
+ * merges happen — O(n²) per pass but n is small after noise filtering.
+ */
+function mergeNearbyBBoxes(boxes: BBox[], gap: number): BBox[] {
+  let changed = true;
+  let current = boxes.slice();
+  while (changed) {
+    changed = false;
+    const next: BBox[] = [];
+    const consumed = new Array(current.length).fill(false);
+    for (let i = 0; i < current.length; i++) {
+      if (consumed[i]) continue;
+      let merged = current[i];
+      for (let j = i + 1; j < current.length; j++) {
+        if (consumed[j]) continue;
+        if (bboxesNear(merged, current[j], gap)) {
+          merged = bboxUnion(merged, current[j]);
+          consumed[j] = true;
+          changed = true;
+        }
+      }
+      next.push(merged);
+    }
+    current = next;
+  }
+  return current;
+}
+
+/**
+ * Sort bounding boxes in reading order: top-to-bottom, then left-to-right
+ * within the same row. Two boxes are on the "same row" if their vertical
+ * centers are within 25% of the average sprite height.
+ */
+function sortReadingOrder(boxes: BBox[]): BBox[] {
+  if (boxes.length === 0) return boxes;
+
+  const avgHeight =
+    boxes.reduce((sum, b) => sum + (b.maxY - b.minY + 1), 0) / boxes.length;
+  const rowTolerance = avgHeight * 0.25;
+
+  // Augment with vertical centers
+  const augmented = boxes.map((b) => ({
+    box: b,
+    cy: (b.minY + b.maxY) / 2,
+  }));
+
+  // Sort by cy first
+  augmented.sort((a, b) => a.cy - b.cy);
+
+  // Group into rows
+  const rows: (typeof augmented)[] = [];
+  for (const item of augmented) {
+    const lastRow = rows[rows.length - 1];
+    if (lastRow && Math.abs(item.cy - lastRow[0].cy) <= rowTolerance) {
+      lastRow.push(item);
+    } else {
+      rows.push([item]);
+    }
+  }
+
+  // Within each row, sort by minX
+  const result: BBox[] = [];
+  for (const row of rows) {
+    row.sort((a, b) => a.box.minX - b.box.minX);
+    for (const { box } of row) result.push(box);
+  }
+  return result;
+}
+
+/**
+ * Detect individual sprites in an image using connected-component labeling.
+ *
+ * Steps:
+ *   1. Build a content mask (transparent pixels = bg, or corner-color ±15 = bg)
+ *   2. Flood-fill every unvisited content pixel to find connected regions (8-way)
+ *   3. Filter out regions smaller than `minSize` (default 4×4)
+ *   4. Merge boxes within `mergeGap` pixels of each other (default 2)
+ *   5. Sort in reading order
+ */
+export interface DetectSpritesOptions {
+  /** Minimum width or height for a region to count as a sprite. Default 4. */
+  minSize?: number;
+  /** Gap in pixels within which nearby boxes get merged. Default 2. */
+  mergeGap?: number;
+}
+
+export function detectSprites(
+  imageData: ImageData,
+  options: DetectSpritesOptions = {}
+): SpriteDetectionResult {
+  const { minSize = 4, mergeGap = 2 } = options;
+  const { width: W, height: H } = imageData;
+
+  const mask = buildContentMask(imageData);
+  const visited = new Uint8Array(W * H);
+  const rawBoxes: BBox[] = [];
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const idx = y * W + x;
+      if (!mask[idx] || visited[idx]) continue;
+      const bbox = floodFillBoundingBox(mask, visited, W, H, x, y);
+      const w = bbox.maxX - bbox.minX + 1;
+      const h = bbox.maxY - bbox.minY + 1;
+      if (w < minSize || h < minSize) continue;
+      rawBoxes.push(bbox);
+    }
+  }
+
+  // Merge nearby boxes (e.g. detached weapons, particles)
+  const merged = mergeGap > 0 ? mergeNearbyBBoxes(rawBoxes, mergeGap) : rawBoxes;
+
+  // Sort reading order and assign 1-based IDs
+  const sorted = sortReadingOrder(merged);
+  const sprites: DetectedSprite[] = sorted.map((b, i) => ({
+    id: i + 1,
+    x: b.minX,
+    y: b.minY,
+    width: b.maxX - b.minX + 1,
+    height: b.maxY - b.minY + 1,
+  }));
+
+  return { sprites, imageData };
+}
+
+/**
+ * Crop a sprite region from a source canvas, optionally centered and padded
+ * to a target size with transparent background.
+ */
+export function extractSpriteRegion(
+  sourceCanvas: HTMLCanvasElement,
+  sprite: DetectedSprite,
+  targetWidth?: number,
+  targetHeight?: number
+): HTMLCanvasElement {
+  const tw = targetWidth ?? sprite.width;
+  const th = targetHeight ?? sprite.height;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = tw;
+  canvas.height = th;
+  const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingEnabled = false;
+
+  // Center the sprite if the target is larger than the sprite
+  const offsetX = Math.floor((tw - sprite.width) / 2);
+  const offsetY = Math.floor((th - sprite.height) / 2);
+
+  ctx.drawImage(
+    sourceCanvas,
+    sprite.x,
+    sprite.y,
+    sprite.width,
+    sprite.height,
+    offsetX,
+    offsetY,
+    sprite.width,
+    sprite.height
+  );
+  return canvas;
+}
+
+/**
+ * Remove a background color from an image by making matching pixels transparent.
+ *
+ * Auto-detects the dominant background color by sampling the four corners
+ * (unless `overrideColor` is supplied). Pixels within `tolerance` RGB distance
+ * of the background color have their alpha set to 0.
+ *
+ * Returns an object with the processed PNG data URL and the detected color
+ * (as a `{r,g,b}` object) so the UI can display it.
+ */
+export interface BackgroundRemovalResult {
+  dataUrl: string;
+  detectedColor: { r: number; g: number; b: number };
+}
+
+export function removeBackgroundColor(
+  image: HTMLCanvasElement | HTMLImageElement,
+  tolerance = 10,
+  overrideColor?: { r: number; g: number; b: number }
+): BackgroundRemovalResult {
+  const srcW = 'naturalWidth' in image ? image.naturalWidth : image.width;
+  const srcH = 'naturalHeight' in image ? image.naturalHeight : image.height;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = srcW;
+  canvas.height = srcH;
+  const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(image, 0, 0);
+
+  const imageData = ctx.getImageData(0, 0, srcW, srcH);
+  const data = imageData.data;
+
+  // Detect background: sample the four corners and average
+  let bg: { r: number; g: number; b: number };
+  if (overrideColor) {
+    bg = overrideColor;
+  } else {
+    const corners: Array<[number, number]> = [
+      [0, 0],
+      [srcW - 1, 0],
+      [0, srcH - 1],
+      [srcW - 1, srcH - 1],
+    ];
+    let sumR = 0, sumG = 0, sumB = 0;
+    for (const [x, y] of corners) {
+      const idx = (y * srcW + x) * 4;
+      sumR += data[idx];
+      sumG += data[idx + 1];
+      sumB += data[idx + 2];
+    }
+    bg = {
+      r: Math.round(sumR / corners.length),
+      g: Math.round(sumG / corners.length),
+      b: Math.round(sumB / corners.length),
+    };
+  }
+
+  // Mask out matching pixels
+  for (let i = 0; i < data.length; i += 4) {
+    const dr = Math.abs(data[i] - bg.r);
+    const dg = Math.abs(data[i + 1] - bg.g);
+    const db = Math.abs(data[i + 2] - bg.b);
+    if (dr <= tolerance && dg <= tolerance && db <= tolerance) {
+      data[i + 3] = 0;
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return { dataUrl: canvas.toDataURL('image/png'), detectedColor: bg };
+}

@@ -2,12 +2,13 @@
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Sparkles } from 'lucide-react';
+import { ArrowRight, Grid3X3, Scan, Sparkles } from 'lucide-react';
 import UploadZone from '@/components/sprites/UploadZone';
 import SlicerConfig, { type SliceConfig } from '@/components/sprites/SlicerConfig';
 import FrameGrid from '@/components/sprites/FrameGrid';
 import AnimationPanel from '@/components/sprites/AnimationPanel';
 import FrameSizeResizer from '@/components/sprites/FrameSizeResizer';
+import SpriteDetector, { type SpriteDetectorExtractResult } from '@/components/sprites/SpriteDetector';
 import Button from '@/components/ui/Button';
 import { useSpriteStore } from '@/stores/spriteStore';
 import {
@@ -18,6 +19,8 @@ import {
   frameToDataURL,
 } from '@/lib/spriteUtils';
 import type { SpriteFrame, SpriteSheet } from '@/lib/types';
+
+type SliceMode = 'grid' | 'auto';
 
 const LARGE_IMAGE_THRESHOLD = 128;
 
@@ -48,6 +51,8 @@ export default function UploadPage() {
   // Pre-populated frame size after a FrameSizeResizer accept
   const [preferredFrameW, setPreferredFrameW] = useState<number | undefined>();
   const [preferredFrameH, setPreferredFrameH] = useState<number | undefined>();
+  // Slicing mode: grid (uniform rows/columns) or auto (contour/blob detection)
+  const [sliceMode, setSliceMode] = useState<SliceMode>('grid');
 
   // Auto-load generated image from store on mount
   useEffect(() => {
@@ -97,6 +102,7 @@ export default function UploadPage() {
     setSizeAcknowledged(false);
     setPreferredFrameW(undefined);
     setPreferredFrameH(undefined);
+    setSliceMode('grid');
     clearSpriteSheet();
   }, [uploaded, fromGenerated, clearSpriteSheet]);
 
@@ -200,6 +206,63 @@ export default function UploadPage() {
     [uploaded, setSpriteSheet, setFrameDataUrls]
   );
 
+  /** Handler for the Auto-detect Sprites mode's Extract button. Produces the
+   *  same SpriteSheet + frameDataUrls format as the grid slicer, so the rest
+   *  of the pipeline (FrameGrid, AnimationPanel, Preview, Export) works
+   *  identically regardless of which mode was used. */
+  const handleAutoExtract = useCallback(
+    (result: SpriteDetectorExtractResult) => {
+      if (!uploaded) return;
+      setSlicing(true);
+      try {
+        const { frames: extracted, frameWidth, frameHeight } = result;
+        const frames: SpriteFrame[] = [];
+        const urls = new Map<string, string>();
+
+        for (const ef of extracted) {
+          frames.push({
+            id: ef.id,
+            imageData: null,
+            x: ef.x,
+            y: ef.y,
+            width: ef.width,
+            height: ef.height,
+            duration: 1000 / 8,
+          });
+          urls.set(ef.id, ef.dataUrl);
+        }
+
+        const sheet: SpriteSheet = {
+          id: `sheet-${Date.now()}`,
+          name: uploaded.file.name.replace(/\.[^.]+$/, '') || 'auto_detected',
+          sourceImage: uploaded.blobUrl,
+          frameWidth,
+          frameHeight,
+          columns: frames.length, // non-grid layout; store as single row
+          rows: 1,
+          totalFrames: frames.length,
+          animations: [
+            {
+              id: 'all-frames',
+              name: 'All Frames',
+              type: 'all',
+              frames,
+              fps: 8,
+              loop: true,
+            },
+          ],
+          padding: 0,
+        };
+
+        setSpriteSheet(sheet);
+        setFrameDataUrls(urls);
+      } finally {
+        setSlicing(false);
+      }
+    },
+    [uploaded, setSpriteSheet, setFrameDataUrls]
+  );
+
   const canContinue = useMemo(
     () => animations.some((a) => a.frames.length > 0),
     [animations]
@@ -245,20 +308,55 @@ export default function UploadPage() {
         />
       )}
 
-      {/* Slicer config — shown after upload and size acknowledged */}
+      {/* Slicer / Detector — shown after upload and size acknowledged */}
       {uploaded && sizeAcknowledged && (
-        <div className="rounded-lg border border-border-default bg-bg-surface p-6">
-          <SlicerConfig
-            imageUrl={uploaded.blobUrl}
-            imageWidth={uploaded.width}
-            imageHeight={uploaded.height}
-            initialFrameWidth={preferredFrameW}
-            initialFrameHeight={preferredFrameH}
-            onSlice={handleSlice}
-          />
+        <div className="rounded-lg border border-border-default bg-bg-surface p-6 space-y-4">
+          {/* Mode tabs — Grid Slicer (uniform rows/columns) vs Auto-detect (contour) */}
+          <div className="flex gap-1 rounded-lg bg-bg-secondary p-1 w-fit">
+            <button
+              onClick={() => setSliceMode('grid')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono cursor-pointer transition-colors
+                ${sliceMode === 'grid'
+                  ? 'bg-accent-amber text-bg-primary'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                }`}
+            >
+              <Grid3X3 size={14} />
+              Grid Slicer
+            </button>
+            <button
+              onClick={() => setSliceMode('auto')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono cursor-pointer transition-colors
+                ${sliceMode === 'auto'
+                  ? 'bg-accent-amber text-bg-primary'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                }`}
+            >
+              <Scan size={14} />
+              Auto-detect Sprites
+            </button>
+          </div>
+
+          {sliceMode === 'grid' ? (
+            <SlicerConfig
+              imageUrl={uploaded.blobUrl}
+              imageWidth={uploaded.width}
+              imageHeight={uploaded.height}
+              initialFrameWidth={preferredFrameW}
+              initialFrameHeight={preferredFrameH}
+              onSlice={handleSlice}
+            />
+          ) : (
+            <SpriteDetector
+              imageUrl={uploaded.blobUrl}
+              imageWidth={uploaded.width}
+              imageHeight={uploaded.height}
+              onExtract={handleAutoExtract}
+            />
+          )}
           {slicing && (
             <p className="mt-4 text-xs font-mono text-accent-amber animate-pulse">
-              Slicing frames...
+              {sliceMode === 'grid' ? 'Slicing frames...' : 'Extracting sprites...'}
             </p>
           )}
         </div>

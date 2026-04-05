@@ -12,7 +12,7 @@ import {
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
-import ImageResizer from './ImageResizer';
+import FitPadResizer from './FitPadResizer';
 import {
   getGenerationCount,
   incrementGenerationCount,
@@ -345,19 +345,18 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         />
       </div>
 
-      {/* Resizer — shown inline when the uploaded image isn't 64x64 */}
+      {/* Resizer — shown inline when the uploaded image isn't 64x64.
+          FitPadResizer preserves aspect ratio and pads with a background color
+          for non-square sources, so a 64x171 character is NOT squashed. */}
       {characterDataUrl && sizeWarning && (
-        <ImageResizer
+        <FitPadResizer
           sourceDataUrl={characterDataUrl}
           sourceWidth={charWidth}
           sourceHeight={charHeight}
-          defaultTarget={64}
-          recommendedSize={64}
-          title="Resize Required — 64x64"
-          description={`Your character is ${charWidth}x${charHeight}. Animate My Character requires exactly 64x64. Resize below using nearest-neighbor interpolation (no blurring), or upload a different image.`}
+          targetSize={64}
+          defaultBgColor={bgColor}
           onAccept={handleResizeAccept}
           onCancel={handleRemoveChar}
-          // No Keep Original Size here — animation only works with 64x64
         />
       )}
 

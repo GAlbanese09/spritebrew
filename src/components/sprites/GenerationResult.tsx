@@ -3,10 +3,11 @@
 import { useState, useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight } from 'lucide-react';
+import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight, Eraser } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
+import { loadImage, removeBackgroundColor } from '@/lib/spriteUtils';
 import {
   loadHistory,
   clearHistory,
@@ -32,16 +33,57 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
+  const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
 
   const [zoom, setZoom] = useState(4);
   const [history, setHistory] = useState<GenerationHistoryEntry[]>([]);
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
 
+  // Background removal state
+  const [bgRemovalActive, setBgRemovalActive] = useState(false);
+  const [bgRemovedDataUrl, setBgRemovedDataUrl] = useState<string | null>(null);
+  const [bgTolerance, setBgTolerance] = useState(10);
+  const [detectedBgColor, setDetectedBgColor] = useState<{ r: number; g: number; b: number } | null>(null);
+  const [bgRemovalError, setBgRemovalError] = useState<string | null>(null);
+
   // Load history on mount and whenever a new generation arrives or user changes
   useEffect(() => {
     setHistory(loadHistory(userId));
   }, [generatedImageDataUrl, userId]);
+
+  // Reset background removal when a new generation arrives
+  useEffect(() => {
+    setBgRemovalActive(false);
+    setBgRemovedDataUrl(null);
+    setDetectedBgColor(null);
+    setBgRemovalError(null);
+  }, [generatedImageDataUrl]);
+
+  // Recompute background removal when tolerance changes
+  useEffect(() => {
+    if (!bgRemovalActive || !generatedImageDataUrl) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const img = await loadImage(generatedImageDataUrl);
+        if (cancelled) return;
+        const result = removeBackgroundColor(img, bgTolerance);
+        if (!cancelled) {
+          setBgRemovedDataUrl(result.dataUrl);
+          setDetectedBgColor(result.detectedColor);
+          setBgRemovalError(null);
+        }
+      } catch {
+        if (!cancelled) setBgRemovalError('Failed to process image.');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [bgRemovalActive, bgTolerance, generatedImageDataUrl]);
+
+  /** The image currently displayed and used for download / Send to Slicer */
+  const displayImageDataUrl =
+    bgRemovalActive && bgRemovedDataUrl ? bgRemovedDataUrl : generatedImageDataUrl;
 
   // Rotate loading messages every 3 seconds while generating
   useEffect(() => {
@@ -56,18 +98,27 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   }, [isGenerating]);
 
   const handleDownload = useCallback(() => {
-    if (!generatedImageDataUrl) return;
+    if (!displayImageDataUrl) return;
     const a = document.createElement('a');
-    a.href = generatedImageDataUrl;
+    a.href = displayImageDataUrl;
     a.download = `spritebrew_generated_${Date.now()}.png`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  }, [generatedImageDataUrl]);
+  }, [displayImageDataUrl]);
 
   const handleSendToSlicer = useCallback(() => {
+    // If background removal is active, push the transparent version into the
+    // store so the slicer receives the transparent sprite.
+    if (bgRemovalActive && bgRemovedDataUrl) {
+      setGeneratedImage(bgRemovedDataUrl, bgRemovedDataUrl);
+    }
     router.push('/upload');
-  }, [router]);
+  }, [router, bgRemovalActive, bgRemovedDataUrl, setGeneratedImage]);
+
+  const handleToggleBgRemoval = useCallback(() => {
+    setBgRemovalActive((v) => !v);
+  }, []);
 
   const handleGenerateAnother = useCallback(() => {
     clearGeneratedImage();
@@ -246,7 +297,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           }}
         >
           <img
-            src={generatedImageDataUrl}
+            src={displayImageDataUrl ?? generatedImageDataUrl}
             alt="Generated sprite sheet"
             style={{
               imageRendering: 'pixelated',
@@ -275,6 +326,66 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
             {z}x
           </button>
         ))}
+      </div>
+
+      {/* Background removal */}
+      <div className="rounded border border-border-default bg-bg-elevated/50 p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Eraser size={12} className="text-text-muted" />
+            <span className="text-[11px] font-mono text-text-primary">
+              Remove background
+            </span>
+            {bgRemovalActive && detectedBgColor && (
+              <span className="flex items-center gap-1.5 text-[9px] font-mono text-text-muted">
+                <span
+                  className="w-3 h-3 rounded border border-border-default"
+                  style={{
+                    backgroundColor: `rgb(${detectedBgColor.r}, ${detectedBgColor.g}, ${detectedBgColor.b})`,
+                  }}
+                />
+                rgb({detectedBgColor.r}, {detectedBgColor.g}, {detectedBgColor.b})
+              </span>
+            )}
+          </div>
+          <button
+            onClick={handleToggleBgRemoval}
+            className={`px-2.5 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
+              ${bgRemovalActive
+                ? 'bg-accent-amber text-bg-primary'
+                : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
+              }`}
+          >
+            {bgRemovalActive ? 'Active' : 'Off'}
+          </button>
+        </div>
+        {bgRemovalActive && (
+          <>
+            <div className="flex items-center gap-2">
+              <label className="text-[9px] font-mono text-text-muted w-16">
+                Tolerance
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={60}
+                value={bgTolerance}
+                onChange={(e) => setBgTolerance(Number(e.target.value))}
+                className="flex-1 accent-[var(--accent-amber)]"
+              />
+              <span className="text-[10px] font-mono text-text-primary w-6 text-right">
+                {bgTolerance}
+              </span>
+            </div>
+            <p className="text-[9px] font-mono text-text-muted">
+              Samples the corners for the dominant color. Increase tolerance if
+              the background isn&apos;t fully removed.
+            </p>
+            {bgRemovalError && (
+              <p className="text-[9px] font-mono text-red-400">{bgRemovalError}</p>
+            )}
+          </>
+        )}
       </div>
 
       {/* Action buttons */}

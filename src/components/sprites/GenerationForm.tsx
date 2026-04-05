@@ -96,10 +96,8 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const generationError = useSpriteStore((s) => s.generationError);
 
   // Sync store count from localStorage on mount / when user changes.
-  // Also log userId for admin lookup — paste into ADMIN_USER_IDS in generationLimits.ts.
   useEffect(() => {
     if (userId) {
-      console.log('userId:', userId);
       const count = getGenerationCount(userId);
       const today = new Date().toISOString().slice(0, 10);
       setGenerationCount(count, today);

@@ -26,11 +26,7 @@ export const ADMIN_USER_IDS: readonly string[] = [
 /** Is this user an admin with unlimited generations? */
 export function isAdminUser(userId: string | null | undefined): boolean {
   if (!userId) return false;
-  const result = ADMIN_USER_IDS.includes(userId);
-  if (typeof window !== 'undefined') {
-    console.log('Admin check:', userId, ADMIN_USER_IDS, result);
-  }
-  return result;
+  return ADMIN_USER_IDS.includes(userId);
 }
 
 interface CountRecord {

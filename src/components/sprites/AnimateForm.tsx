@@ -18,6 +18,7 @@ import {
   incrementGenerationCount,
   isAtDailyLimit,
   remainingGenerations,
+  isAdminUser,
   FREE_DAILY_LIMIT,
 } from '@/lib/generationLimits';
 
@@ -57,15 +58,18 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
 
-  // Sync count from localStorage on mount / user change
+  // Sync count from localStorage on mount / user change.
+  // Also log userId for admin lookup — paste into ADMIN_USER_IDS in generationLimits.ts.
   useEffect(() => {
     if (userId) {
+      console.log('userId:', userId);
       const count = getGenerationCount(userId);
       const today = new Date().toISOString().slice(0, 10);
       setGenerationCount(count, today);
     }
   }, [userId, setGenerationCount]);
 
+  const isAdmin = isAdminUser(userId);
   const remaining = remainingGenerations(userId);
   const atLimit = isAtDailyLimit(userId);
   void generationCount; // trigger re-render on count change
@@ -493,7 +497,10 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-mono text-text-muted">
           {charWidth > 0 ? `64x64 · ${frameCount} frames` : 'Upload a 64x64 character to begin'}
-          {userId && (
+          {userId && isAdmin && (
+            <span className="ml-2 text-accent-amber">&middot; ∞ remaining (admin)</span>
+          )}
+          {userId && !isAdmin && (
             <span className={`ml-2 ${atLimit ? 'text-red-400' : 'text-accent-amber'}`}>
               &middot; {remaining}/{FREE_DAILY_LIMIT} remaining today
             </span>
@@ -514,6 +521,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             <>
               <Play size={16} />
               Daily limit reached
+            </>
+          ) : isAdmin ? (
+            <>
+              <Play size={16} />
+              Animate Character
             </>
           ) : (
             <>

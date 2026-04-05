@@ -10,6 +10,7 @@ import {
   incrementGenerationCount,
   isAtDailyLimit,
   remainingGenerations,
+  isAdminUser,
   FREE_DAILY_LIMIT,
 } from '@/lib/generationLimits';
 
@@ -94,15 +95,18 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
 
-  // Sync store count from localStorage on mount / when user changes
+  // Sync store count from localStorage on mount / when user changes.
+  // Also log userId for admin lookup — paste into ADMIN_USER_IDS in generationLimits.ts.
   useEffect(() => {
     if (userId) {
+      console.log('userId:', userId);
       const count = getGenerationCount(userId);
       const today = new Date().toISOString().slice(0, 10);
       setGenerationCount(count, today);
     }
   }, [userId, setGenerationCount]);
 
+  const isAdmin = isAdminUser(userId);
   const remaining = remainingGenerations(userId);
   const atLimit = isAtDailyLimit(userId);
   // generationCount is used to force re-render when the count changes (satisfies the subscription)
@@ -381,7 +385,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-mono text-text-muted">
           Output: {effectiveWidth}x{effectiveHeight}px
-          {userId && (
+          {userId && isAdmin && (
+            <span className="ml-2 text-accent-amber">&middot; ∞ remaining (admin)</span>
+          )}
+          {userId && !isAdmin && (
             <span className={`ml-2 ${atLimit ? 'text-red-400' : 'text-accent-amber'}`}>
               &middot; {remaining}/{FREE_DAILY_LIMIT} remaining today
             </span>
@@ -402,6 +409,11 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
             <>
               <Sparkles size={16} />
               Daily limit reached
+            </>
+          ) : isAdmin ? (
+            <>
+              <Sparkles size={16} />
+              Generate Sprite Sheet
             </>
           ) : (
             <>

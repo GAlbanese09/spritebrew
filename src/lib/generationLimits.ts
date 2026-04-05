@@ -11,6 +11,23 @@
 
 export const FREE_DAILY_LIMIT = 5;
 
+/**
+ * Admin user IDs — bypass the daily generation limit.
+ *
+ * To find your Clerk userId: sign in on spritebrew.com, open the browser
+ * console, and look for the `userId:` log printed by the Generate page.
+ * Paste the value here and redeploy.
+ */
+export const ADMIN_USER_IDS: readonly string[] = [
+  // 'user_3BtzTR8gHfGDiNXd1G8WFLQvEf2', // George — paste from browser console
+];
+
+/** Is this user an admin with unlimited generations? */
+export function isAdminUser(userId: string | null | undefined): boolean {
+  if (!userId) return false;
+  return ADMIN_USER_IDS.includes(userId);
+}
+
 interface CountRecord {
   count: number;
   date: string;
@@ -67,12 +84,18 @@ export function incrementGenerationCount(userId: string | null | undefined): num
   return next.count;
 }
 
-/** Is the user at or above the daily limit? */
+/** Is the user at or above the daily limit? Admins always return false. */
 export function isAtDailyLimit(userId: string | null | undefined): boolean {
+  if (isAdminUser(userId)) return false;
   return getGenerationCount(userId) >= FREE_DAILY_LIMIT;
 }
 
-/** How many generations remaining today. */
+/**
+ * How many generations remaining today.
+ * Returns `Infinity` for admin users — forms should check `isAdminUser()` and
+ * render an unlimited label instead of a numeric counter.
+ */
 export function remainingGenerations(userId: string | null | undefined): number {
+  if (isAdminUser(userId)) return Infinity;
   return Math.max(0, FREE_DAILY_LIMIT - getGenerationCount(userId));
 }

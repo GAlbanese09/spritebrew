@@ -20,6 +20,7 @@ export const FREE_DAILY_LIMIT = 5;
  */
 export const ADMIN_USER_IDS: readonly string[] = [
   'user_3BtzTR8gHfGDiNXd1G8WFLQvEf2', // George
+  'user_3Bu4G35OOLgpdDmYxtqsnoZfui2', // Admin #2
 ];
 
 /** Is this user an admin with unlimited generations? */

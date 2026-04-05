@@ -296,9 +296,40 @@ export default function UploadPage() {
         onRemove={handleRemove}
       />
 
-      {/* Size alert — shown when image exceeds 128px on either side and user hasn't acknowledged.
-          User picks a FRAME size; we calculate the sheet target that divides evenly. */}
-      {uploaded && !sizeAcknowledged && (
+      {/* Mode tabs — always visible as soon as an image is uploaded, so the
+          user can switch to Auto-detect Sprites without being blocked by the
+          grid-mode resize panel. */}
+      {uploaded && (
+        <div className="flex gap-1 rounded-lg bg-bg-secondary p-1 w-fit">
+          <button
+            onClick={() => setSliceMode('grid')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono cursor-pointer transition-colors
+              ${sliceMode === 'grid'
+                ? 'bg-accent-amber text-bg-primary'
+                : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+              }`}
+          >
+            <Grid3X3 size={14} />
+            Grid Slicer
+          </button>
+          <button
+            onClick={() => setSliceMode('auto')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono cursor-pointer transition-colors
+              ${sliceMode === 'auto'
+                ? 'bg-accent-amber text-bg-primary'
+                : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+              }`}
+          >
+            <Scan size={14} />
+            Auto-detect Sprites
+          </button>
+        </div>
+      )}
+
+      {/* Size alert — ONLY for Grid Slicer mode. Auto-detect works on the
+          original image regardless of size, so the resize step is skipped
+          when the user is in auto-detect mode. */}
+      {uploaded && sliceMode === 'grid' && !sizeAcknowledged && (
         <FrameSizeResizer
           sourceDataUrl={uploaded.blobUrl}
           sourceWidth={uploaded.width}
@@ -308,55 +339,37 @@ export default function UploadPage() {
         />
       )}
 
-      {/* Slicer / Detector — shown after upload and size acknowledged */}
-      {uploaded && sizeAcknowledged && (
+      {/* Grid Slicer — shown after upload and size acknowledged */}
+      {uploaded && sliceMode === 'grid' && sizeAcknowledged && (
         <div className="rounded-lg border border-border-default bg-bg-surface p-6 space-y-4">
-          {/* Mode tabs — Grid Slicer (uniform rows/columns) vs Auto-detect (contour) */}
-          <div className="flex gap-1 rounded-lg bg-bg-secondary p-1 w-fit">
-            <button
-              onClick={() => setSliceMode('grid')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono cursor-pointer transition-colors
-                ${sliceMode === 'grid'
-                  ? 'bg-accent-amber text-bg-primary'
-                  : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
-                }`}
-            >
-              <Grid3X3 size={14} />
-              Grid Slicer
-            </button>
-            <button
-              onClick={() => setSliceMode('auto')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono cursor-pointer transition-colors
-                ${sliceMode === 'auto'
-                  ? 'bg-accent-amber text-bg-primary'
-                  : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
-                }`}
-            >
-              <Scan size={14} />
-              Auto-detect Sprites
-            </button>
-          </div>
-
-          {sliceMode === 'grid' ? (
-            <SlicerConfig
-              imageUrl={uploaded.blobUrl}
-              imageWidth={uploaded.width}
-              imageHeight={uploaded.height}
-              initialFrameWidth={preferredFrameW}
-              initialFrameHeight={preferredFrameH}
-              onSlice={handleSlice}
-            />
-          ) : (
-            <SpriteDetector
-              imageUrl={uploaded.blobUrl}
-              imageWidth={uploaded.width}
-              imageHeight={uploaded.height}
-              onExtract={handleAutoExtract}
-            />
-          )}
+          <SlicerConfig
+            imageUrl={uploaded.blobUrl}
+            imageWidth={uploaded.width}
+            imageHeight={uploaded.height}
+            initialFrameWidth={preferredFrameW}
+            initialFrameHeight={preferredFrameH}
+            onSlice={handleSlice}
+          />
           {slicing && (
             <p className="mt-4 text-xs font-mono text-accent-amber animate-pulse">
-              {sliceMode === 'grid' ? 'Slicing frames...' : 'Extracting sprites...'}
+              Slicing frames...
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Auto-detect Sprites — shown directly, no resize required */}
+      {uploaded && sliceMode === 'auto' && (
+        <div className="rounded-lg border border-border-default bg-bg-surface p-6 space-y-4">
+          <SpriteDetector
+            imageUrl={uploaded.blobUrl}
+            imageWidth={uploaded.width}
+            imageHeight={uploaded.height}
+            onExtract={handleAutoExtract}
+          />
+          {slicing && (
+            <p className="mt-4 text-xs font-mono text-accent-amber animate-pulse">
+              Extracting sprites...
             </p>
           )}
         </div>

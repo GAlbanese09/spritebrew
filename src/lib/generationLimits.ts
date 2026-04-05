@@ -19,13 +19,17 @@ export const FREE_DAILY_LIMIT = 5;
  * Paste the value here and redeploy.
  */
 export const ADMIN_USER_IDS: readonly string[] = [
-  // 'user_3BtzTR8gHfGDiNXd1G8WFLQvEf2', // George — paste from browser console
+  'user_3BtzTR8gHfGDiNXd1G8WFLQvEf2', // George
 ];
 
 /** Is this user an admin with unlimited generations? */
 export function isAdminUser(userId: string | null | undefined): boolean {
   if (!userId) return false;
-  return ADMIN_USER_IDS.includes(userId);
+  const result = ADMIN_USER_IDS.includes(userId);
+  if (typeof window !== 'undefined') {
+    console.log('Admin check:', userId, ADMIN_USER_IDS, result);
+  }
+  return result;
 }
 
 interface CountRecord {

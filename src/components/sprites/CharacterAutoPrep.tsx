@@ -14,6 +14,21 @@ import {
 import Button from '@/components/ui/Button';
 import PixelEditor from './PixelEditor';
 
+/**
+ * State hierarchy:
+ *
+ *   sourceDataUrl (original upload)
+ *     → detect + crop → croppedCanvasRef
+ *       → bg remove (tolerance) → bgRemovedRef
+ *         → fit (padding %) → auto-prepped 64×64
+ *           → [user pixel edits] → editedBaseDataUrl  ← user's source of truth
+ *             → fit (padding %) → preparedDataUrl     ← what's displayed + sent to API
+ *
+ * When editedBaseDataUrl is set, padding changes apply to IT — not to the
+ * pipeline cache. Tolerance changes warn and clear edits because they change
+ * the base the user edited on top of.
+ */
+
 interface CharacterAutoPrepProps {
   sourceDataUrl: string;
   sourceWidth: number;
@@ -50,20 +65,43 @@ export default function CharacterAutoPrep({
   const [tolerance, setTolerance] = useState(30);
   const [editorOpen, setEditorOpen] = useState(false);
 
-  // Cache: cropped canvas BEFORE bg removal (keyed by sourceDataUrl).
-  // Tolerance slider re-runs removal from this cache without re-detecting.
+  // The user's manually edited 64×64 image. When set, padding changes apply
+  // to this instead of the pipeline cache. Cleared when tolerance changes or
+  // a new source is uploaded.
+  const [editedBaseDataUrl, setEditedBaseDataUrl] = useState<string | null>(null);
+
+  // Pipeline caches
   const croppedCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const croppedHasAlphaRef = useRef(false);
-  // Cache: post-bg-removal canvas. Padding slider re-fits from this.
   const bgRemovedRef = useRef<HTMLCanvasElement | null>(null);
   const lastSourceRef = useRef<string | null>(null);
   const lastToleranceRef = useRef<number>(30);
 
   const effectivePct = paddingEnabled ? characterSizePct : 100;
 
+  // ── Compute the display image from the right source ──
+  const recomputeDisplay = useCallback(
+    async (pct: number) => {
+      if (editedBaseDataUrl) {
+        // User has manual edits — apply padding to their edited image
+        const img = await loadImage(editedBaseDataUrl);
+        const prepared = fitToTransparentSquarePadded(img, targetSize, pct);
+        setPreparedDataUrl(prepared);
+      } else if (bgRemovedRef.current) {
+        // No edits — apply padding to the auto-prepped image
+        const prepared = fitToTransparentSquarePadded(
+          bgRemovedRef.current,
+          targetSize,
+          pct
+        );
+        setPreparedDataUrl(prepared);
+      }
+    },
+    [editedBaseDataUrl, targetSize]
+  );
+
   // ── Full pipeline: runs when source changes ──
   useEffect(() => {
-    // Only run the full pipeline when the SOURCE changes
     if (lastSourceRef.current === sourceDataUrl) return;
 
     let cancelled = false;
@@ -71,6 +109,7 @@ export default function CharacterAutoPrep({
     setPreparedDataUrl(null);
     setCropBBox(null);
     setError(null);
+    setEditedBaseDataUrl(null); // new source clears edits
 
     (async () => {
       try {
@@ -97,8 +136,6 @@ export default function CharacterAutoPrep({
         setCropBBox(bbox);
 
         const croppedCanvas = extractSpriteRegion(sourceCanvas, bbox);
-
-        // Check alpha
         const cropCtx = croppedCanvas.getContext('2d')!;
         const cropData = cropCtx.getImageData(0, 0, croppedCanvas.width, croppedCanvas.height);
         let foundAlpha = false;
@@ -109,7 +146,6 @@ export default function CharacterAutoPrep({
         croppedCanvasRef.current = croppedCanvas;
         croppedHasAlphaRef.current = foundAlpha;
 
-        // Bg removal
         let bgRemovedCanvas: HTMLCanvasElement;
         if (foundAlpha) {
           bgRemovedCanvas = croppedCanvas;
@@ -140,16 +176,11 @@ export default function CharacterAutoPrep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceDataUrl]);
 
-  // ── Re-run bg removal when tolerance changes (cheap: uses cached cropped canvas) ──
+  // ── Re-run bg removal when tolerance changes ──
   useEffect(() => {
     if (!croppedCanvasRef.current || lastSourceRef.current !== sourceDataUrl) return;
-    if (croppedHasAlphaRef.current) return; // no bg to remove
-    if (tolerance === lastToleranceRef.current && bgRemovedRef.current) {
-      // Tolerance unchanged — just re-fit with current padding
-      const prepared = fitToTransparentSquarePadded(bgRemovedRef.current, targetSize, effectivePct);
-      setPreparedDataUrl(prepared);
-      return;
-    }
+    if (croppedHasAlphaRef.current) return;
+    if (tolerance === lastToleranceRef.current) return; // no change
 
     let cancelled = false;
     (async () => {
@@ -161,6 +192,10 @@ export default function CharacterAutoPrep({
         bgRemovedRef.current = bgRemovedCanvas;
         lastToleranceRef.current = tolerance;
 
+        // Tolerance change invalidates manual edits — they were based on the
+        // old bg removal. Clear edits so padding applies to the new base.
+        setEditedBaseDataUrl(null);
+
         const prepared = fitToTransparentSquarePadded(bgRemovedCanvas, targetSize, effectivePct);
         if (!cancelled) setPreparedDataUrl(prepared);
       } catch {
@@ -170,25 +205,44 @@ export default function CharacterAutoPrep({
     return () => { cancelled = true; };
   }, [sourceDataUrl, tolerance, targetSize, effectivePct]);
 
-  // ── Re-fit when padding changes (cheapest: uses cached bg-removed canvas) ──
+  // ── Re-fit when padding changes — uses editedBaseDataUrl if available ──
   useEffect(() => {
-    if (!bgRemovedRef.current || lastSourceRef.current !== sourceDataUrl) return;
-    const prepared = fitToTransparentSquarePadded(bgRemovedRef.current, targetSize, effectivePct);
-    setPreparedDataUrl(prepared);
-  }, [sourceDataUrl, targetSize, effectivePct]);
+    if (lastSourceRef.current !== sourceDataUrl) return;
+    if (stage !== 'ready') return;
+    recomputeDisplay(effectivePct);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectivePct]);
 
   const handleAccept = useCallback(() => {
     if (!preparedDataUrl) return;
     onAccept(preparedDataUrl, targetSize, targetSize);
   }, [preparedDataUrl, targetSize, onAccept]);
 
-  /** Pixel editor saved — replace the prepared image. */
+  /** Pixel editor saved — store as the user's edited base image. */
   const handleEditorSave = useCallback(
     (editedDataUrl: string) => {
+      // The editor edits the DISPLAYED image (which may include padding).
+      // Store this as the base; padding changes will re-apply on top.
+      setEditedBaseDataUrl(editedDataUrl);
       setPreparedDataUrl(editedDataUrl);
       setEditorOpen(false);
     },
     []
+  );
+
+  /** Tolerance slider change with edit protection. */
+  const handleToleranceChange = useCallback(
+    (newTolerance: number) => {
+      if (editedBaseDataUrl) {
+        // Warn the user that changing tolerance resets their edits
+        const ok = confirm(
+          'Changing background removal will reset your manual edits. Continue?'
+        );
+        if (!ok) return;
+      }
+      setTolerance(newTolerance);
+    },
+    [editedBaseDataUrl]
   );
 
   const previewScale = Math.max(1, Math.floor(256 / targetSize));
@@ -258,7 +312,8 @@ export default function CharacterAutoPrep({
             {/* Prepared */}
             <div className="text-center">
               <p className="text-[9px] font-mono text-accent-amber mb-1.5 uppercase tracking-wider">
-                Prepared{cropBBox && ` (${cropBBox.width}x${cropBBox.height})`}
+                {editedBaseDataUrl ? 'Edited' : 'Prepared'}
+                {cropBBox && !editedBaseDataUrl && ` (${cropBBox.width}x${cropBBox.height})`}
               </p>
               <div
                 className="inline-block rounded border border-accent-amber/40 overflow-hidden"
@@ -300,7 +355,7 @@ export default function CharacterAutoPrep({
                   min={0}
                   max={100}
                   value={tolerance}
-                  onChange={(e) => setTolerance(Number(e.target.value))}
+                  onChange={(e) => handleToleranceChange(Number(e.target.value))}
                   className="flex-1 accent-[var(--accent-amber)]"
                 />
                 <span className="text-[10px] font-mono text-text-primary w-8 text-right">
@@ -309,6 +364,9 @@ export default function CharacterAutoPrep({
               </div>
               <p className="text-[9px] font-mono text-text-muted">
                 Increase if background pixels remain. Decrease if character pixels are being removed.
+                {editedBaseDataUrl && (
+                  <span className="text-amber-400 ml-1">(changing will reset manual edits)</span>
+                )}
               </p>
             </div>
           )}
@@ -329,6 +387,9 @@ export default function CharacterAutoPrep({
               label="Background"
               value={sourceHasAlpha ? 'Already transparent' : `Removed (tolerance ${tolerance})`}
             />
+            {editedBaseDataUrl && (
+              <DetailRow label="Manual edits" value="Applied" />
+            )}
             <DetailRow
               label="Character size"
               value={

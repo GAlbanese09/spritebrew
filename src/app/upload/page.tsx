@@ -42,7 +42,6 @@ export default function UploadPage() {
   const clearSpriteSheet = useSpriteStore((s) => s.clearSpriteSheet);
   const setFrameDataUrls = useSpriteStore((s) => s.setFrameDataUrls);
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
-  const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
 
   const [uploaded, setUploaded] = useState<UploadedImage | null>(null);
   const [slicing, setSlicing] = useState(false);
@@ -57,7 +56,11 @@ export default function UploadPage() {
   // Background removal banner: true = dismissed (user clicked Keep or Apply)
   const [bgBannerDismissed, setBgBannerDismissed] = useState(false);
 
-  // Auto-load generated image from store on mount
+  // Auto-load generated image from store on mount. We copy the data URL
+  // into local state but do NOT clear it from the Zustand store — this lets
+  // the user navigate back to /generate and still see their last result with
+  // all controls (zoom, background removal, download, Send to Slicer).
+  // The result is only cleared explicitly via "Generate Another".
   useEffect(() => {
     if (generatedImageDataUrl && !uploaded) {
       const img = new Image();
@@ -70,10 +73,9 @@ export default function UploadPage() {
           height: img.naturalHeight,
         });
         setFromGenerated(true);
-        // Generated images are already pixel-perfect; skip the size alert
         setSizeAcknowledged(true);
         clearSpriteSheet();
-        clearGeneratedImage();
+        // NOTE: intentionally NOT calling clearGeneratedImage() here
       };
       img.src = generatedImageDataUrl;
     }

@@ -233,28 +233,17 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       // Get Clerk session token for Bearer auth on the API route
       const sessionToken = await getToken();
 
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-        },
-        body: JSON.stringify(body),
-      });
-
-      const data = await res.json();
+      // Use SSE streaming to avoid Cloudflare 524 timeout
+      const { fetchGenerationSSE } = await import('@/lib/sseClient');
+      const data = await fetchGenerationSSE(body, sessionToken);
 
       if (!data.success) {
-        if (res.status === 401) {
-          setGenerationError('Your session expired. Please sign in again to continue generating.');
-        } else {
-          setGenerationError(data.error || 'Animation failed — try again.');
-        }
+        setGenerationError(String(data.error ?? 'Animation failed — try again.'));
         return;
       }
 
       // Retro Diffusion direct API returns a data URL directly (not a remote URL)
-      const dataUrl = data.imageUrl;
+      const dataUrl = data.imageUrl!;
 
       setGeneratedImage(dataUrl, dataUrl);
       setGenerationStyle(`any_animation_${selectedAction}`);

@@ -165,38 +165,30 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       // Get Clerk session token for Bearer auth on the API route
       const sessionToken = await getToken();
 
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-        },
-        body: JSON.stringify(body),
-      });
-
-      const data = await res.json();
+      // Use SSE streaming to avoid Cloudflare 524 timeout
+      const { fetchGenerationSSE } = await import('@/lib/sseClient');
+      const data = await fetchGenerationSSE(body, sessionToken);
 
       if (!data.success) {
-        if (res.status === 401) {
-          setGenerationError('Your session expired. Please sign in again to continue generating.');
-        } else {
-          setGenerationError(data.error || 'Generation failed — try a different prompt.');
-        }
+        setGenerationError(String(data.error ?? 'Generation failed — try a different prompt.'));
         return;
       }
 
       // Convert the Replicate URL to a data URL before it expires
-      const imageUrl = data.imageUrl;
+      const imageUrl = data.imageUrl!;
       let dataUrl = imageUrl;
 
       try {
-        const imgRes = await fetch(imageUrl);
-        const blob = await imgRes.blob();
-        dataUrl = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.readAsDataURL(blob);
-        });
+        // If it's already a data URL (Retro Diffusion), skip the fetch
+        if (!imageUrl.startsWith('data:')) {
+          const imgRes = await fetch(imageUrl);
+          const blob = await imgRes.blob();
+          dataUrl = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+          });
+        }
       } catch {
         // If conversion fails, use the URL directly
       }

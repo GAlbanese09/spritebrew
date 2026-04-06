@@ -461,17 +461,21 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       {/* Motion prompt */}
       <div>
         <label className="block text-[10px] font-mono text-text-muted mb-1">
-          Motion description {isCustomAction ? '(required)' : '(optional)'}
+          Motion description {isCustomAction ? '(required)' : '(optional — less is more)'}
         </label>
         <textarea
           value={motionPrompt}
           onChange={(e) => setMotionPrompt(e.target.value)}
-          placeholder="e.g., slow deliberate steps, robe swaying"
+          placeholder="Keep short (2-4 words) or leave blank. e.g., walking forward, sword swing"
           rows={2}
           className="w-full rounded-lg bg-bg-elevated border border-border-default px-3 py-2
             text-xs font-mono text-text-primary placeholder:text-text-muted resize-none
             focus:outline-none focus:border-accent-amber"
         />
+        <p className="text-[9px] font-mono text-text-muted/70 mt-1">
+          💡 For best character fidelity, leave blank or use minimal descriptions.
+          Detailed prompts may alter your character&apos;s appearance.
+        </p>
       </div>
 
       {/* Note about constraints */}

@@ -1,6 +1,7 @@
 export const runtime = 'edge';
 
-// Minimal KV interface — avoids requiring @cloudflare/workers-types
+// Minimal KV interface — the binding is injected as an object on process.env
+// by Cloudflare Pages, NOT via getCloudflareContext.
 interface KV {
   get(key: string): Promise<string | null>;
   put(key: string, value: string): Promise<void>;
@@ -8,47 +9,10 @@ interface KV {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// ── Try multiple ways to get the KV binding ──
-
-async function getKV(): Promise<{ kv: KV | null; debug: Record<string, unknown> }> {
-  const debug: Record<string, unknown> = {};
-
-  // Attempt 1: OpenNext's getCloudflareContext
-  try {
-    const mod = await import('@opennextjs/cloudflare');
-    const ctx = await mod.getCloudflareContext({ async: true });
-    debug.opennext = {
-      contextKeys: Object.keys(ctx || {}),
-      envKeys: Object.keys((ctx as Record<string, unknown>)?.env || {}),
-      envType: typeof (ctx as Record<string, unknown>)?.env,
-      hasKV: !!(ctx?.env as Record<string, unknown>)?.SPRITEBREW_KV,
-    };
-    const kv = (ctx?.env as Record<string, unknown>)?.SPRITEBREW_KV as KV | undefined;
-    if (kv) return { kv, debug };
-  } catch (e) {
-    debug.opennextError = (e as Error).message;
-  }
-
-  // Attempt 2: process.env (won't work for KV bindings but log what's there)
-  try {
-    debug.processEnvKV = typeof process.env.SPRITEBREW_KV;
-    debug.processEnvKeys = Object.keys(process.env).filter(
-      (k) => k.includes('KV') || k.includes('SPRITE') || k.includes('CLOUDFLARE')
-    );
-  } catch {
-    debug.processEnvError = 'not available';
-  }
-
-  // Attempt 3: globalThis
-  try {
-    const g = globalThis as Record<string, unknown>;
-    debug.globalThisKV = typeof g.SPRITEBREW_KV;
-    if (g.SPRITEBREW_KV) return { kv: g.SPRITEBREW_KV as KV, debug };
-  } catch {
-    debug.globalThisError = 'not available';
-  }
-
-  return { kv: null, debug };
+function getKV(): KV | null {
+  const kv = (process.env as Record<string, unknown>).SPRITEBREW_KV;
+  if (kv && typeof (kv as KV).put === 'function') return kv as KV;
+  return null;
 }
 
 // ── POST /api/waitlist — collect a waitlist email ──
@@ -71,24 +35,16 @@ export async function POST(request: Request) {
 
   const timestamp = new Date().toISOString();
 
-  // eslint-disable-next-line no-console
-  console.log('[WAITLIST]', email, timestamp);
-
-  const { kv, debug } = await getKV();
-
-  // eslint-disable-next-line no-console
-  console.log('[WAITLIST DEBUG]', JSON.stringify(debug));
+  const kv = getKV();
 
   if (kv) {
     try {
       const key = `waitlist:${email}`;
       const existing = await kv.get(key);
       if (!existing) {
-        await kv.put(
-          key,
-          JSON.stringify({ email, joinedAt: timestamp, source: 'landing-page' })
-        );
+        await kv.put(key, JSON.stringify({ email, joinedAt: timestamp, source: 'landing-page' }));
 
+        // Append to master list for easy export
         const allRaw = await kv.get('waitlist:__all_emails');
         const all: string[] = allRaw ? JSON.parse(allRaw) : [];
         if (!all.includes(email)) {
@@ -96,29 +52,28 @@ export async function POST(request: Request) {
           await kv.put('waitlist:__all_emails', JSON.stringify(all));
         }
       }
-
-      // TEMPORARY: include debug info in response to diagnose KV binding
-      return Response.json({ success: true, stored: 'kv', debug });
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.log('[WAITLIST] KV write error:', err);
+      return Response.json({ success: true, stored: 'kv' });
+    } catch {
+      // KV write failed — fall through to fallback
     }
   }
 
-  // TEMPORARY: include debug info in response to diagnose KV binding
-  return Response.json({ success: true, stored: 'fallback', debug });
+  // Fallback: log to Cloudflare's log stream
+  // eslint-disable-next-line no-console
+  console.log('[WAITLIST]', email, timestamp);
+  return Response.json({ success: true, stored: 'fallback' });
 }
 
 // ── GET /api/waitlist — admin export (returns full email list) ──
 
 export async function GET() {
-  const { kv, debug } = await getKV();
+  const kv = getKV();
 
   if (kv) {
     try {
       const allRaw = await kv.get('waitlist:__all_emails');
       const all: string[] = allRaw ? JSON.parse(allRaw) : [];
-      return Response.json({ success: true, emails: all, count: all.length, debug });
+      return Response.json({ success: true, emails: all, count: all.length });
     } catch {
       // fall through
     }
@@ -129,6 +84,5 @@ export async function GET() {
     emails: [],
     count: 0,
     note: 'KV binding not available.',
-    debug,
   });
 }

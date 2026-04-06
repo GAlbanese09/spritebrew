@@ -140,15 +140,26 @@ export default function LandingPage() {
         </h1>
         <p className="mt-6 text-sm sm:text-base text-[#9a918a] max-w-2xl mx-auto leading-relaxed">
           Describe a character, pick a moveset, and let AI generate game-ready
-          animations. Upload your own art or create from scratch. Export to Unity,
-          Godot, or GameMaker in one click.
+          pixel art animations. Upload your own art or create from scratch.
+          Export to Unity, Godot, or GameMaker in one click.
         </p>
 
-        {/* Hero sprite animation */}
-        <div className="mt-10 flex justify-center">
-          <div className="relative">
-            <HeroSpriteAnimation />
+        {/* Hero sprite animation — real SpriteBrew wizard output */}
+        <div className="mt-12 flex flex-col items-center gap-3">
+          <div
+            className="rounded-xl"
+            style={{
+              boxShadow: '0 0 60px rgba(212, 135, 28, 0.15), 0 0 120px rgba(212, 135, 28, 0.05)',
+            }}
+          >
+            <div
+              className="w-[256px] h-[256px] rounded-xl hero-sprite"
+              style={{ imageRendering: 'pixelated' }}
+            />
           </div>
+          <p className="text-[10px] font-mono text-[#5c5550]">
+            Generated with SpriteBrew
+          </p>
         </div>
 
         <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-3">
@@ -392,75 +403,3 @@ function BrewLogo() {
   );
 }
 
-/**
- * Hero sprite animation — a simple pixel art character that cycles through
- * 4 walk frames using CSS animation. Built from pure CSS/SVG, no external images.
- */
-function HeroSpriteAnimation() {
-  // Four walk frames of a simple pixel knight, each 16x16 scaled up
-  // Represented as CSS pixel blocks. The animation cycles between them.
-  return (
-    <div className="relative w-[256px] h-[80px] overflow-hidden rounded-lg border border-[#1e1b18] bg-[#121010]">
-      {/* 4 frames side by side, animated strip scrolling */}
-      <div
-        className="flex gap-0 animate-[heroSprite_1.6s_steps(4)_infinite]"
-        style={{ width: '1024px' }}
-      >
-        {[0, 1, 2, 3].map((frame) => (
-          <div key={frame} className="w-[256px] h-[80px] flex items-center justify-center">
-            <svg viewBox="0 0 16 16" width="64" height="64" style={{ imageRendering: 'pixelated' }}>
-              {/* Simple knight character — body */}
-              <rect x="6" y="2" width="4" height="3" fill="#c0c0c0" /> {/* helmet */}
-              <rect x="7" y="3" width="2" height="1" fill="#333" /> {/* visor */}
-              <rect x="6" y="5" width="4" height="4" fill="#8B7355" /> {/* torso */}
-              <rect x="5" y="6" width="1" height="3" fill="#8B7355" /> {/* left arm */}
-              <rect x="10" y="6" width="1" height="3" fill="#8B7355" /> {/* right arm */}
-              {/* Legs — shift based on frame */}
-              {frame === 0 && (
-                <>
-                  <rect x="6" y="9" width="2" height="3" fill="#5a4a3a" />
-                  <rect x="8" y="9" width="2" height="3" fill="#5a4a3a" />
-                  <rect x="6" y="12" width="2" height="1" fill="#3a3a3a" />
-                  <rect x="8" y="12" width="2" height="1" fill="#3a3a3a" />
-                </>
-              )}
-              {frame === 1 && (
-                <>
-                  <rect x="5" y="9" width="2" height="3" fill="#5a4a3a" />
-                  <rect x="9" y="9" width="2" height="2" fill="#5a4a3a" />
-                  <rect x="5" y="12" width="2" height="1" fill="#3a3a3a" />
-                  <rect x="9" y="11" width="2" height="1" fill="#3a3a3a" />
-                </>
-              )}
-              {frame === 2 && (
-                <>
-                  <rect x="6" y="9" width="2" height="3" fill="#5a4a3a" />
-                  <rect x="8" y="9" width="2" height="3" fill="#5a4a3a" />
-                  <rect x="6" y="12" width="2" height="1" fill="#3a3a3a" />
-                  <rect x="8" y="12" width="2" height="1" fill="#3a3a3a" />
-                </>
-              )}
-              {frame === 3 && (
-                <>
-                  <rect x="7" y="9" width="2" height="2" fill="#5a4a3a" />
-                  <rect x="9" y="9" width="2" height="3" fill="#5a4a3a" />
-                  <rect x="7" y="11" width="2" height="1" fill="#3a3a3a" />
-                  <rect x="9" y="12" width="2" height="1" fill="#3a3a3a" />
-                </>
-              )}
-              {/* Sword */}
-              <rect x="11" y="4" width="1" height="5" fill="#d4871c" />
-              <rect x="11" y="3" width="1" height="1" fill="#e8e0d6" />
-            </svg>
-          </div>
-        ))}
-      </div>
-      {/* Frame indicator dots */}
-      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1.5">
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="w-1 h-1 rounded-full bg-[#d4871c]/40" />
-        ))}
-      </div>
-    </div>
-  );
-}

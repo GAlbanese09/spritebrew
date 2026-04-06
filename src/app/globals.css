@@ -138,10 +138,33 @@ canvas {
   100% { transform: translateY(-40px) scale(0.3); opacity: 0; }
 }
 
-/* Landing page hero: 4-frame walk cycle strip scroll */
+/* Landing page hero: 16-frame wizard walk cycle on a 4×4 sprite sheet.
+   The sheet is 256×256 (4 cols × 4 rows of 64×64 frames), displayed at 4x
+   scale (1024×1024 background-size). Each keyframe step jumps to the next
+   frame position — left-to-right, top-to-bottom. */
+.hero-sprite {
+  background: url('/hero-wizard-walk.png') no-repeat 0 0;
+  background-size: 1024px 1024px;
+  animation: heroSprite 2s steps(1, end) infinite;
+}
+
 @keyframes heroSprite {
-  from { transform: translateX(0); }
-  to { transform: translateX(-100%); }
+  0%      { background-position: 0 0; }
+  6.25%   { background-position: -256px 0; }
+  12.5%   { background-position: -512px 0; }
+  18.75%  { background-position: -768px 0; }
+  25%     { background-position: 0 -256px; }
+  31.25%  { background-position: -256px -256px; }
+  37.5%   { background-position: -512px -256px; }
+  43.75%  { background-position: -768px -256px; }
+  50%     { background-position: 0 -512px; }
+  56.25%  { background-position: -256px -512px; }
+  62.5%   { background-position: -512px -512px; }
+  68.75%  { background-position: -768px -512px; }
+  75%     { background-position: 0 -768px; }
+  81.25%  { background-position: -256px -768px; }
+  87.5%   { background-position: -512px -768px; }
+  93.75%  { background-position: -768px -768px; }
 }
 
 @keyframes whatsNewFadeIn {

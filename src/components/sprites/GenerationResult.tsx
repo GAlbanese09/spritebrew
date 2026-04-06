@@ -32,6 +32,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const { userId } = useAuth();
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
+  const animateMode = useSpriteStore((s) => s.animateMode);
   const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
@@ -130,35 +131,67 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     setHistory([]);
   }, [userId]);
 
-  if (isGenerating) {
+  // Loading overlay — shown over a previous result (dimmed) or standalone
+  const loadingIndicator = isGenerating ? (
+    <div className="flex flex-col items-center justify-center py-12 space-y-6">
+      {/* Pixel blocks animation — 4×4 grid with staggered pulse */}
+      <div className="grid grid-cols-4 gap-1.5">
+        {Array.from({ length: 16 }).map((_, i) => {
+          const row = Math.floor(i / 4);
+          const col = i % 4;
+          const delay = (row + col) * 0.15;
+          return (
+            <div
+              key={i}
+              className="w-4 h-4 rounded-sm animate-[pixelBrew_1.2s_ease-in-out_infinite]"
+              style={{
+                backgroundColor: 'var(--accent-amber)',
+                animationDelay: `${delay}s`,
+              }}
+            />
+          );
+        })}
+      </div>
+      <p className="text-sm font-mono text-accent-amber font-semibold animate-pulse">
+        {animateMode === 'animate'
+          ? 'Animating your character...'
+          : LOADING_MESSAGES[loadingMsgIdx]}
+      </p>
+      <p className="text-[10px] font-mono text-text-muted">
+        This usually takes 15-30 seconds
+      </p>
+    </div>
+  ) : null;
+
+  // If generating AND there's a previous result, show it dimmed with the
+  // loading overlay on top instead of fully replacing it
+  if (isGenerating && generatedImageDataUrl) {
     return (
-      <div className="flex flex-col items-center justify-center py-12 space-y-6">
-        {/* Pixel blocks animation — 4x4 grid with staggered pulse */}
-        <div className="grid grid-cols-4 gap-1.5">
-          {Array.from({ length: 16 }).map((_, i) => {
-            const row = Math.floor(i / 4);
-            const col = i % 4;
-            const delay = (row + col) * 0.15;
-            return (
-              <div
-                key={i}
-                className="w-4 h-4 rounded-sm animate-[pixelBrew_1.2s_ease-in-out_infinite]"
-                style={{
-                  backgroundColor: 'var(--accent-amber)',
-                  animationDelay: `${delay}s`,
-                }}
+      <div className="relative space-y-4">
+        {/* Dimmed previous result */}
+        <div className="opacity-20 pointer-events-none">
+          <div className="rounded-lg border border-border-default bg-bg-elevated p-4 overflow-auto">
+            <div className="inline-block mx-auto">
+              <img
+                src={displayImageDataUrl ?? generatedImageDataUrl}
+                alt="Previous result"
+                style={{ imageRendering: 'pixelated' }}
+                className="block max-h-48"
               />
-            );
-          })}
+            </div>
+          </div>
         </div>
-        <p className="text-sm font-mono text-accent-amber font-semibold animate-pulse">
-          {LOADING_MESSAGES[loadingMsgIdx]}
-        </p>
-        <p className="text-[10px] font-mono text-text-muted">
-          This usually takes 15-30 seconds
-        </p>
+        {/* Overlay loading indicator */}
+        <div className="absolute inset-0 flex items-center justify-center">
+          {loadingIndicator}
+        </div>
       </div>
     );
+  }
+
+  // Generating with no previous result — show standalone loading
+  if (isGenerating) {
+    return <>{loadingIndicator}</>;
   }
 
   if (!generatedImageDataUrl) {

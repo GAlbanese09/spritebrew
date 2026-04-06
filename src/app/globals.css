@@ -124,6 +124,20 @@ canvas {
   50% { opacity: 1; transform: scale(1.1); }
 }
 
+/* Brewing loader: bubble rises and fades out */
+@keyframes brewBubble {
+  0% { transform: translateY(0); opacity: 0.8; }
+  50% { opacity: 1; }
+  100% { transform: translateY(-50px); opacity: 0; }
+}
+
+/* Brewing loader: steam/sparkle particle drifts upward */
+@keyframes brewSteam {
+  0% { transform: translateY(0) scale(1); opacity: 0; }
+  20% { opacity: 0.4; }
+  100% { transform: translateY(-40px) scale(0.3); opacity: 0; }
+}
+
 @keyframes whatsNewFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }

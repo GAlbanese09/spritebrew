@@ -7,6 +7,7 @@ import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight, Eraser } fr
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
+import BrewingLoader from './BrewingLoader';
 import { loadImage, removeBackgroundColor } from '@/lib/spriteUtils';
 import {
   loadHistory,
@@ -20,26 +21,18 @@ interface GenerationResultProps {
   onReset: () => void;
 }
 
-const LOADING_MESSAGES = [
-  'Brewing your sprites...',
-  'Mixing pixels...',
-  'Almost there...',
-  'Adding final details...',
-];
-
 export default function GenerationResult({ onReset }: GenerationResultProps) {
   const router = useRouter();
   const { userId } = useAuth();
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
-  const animateMode = useSpriteStore((s) => s.animateMode);
+  const generatingAction = useSpriteStore((s) => s.generatingAction);
   const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
 
   const [zoom, setZoom] = useState(4);
   const [history, setHistory] = useState<GenerationHistoryEntry[]>([]);
-  const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
 
   // Background removal state
   const [bgRemovalActive, setBgRemovalActive] = useState(false);
@@ -86,18 +79,6 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const displayImageDataUrl =
     bgRemovalActive && bgRemovedDataUrl ? bgRemovedDataUrl : generatedImageDataUrl;
 
-  // Rotate loading messages every 3 seconds while generating
-  useEffect(() => {
-    if (!isGenerating) {
-      setLoadingMsgIdx(0);
-      return;
-    }
-    const interval = setInterval(() => {
-      setLoadingMsgIdx((prev) => (prev + 1) % LOADING_MESSAGES.length);
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [isGenerating]);
-
   const handleDownload = useCallback(() => {
     if (!displayImageDataUrl) return;
     const a = document.createElement('a');
@@ -133,34 +114,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
 
   // Loading overlay — shown over a previous result (dimmed) or standalone
   const loadingIndicator = isGenerating ? (
-    <div className="flex flex-col items-center justify-center py-12 space-y-6">
-      {/* Pixel blocks animation — 4×4 grid with staggered pulse */}
-      <div className="grid grid-cols-4 gap-1.5">
-        {Array.from({ length: 16 }).map((_, i) => {
-          const row = Math.floor(i / 4);
-          const col = i % 4;
-          const delay = (row + col) * 0.15;
-          return (
-            <div
-              key={i}
-              className="w-4 h-4 rounded-sm animate-[pixelBrew_1.2s_ease-in-out_infinite]"
-              style={{
-                backgroundColor: 'var(--accent-amber)',
-                animationDelay: `${delay}s`,
-              }}
-            />
-          );
-        })}
-      </div>
-      <p className="text-sm font-mono text-accent-amber font-semibold animate-pulse">
-        {animateMode === 'animate'
-          ? 'Animating your character...'
-          : LOADING_MESSAGES[loadingMsgIdx]}
-      </p>
-      <p className="text-[10px] font-mono text-text-muted">
-        This usually takes 15-30 seconds
-      </p>
-    </div>
+    <BrewingLoader action={generatingAction} />
   ) : null;
 
   // If generating AND there's a previous result, show it dimmed with the

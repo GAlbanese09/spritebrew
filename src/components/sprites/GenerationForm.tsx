@@ -87,6 +87,7 @@ interface GenerationFormProps {
 export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const { userId, getToken } = useAuth();
   const setGenerating = useSpriteStore((s) => s.setGenerating);
+  const setGeneratingAction = useSpriteStore((s) => s.setGeneratingAction);
   const setGenerationError = useSpriteStore((s) => s.setGenerationError);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
@@ -144,6 +145,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     }
 
     setGenerating(true);
+    setGeneratingAction(null); // Create New doesn't have an action label
     setGenerationError(null);
 
     try {
@@ -208,11 +210,12 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       setGenerationError(`Connection failed — ${msg}`);
     } finally {
       setGenerating(false);
+      setGeneratingAction(null);
     }
   }, [
     prompt, selectedStyle, effectiveWidth, effectiveHeight,
-    referenceImage, isGenerating, userId, getToken, setGenerating, setGenerationError,
-    setGeneratedImage, setGenerationStyle, setGenerationCount, onGenerated,
+    referenceImage, isGenerating, userId, getToken, setGenerating, setGeneratingAction,
+    setGenerationError, setGeneratedImage, setGenerationStyle, setGenerationCount, onGenerated,
   ]);
 
   return (

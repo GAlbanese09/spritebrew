@@ -14,9 +14,12 @@ interface SpriteStore {
   generationError: string | null;
   generationStyle: string | null;
   animateMode: 'create' | 'animate';
+  /** The action label being generated (e.g., "attack", "walk"). Set before the
+   *  API call so the loading indicator can show "Brewing your attack animation..." */
+  generatingAction: string | null;
   originalCharacterDataUrl: string | null;
-  generationCount: number; // today's count (mirrored from localStorage for reactivity)
-  generationCountDate: string; // YYYY-MM-DD of the count
+  generationCount: number;
+  generationCountDate: string;
 
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
@@ -39,6 +42,7 @@ interface SpriteStore {
   setAnimateMode: (mode: 'create' | 'animate') => void;
   setOriginalCharacter: (dataUrl: string | null) => void;
   setGenerationCount: (count: number, date: string) => void;
+  setGeneratingAction: (action: string | null) => void;
 }
 
 export const useSpriteStore = create<SpriteStore>((set) => ({
@@ -53,6 +57,7 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   generationError: null,
   generationStyle: null,
   animateMode: 'create',
+  generatingAction: null,
   originalCharacterDataUrl: null,
   generationCount: 0,
   generationCountDate: '',
@@ -150,4 +155,6 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   setOriginalCharacter: (dataUrl) => set({ originalCharacterDataUrl: dataUrl }),
 
   setGenerationCount: (count, date) => set({ generationCount: count, generationCountDate: date }),
+
+  setGeneratingAction: (action) => set({ generatingAction: action }),
 }));

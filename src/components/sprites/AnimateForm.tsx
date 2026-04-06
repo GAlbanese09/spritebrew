@@ -57,6 +57,7 @@ interface AnimateFormProps {
 export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const { userId, getToken } = useAuth();
   const setGenerating = useSpriteStore((s) => s.setGenerating);
+  const setGeneratingAction = useSpriteStore((s) => s.setGeneratingAction);
   const setGenerationError = useSpriteStore((s) => s.setGenerationError);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
@@ -209,6 +210,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     if (!rgbBase64) return;
 
     setGenerating(true);
+    setGeneratingAction(selectedAction);
     setGenerationError(null);
     setOriginalCharacter(characterDataUrl);
 
@@ -263,12 +265,13 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       setGenerationError(`Connection failed — ${msg}`);
     } finally {
       setGenerating(false);
+      setGeneratingAction(null);
     }
   }, [
     characterDataUrl, isGenerating, selectedAction, charWidth, charHeight,
     frameCount, motionPrompt, convertToRgbBase64, userId, getToken,
-    setGenerating, setGenerationError, setGeneratedImage, setGenerationStyle,
-    setOriginalCharacter, setGenerationCount, onGenerated,
+    setGenerating, setGeneratingAction, setGenerationError, setGeneratedImage,
+    setGenerationStyle, setOriginalCharacter, setGenerationCount, onGenerated,
   ]);
 
   const sizeWarning = charWidth > 0 && (charWidth !== 64 || charHeight !== 64);

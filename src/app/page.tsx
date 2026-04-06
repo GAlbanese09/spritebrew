@@ -1,7 +1,9 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Show, SignInButton } from '@clerk/react';
+import WaitlistModal, { hasJoinedWaitlist } from '@/components/layout/WaitlistModal';
 import {
   Sparkles,
   Upload,
@@ -94,6 +96,14 @@ const ENGINES = [
 // ── Component ──
 
 export default function LandingPage() {
+  const [waitlistOpen, setWaitlistOpen] = useState(false);
+  const [joined, setJoined] = useState(false);
+
+  // Check localStorage on mount for previously joined state
+  useEffect(() => {
+    setJoined(hasJoinedWaitlist());
+  }, []);
+
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-[#e8e0d6] font-mono overflow-x-hidden">
       {/* ── Nav ── */}
@@ -327,11 +337,16 @@ export default function LandingPage() {
               ))}
             </ul>
             <button
-              disabled
-              className="block w-full text-center px-4 py-2.5 rounded-lg text-xs
-                border border-[#2a2725] text-[#5c5550] cursor-not-allowed"
+              onClick={() => !joined && setWaitlistOpen(true)}
+              disabled={joined}
+              className={`block w-full text-center px-4 py-2.5 rounded-lg text-xs font-mono
+                transition-colors ${
+                  joined
+                    ? 'border border-green-500/30 text-green-400 cursor-default'
+                    : 'border border-[#d4871c]/30 text-[#d4871c] hover:bg-[#d4871c]/10 cursor-pointer'
+                }`}
             >
-              Join Waitlist
+              {joined ? 'On the Waitlist \u2713' : 'Join Waitlist'}
             </button>
           </div>
         </div>
@@ -379,6 +394,13 @@ export default function LandingPage() {
           </p>
         </div>
       </footer>
+
+      {/* Waitlist modal */}
+      <WaitlistModal
+        open={waitlistOpen}
+        onClose={() => setWaitlistOpen(false)}
+        onJoined={() => setJoined(true)}
+      />
     </div>
   );
 }

@@ -66,8 +66,10 @@ export default function SlicerConfig({
   const handleAutoDetect = useCallback(async () => {
     setDetecting(true);
     try {
-      // Animate My Character results use animation__any_animation which always
-      // outputs 64x64 frames in a grid. Skip detection and force 64x64.
+      // Animate My Character results use rd_advanced_animation__* styles which
+      // output 64x64 frames in a 2-row grid (cols = frames/2). The frame size
+      // is always 64x64 — columns and rows are derived automatically from the
+      // image dimensions. Skip gutter detection and force 64x64.
       if (generationStyle && generationStyle.startsWith('any_animation_')) {
         setFrameWidth(64);
         setFrameHeight(64);

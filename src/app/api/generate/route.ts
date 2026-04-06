@@ -293,9 +293,21 @@ async function handleCreate(token: string, body: GenerateBody): Promise<Response
 
 // ── Advanced "Animate My Character" flow ──
 // Uses Retro Diffusion direct API (not Replicate) because Replicate's wrapper
-// does not support advanced animation styles.
+// does not support rd_advanced_animation__* styles.
 
 const RD_DIRECT_API_URL = 'https://api.retrodiffusion.ai/v1/inferences';
+
+// Map each action to its rd_advanced_animation__* prompt_style
+const ACTION_STYLE_MAP: Record<string, string> = {
+  walking: 'rd_advanced_animation__walking',
+  idle: 'rd_advanced_animation__idle',
+  attack: 'rd_advanced_animation__attack',
+  jump: 'rd_advanced_animation__jump',
+  crouch: 'rd_advanced_animation__crouch',
+  destroy: 'rd_advanced_animation__destroy',
+  subtle_motion: 'rd_advanced_animation__subtle_motion',
+  custom_action: 'rd_advanced_animation__custom_action',
+};
 
 // Map action IDs to descriptive prompt prefixes
 const ACTION_PROMPT_PREFIX: Record<string, string> = {
@@ -309,6 +321,10 @@ const ACTION_PROMPT_PREFIX: Record<string, string> = {
   custom_action: '', // user provides full description
 };
 
+// Fallback: the old animation__any_animation style (16 frames, 4×4 grid, $0.25).
+// Kept for internal retry if an rd_advanced_animation__* call fails.
+const FALLBACK_STYLE = 'animation__any_animation';
+
 async function handleAnimate(_replicateToken: string, body: GenerateBody): Promise<Response> {
   const rdToken = process.env.RETRO_DIFFUSION_API_KEY;
   if (!rdToken) {
@@ -318,11 +334,11 @@ async function handleAnimate(_replicateToken: string, body: GenerateBody): Promi
     );
   }
 
-  const { inputImage, action, width, height, motionPrompt } = body;
+  const { inputImage, action, width, height, framesDuration, motionPrompt } = body;
 
   if (!inputImage) {
     return Response.json(
-      { success: false, error: 'An input image is required for animation.' },
+      { success: false, error: 'An input image is required for animation. Please upload a character first.' },
       { status: 400 }
     );
   }
@@ -334,7 +350,6 @@ async function handleAnimate(_replicateToken: string, body: GenerateBody): Promi
     );
   }
 
-  // animation__any_animation is locked to 64x64
   if (width !== 64 || height !== 64) {
     return Response.json(
       {
@@ -344,6 +359,11 @@ async function handleAnimate(_replicateToken: string, body: GenerateBody): Promi
       { status: 400 }
     );
   }
+
+  const validDurations = [4, 6, 8, 10, 12, 16];
+  const duration = framesDuration && validDurations.includes(framesDuration)
+    ? framesDuration
+    : 4;
 
   // Strip data URL prefix if present
   const rawBase64 = inputImage.replace(/^data:image\/[a-z]+;base64,/, '');
@@ -355,18 +375,22 @@ async function handleAnimate(_replicateToken: string, body: GenerateBody): Promi
     ? (userMotion || 'smooth animation')
     : [prefix, userMotion].filter(Boolean).join(', ');
 
-  const rdPayload = {
+  // Use the action-specific rd_advanced_animation__* style
+  const promptStyle = ACTION_STYLE_MAP[action] ?? FALLBACK_STYLE;
+
+  const rdPayload: Record<string, unknown> = {
     prompt,
     width: 64,
     height: 64,
     num_images: 1,
-    prompt_style: 'animation__any_animation',
+    prompt_style: promptStyle,
+    frames_duration: duration,
     return_spritesheet: true,
     input_image: rawBase64,
   };
 
   try {
-    const rdRes = await fetch(RD_DIRECT_API_URL, {
+    let rdRes = await fetch(RD_DIRECT_API_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -374,6 +398,20 @@ async function handleAnimate(_replicateToken: string, body: GenerateBody): Promi
       },
       body: JSON.stringify(rdPayload),
     });
+
+    // If the advanced style failed, fall back to animation__any_animation
+    if (!rdRes.ok && promptStyle !== FALLBACK_STYLE) {
+      rdPayload.prompt_style = FALLBACK_STYLE;
+      delete rdPayload.frames_duration; // fallback doesn't support this param
+      rdRes = await fetch(RD_DIRECT_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-RD-Token': rdToken,
+        },
+        body: JSON.stringify(rdPayload),
+      });
+    }
 
     if (!rdRes.ok) {
       const errBody = await rdRes.text().catch(() => 'Could not read response body');

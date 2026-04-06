@@ -219,6 +219,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         action: selectedAction,
         width: 64,
         height: 64,
+        framesDuration: frameCount,
       };
 
       if (motionPrompt.trim()) {

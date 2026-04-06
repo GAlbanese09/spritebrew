@@ -138,10 +138,7 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   clearGeneratedImage: () =>
     set({ generatedImageUrl: null, generatedImageDataUrl: null, originalCharacterDataUrl: null }),
 
-  setGenerating: (loading) => {
-    console.log('[STORE] setGenerating called with:', loading, new Error().stack?.split('\n')[2]);
-    set({ isGenerating: loading });
-  },
+  setGenerating: (loading) => set({ isGenerating: loading }),
 
   // Only force isGenerating=false when setting an ACTUAL error. Calling
   // setGenerationError(null) to clear the field should NOT touch isGenerating —

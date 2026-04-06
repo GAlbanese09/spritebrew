@@ -179,25 +179,28 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
     }
   }, [spriteSheet, generationStyle, addAnimation]);
 
+  // Remove by position index (not by frame ID) so removing one instance of a
+  // duplicated frame doesn't remove all instances.
   const handleRemoveFrame = useCallback(
-    (animId: string, frameId: string) => {
+    (animId: string, positionIdx: number) => {
       const anim = animations.find((a) => a.id === animId);
       if (!anim) return;
-      const newOrder = anim.frames.filter((f) => f.id !== frameId).map((f) => f.id);
-      updateFrameOrder(animId, newOrder);
+      const newFrames = anim.frames.filter((_, i) => i !== positionIdx);
+      updateFrameOrder(animId, newFrames);
     },
     [animations, updateFrameOrder]
   );
 
+  // Swap by position index — works correctly even with duplicate frame IDs.
   const handleMoveFrame = useCallback(
     (animId: string, frameIdx: number, direction: -1 | 1) => {
       const anim = animations.find((a) => a.id === animId);
       if (!anim) return;
-      const ids = anim.frames.map((f) => f.id);
+      const newFrames = [...anim.frames];
       const targetIdx = frameIdx + direction;
-      if (targetIdx < 0 || targetIdx >= ids.length) return;
-      [ids[frameIdx], ids[targetIdx]] = [ids[targetIdx], ids[frameIdx]];
-      updateFrameOrder(animId, ids);
+      if (targetIdx < 0 || targetIdx >= newFrames.length) return;
+      [newFrames[frameIdx], newFrames[targetIdx]] = [newFrames[targetIdx], newFrames[frameIdx]];
+      updateFrameOrder(animId, newFrames);
     },
     [animations, updateFrameOrder]
   );
@@ -334,7 +337,7 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
                   const dataUrl = frameDataUrls.get(frame.id);
                   return (
                     <div
-                      key={frame.id}
+                      key={`${idx}-${frame.id}`}
                       className="group relative rounded border border-border-subtle bg-bg-elevated"
                     >
                       <div
@@ -357,6 +360,11 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
                         )}
                       </div>
 
+                      {/* Position number (visible when duplicates exist or always for clarity) */}
+                      <span className="absolute -bottom-1.5 left-0.5 text-[7px] font-mono text-text-muted leading-none">
+                        {idx + 1}
+                      </span>
+
                       {/* Reorder + remove controls (visible on hover) */}
                       <div className="absolute -top-1 -right-1 hidden group-hover:flex gap-0.5">
                         {idx > 0 && (
@@ -376,7 +384,7 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
                           </button>
                         )}
                         <button
-                          onClick={() => handleRemoveFrame(anim.id, frame.id)}
+                          onClick={() => handleRemoveFrame(anim.id, idx)}
                           className="w-4 h-4 flex items-center justify-center rounded-full bg-bg-primary border border-border-default text-text-muted hover:text-red-400 cursor-pointer"
                         >
                           <X size={10} />

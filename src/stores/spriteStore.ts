@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { SpriteSheet, SpriteAnimation } from '@/lib/types';
+import type { SpriteSheet, SpriteAnimation, SpriteFrame } from '@/lib/types';
 
 interface SpriteStore {
   spriteSheet: SpriteSheet | null;
@@ -24,7 +24,7 @@ interface SpriteStore {
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
   setFrameDataUrls: (urls: Map<string, string>) => void;
-  updateFrameOrder: (animationId: string, frameIds: string[]) => void;
+  updateFrameOrder: (animationId: string, frames: SpriteFrame[]) => void;
   addAnimation: (animation: SpriteAnimation) => void;
   removeAnimation: (animationId: string) => void;
   assignFramesToAnimation: (animationId: string, frameIds: string[]) => void;
@@ -70,20 +70,14 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
 
   setFrameDataUrls: (urls) => set({ frameDataUrls: urls }),
 
-  updateFrameOrder: (animationId, frameIds) =>
-    set((state) => {
-      if (!state.spriteSheet) return state;
-      const allFrames = state.spriteSheet.animations.flatMap((a) => a.frames);
-      return {
-        animations: state.animations.map((a) => {
-          if (a.id !== animationId) return a;
-          const reordered = frameIds
-            .map((id) => a.frames.find((f) => f.id === id) ?? allFrames.find((f) => f.id === id))
-            .filter(Boolean) as typeof a.frames;
-          return { ...a, frames: reordered };
-        }),
-      };
-    }),
+  // Accepts the full frame array directly — supports duplicate frames in the
+  // sequence since ID-based resolution is ambiguous when duplicates exist.
+  updateFrameOrder: (animationId, frames) =>
+    set((state) => ({
+      animations: state.animations.map((a) =>
+        a.id === animationId ? { ...a, frames } : a
+      ),
+    })),
 
   addAnimation: (animation) =>
     set((state) => ({ animations: [...state.animations, animation] })),
@@ -93,6 +87,8 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
       animations: state.animations.filter((a) => a.id !== animationId),
     })),
 
+  // Duplicates allowed: the same frame can appear multiple times in a group
+  // to create balanced animations (e.g., ping-pong walk cycles like [0,1,2,3,2,1]).
   assignFramesToAnimation: (animationId, frameIds) =>
     set((state) => {
       if (!state.spriteSheet) return state;
@@ -104,9 +100,7 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
       return {
         animations: state.animations.map((a) => {
           if (a.id !== animationId) return a;
-          const existingIds = new Set(a.frames.map((f) => f.id));
-          const newFrames = framesToAssign.filter((f) => !existingIds.has(f.id));
-          return { ...a, frames: [...a.frames, ...newFrames] };
+          return { ...a, frames: [...a.frames, ...framesToAssign] };
         }),
         selectedFrames: [],
       };

@@ -9,6 +9,7 @@ import FrameGrid from '@/components/sprites/FrameGrid';
 import AnimationPanel from '@/components/sprites/AnimationPanel';
 import FrameSizeResizer from '@/components/sprites/FrameSizeResizer';
 import SpriteDetector, { type SpriteDetectorExtractResult } from '@/components/sprites/SpriteDetector';
+import BgRemovalBanner from '@/components/sprites/BgRemovalBanner';
 import Button from '@/components/ui/Button';
 import { useSpriteStore } from '@/stores/spriteStore';
 import {
@@ -53,6 +54,8 @@ export default function UploadPage() {
   const [preferredFrameH, setPreferredFrameH] = useState<number | undefined>();
   // Slicing mode: grid (uniform rows/columns) or auto (contour/blob detection)
   const [sliceMode, setSliceMode] = useState<SliceMode>('grid');
+  // Background removal banner: true = dismissed (user clicked Keep or Apply)
+  const [bgBannerDismissed, setBgBannerDismissed] = useState(false);
 
   // Auto-load generated image from store on mount
   useEffect(() => {
@@ -85,6 +88,7 @@ export default function UploadPage() {
       setFromGenerated(false);
       setPreferredFrameW(undefined);
       setPreferredFrameH(undefined);
+      setBgBannerDismissed(false);
       // If the image is larger than the threshold on any side, require acknowledgement
       const needsAlert = width > LARGE_IMAGE_THRESHOLD || height > LARGE_IMAGE_THRESHOLD;
       setSizeAcknowledged(!needsAlert);
@@ -103,6 +107,7 @@ export default function UploadPage() {
     setPreferredFrameW(undefined);
     setPreferredFrameH(undefined);
     setSliceMode('grid');
+    setBgBannerDismissed(false);
     clearSpriteSheet();
   }, [uploaded, fromGenerated, clearSpriteSheet]);
 
@@ -134,6 +139,30 @@ export default function UploadPage() {
     setPreferredFrameH(frameH);
     setSizeAcknowledged(true);
   }, []);
+
+  /** User confirmed background removal. Replace the in-memory image with the
+   *  cleaned version; original file on disk is untouched. */
+  const handleBgRemoved = useCallback(
+    (cleanedDataUrl: string) => {
+      if (!uploaded) return;
+      if (!fromGenerated) URL.revokeObjectURL(uploaded.blobUrl);
+      // Load the cleaned image to get its dimensions
+      const img = new Image();
+      img.onload = () => {
+        setUploaded({
+          ...uploaded,
+          blobUrl: cleanedDataUrl,
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+        });
+        setFromGenerated(true); // data URL — don't revoke
+        setBgBannerDismissed(true);
+        clearSpriteSheet();
+      };
+      img.src = cleanedDataUrl;
+    },
+    [uploaded, fromGenerated, clearSpriteSheet]
+  );
 
   const handleSlice = useCallback(
     async (config: SliceConfig) => {
@@ -295,6 +324,18 @@ export default function UploadPage() {
         currentImage={uploaded?.blobUrl ?? null}
         onRemove={handleRemove}
       />
+
+      {/* Background removal banner — shown after upload if a solid background
+          is detected. Non-blocking: user can Keep or Remove before proceeding. */}
+      {uploaded && !bgBannerDismissed && (
+        <BgRemovalBanner
+          imageUrl={uploaded.blobUrl}
+          imageWidth={uploaded.width}
+          imageHeight={uploaded.height}
+          onRemoved={handleBgRemoved}
+          onDismiss={() => setBgBannerDismissed(true)}
+        />
+      )}
 
       {/* Mode tabs — always visible as soon as an image is uploaded, so the
           user can switch to Auto-detect Sprites without being blocked by the

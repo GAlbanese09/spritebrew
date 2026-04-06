@@ -801,6 +801,62 @@ export function fitSpriteToBox(
 }
 
 /**
+ * Detect whether an image has a solid background by sampling the four corners.
+ * Returns the background color if 3+ corners agree (within `threshold` RGB
+ * distance), or `null` if no solid background is detected. Also returns `null`
+ * if the image is already transparent (any corner with alpha < 10).
+ */
+export function detectSolidBackground(
+  imageData: ImageData,
+  threshold = 10
+): { r: number; g: number; b: number } | null {
+  const { width: W, height: H, data } = imageData;
+
+  const cornerCoords: Array<[number, number]> = [
+    [0, 0],
+    [W - 1, 0],
+    [0, H - 1],
+    [W - 1, H - 1],
+  ];
+
+  const corners: Array<{ r: number; g: number; b: number; a: number }> = [];
+  for (const [x, y] of cornerCoords) {
+    const idx = (y * W + x) * 4;
+    corners.push({ r: data[idx], g: data[idx + 1], b: data[idx + 2], a: data[idx + 3] });
+  }
+
+  // If any corner is transparent, the image already has alpha — skip
+  if (corners.some((c) => c.a < 10)) return null;
+
+  // Check how many corners agree with each other. Use the first corner as
+  // reference and count matches.
+  const ref = corners[0];
+  let matchCount = 0;
+  let sumR = 0, sumG = 0, sumB = 0;
+  for (const c of corners) {
+    if (
+      Math.abs(c.r - ref.r) <= threshold &&
+      Math.abs(c.g - ref.g) <= threshold &&
+      Math.abs(c.b - ref.b) <= threshold
+    ) {
+      matchCount++;
+      sumR += c.r;
+      sumG += c.g;
+      sumB += c.b;
+    }
+  }
+
+  // Need at least 3 of 4 corners to agree
+  if (matchCount < 3) return null;
+
+  return {
+    r: Math.round(sumR / matchCount),
+    g: Math.round(sumG / matchCount),
+    b: Math.round(sumB / matchCount),
+  };
+}
+
+/**
  * Remove a background color from an image by making matching pixels transparent.
  *
  * Auto-detects the dominant background color by sampling the four corners

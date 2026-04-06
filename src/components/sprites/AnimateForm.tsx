@@ -209,7 +209,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     const rgbBase64 = convertToRgbBase64();
     if (!rgbBase64) return;
 
+    console.log('[AnimateForm] BEFORE setGenerating(true)');
     setGenerating(true);
+    console.log('[AnimateForm] AFTER setGenerating(true)');
     setGeneratingAction(selectedAction);
     setGenerationError(null);
     setOriginalCharacter(characterDataUrl);

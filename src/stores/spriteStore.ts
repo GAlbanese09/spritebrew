@@ -144,9 +144,22 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   clearGeneratedImage: () =>
     set({ generatedImageUrl: null, generatedImageDataUrl: null, originalCharacterDataUrl: null }),
 
-  setGenerating: (loading) => set({ isGenerating: loading }),
+  setGenerating: (loading) => {
+    console.log('[STORE] setGenerating called with:', loading, new Error().stack?.split('\n')[2]);
+    set({ isGenerating: loading });
+  },
 
-  setGenerationError: (error) => set({ generationError: error, isGenerating: false }),
+  // Only force isGenerating=false when setting an ACTUAL error. Calling
+  // setGenerationError(null) to clear the field should NOT touch isGenerating —
+  // otherwise clearing the error right after setGenerating(true) would
+  // immediately reset the loading state (the old bug).
+  setGenerationError: (error) => {
+    if (error) {
+      set({ generationError: error, isGenerating: false });
+    } else {
+      set({ generationError: null });
+    }
+  },
 
   setGenerationStyle: (style) => set({ generationStyle: style }),
 

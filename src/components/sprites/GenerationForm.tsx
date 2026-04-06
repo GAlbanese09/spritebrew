@@ -144,7 +144,9 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       return;
     }
 
+    console.log('[GenerationForm] BEFORE setGenerating(true)');
     setGenerating(true);
+    console.log('[GenerationForm] AFTER setGenerating(true)');
     setGeneratingAction(null); // Create New doesn't have an action label
     setGenerationError(null);
 

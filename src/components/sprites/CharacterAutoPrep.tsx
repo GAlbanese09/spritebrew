@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Wand2, Check, Loader2, AlertCircle, Info } from 'lucide-react';
+import { Wand2, Check, Loader2, AlertCircle, Info, Pencil } from 'lucide-react';
 import {
   loadImage,
   imageToCanvas,
@@ -12,44 +12,18 @@ import {
   type DetectedSprite,
 } from '@/lib/spriteUtils';
 import Button from '@/components/ui/Button';
-
-/**
- * Auto-prep pipeline for the Animate My Character tab:
- *
- *   1. Detect the character via contour/blob detection (`detectSprites`)
- *   2. Auto-crop to the largest detected sprite's bounding box
- *   3. Remove the background (solid-color matching) and leave alpha=0
- *   4. Scale-to-fit the result inside a `targetSize × targetSize` canvas,
- *      centered, with transparent padding around shorter sides
- *   5. Optionally shrink the character within the canvas (Animation Padding)
- *      to leave room for weapon swings and motion effects
- *   6. Emit the prepared PNG data URL via `onAccept`
- *
- * The prepared image is RGBA with a transparent background. The API route
- * composites it onto a solid background color at call time (Retro Diffusion
- * requires RGB), so the transparent version is what we hand off here.
- *
- * Detection work is cached in a ref keyed by sourceDataUrl — adjusting the
- * padding slider only re-runs the fit step, not the expensive flood-fill.
- */
+import PixelEditor from './PixelEditor';
 
 interface CharacterAutoPrepProps {
   sourceDataUrl: string;
   sourceWidth: number;
   sourceHeight: number;
-  /** Target square size for the final prepared image (e.g. 64). */
   targetSize: number;
-  /** Called when the user confirms the prepared result. */
   onAccept: (preparedDataUrl: string, width: number, height: number) => void;
-  /** Called when the user wants to upload a different image. */
   onCancel: () => void;
-  /** Controlled: whether Animation Padding is enabled. */
   paddingEnabled: boolean;
-  /** Controlled: character size as a percentage of target canvas (50-100). */
   characterSizePct: number;
-  /** Called when the user toggles the padding switch. */
   onPaddingEnabledChange: (enabled: boolean) => void;
-  /** Called when the user moves the character size slider. */
   onCharacterSizePctChange: (pct: number) => void;
 }
 
@@ -73,114 +47,84 @@ export default function CharacterAutoPrep({
   const [spriteCount, setSpriteCount] = useState(0);
   const [sourceHasAlpha, setSourceHasAlpha] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tolerance, setTolerance] = useState(30);
+  const [editorOpen, setEditorOpen] = useState(false);
 
-  // Cache of the post-background-removal canvas keyed by the source data URL.
-  // Lets the padding slider re-fit cheaply without re-running detection.
+  // Cache: cropped canvas BEFORE bg removal (keyed by sourceDataUrl).
+  // Tolerance slider re-runs removal from this cache without re-detecting.
+  const croppedCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const croppedHasAlphaRef = useRef(false);
+  // Cache: post-bg-removal canvas. Padding slider re-fits from this.
   const bgRemovedRef = useRef<HTMLCanvasElement | null>(null);
   const lastSourceRef = useRef<string | null>(null);
+  const lastToleranceRef = useRef<number>(30);
 
-  // Run the pipeline whenever the source OR padding params change.
-  // When only padding changes, we skip detection and re-fit from the cache.
+  const effectivePct = paddingEnabled ? characterSizePct : 100;
+
+  // ── Full pipeline: runs when source changes ──
   useEffect(() => {
-    let cancelled = false;
+    // Only run the full pipeline when the SOURCE changes
+    if (lastSourceRef.current === sourceDataUrl) return;
 
-    const effectivePct = paddingEnabled ? characterSizePct : 100;
+    let cancelled = false;
+    setStage('processing');
+    setPreparedDataUrl(null);
+    setCropBBox(null);
+    setError(null);
 
     (async () => {
-      // Fast path: source hasn't changed, just re-fit
-      if (lastSourceRef.current === sourceDataUrl && bgRemovedRef.current) {
-        const prepared = fitToTransparentSquarePadded(
-          bgRemovedRef.current,
-          targetSize,
-          effectivePct
-        );
-        if (!cancelled) {
-          setPreparedDataUrl(prepared);
-          setStage('ready');
-        }
-        return;
-      }
-
-      // Slow path: full pipeline
-      setStage('processing');
-      setPreparedDataUrl(null);
-      setCropBBox(null);
-      setError(null);
-
       try {
-        // 1. Load + rasterise the source
         const img = await loadImage(sourceDataUrl);
         if (cancelled) return;
         const sourceCanvas = imageToCanvas(img);
         const srcCtx = sourceCanvas.getContext('2d')!;
         const imgData = srcCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
 
-        // Yield so the loading indicator paints before heavy work
         await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
 
-        // 2. Detect the character(s)
         const { sprites } = detectSprites(imgData);
         if (cancelled) return;
         setSpriteCount(sprites.length);
 
-        // 3. Pick the bounding box to crop to
         let bbox: DetectedSprite;
         if (sprites.length === 0) {
-          // Detection failed — fall back to the full image
-          bbox = {
-            id: 1,
-            x: 0,
-            y: 0,
-            width: sourceCanvas.width,
-            height: sourceCanvas.height,
-          };
+          bbox = { id: 1, x: 0, y: 0, width: sourceCanvas.width, height: sourceCanvas.height };
         } else if (sprites.length === 1) {
           bbox = sprites[0];
         } else {
-          // Multiple detected — use the largest by area
-          bbox = sprites.reduce((a, b) =>
-            a.width * a.height >= b.width * b.height ? a : b
-          );
+          bbox = sprites.reduce((a, b) => (a.width * a.height >= b.width * b.height ? a : b));
         }
         setCropBBox(bbox);
 
-        // 4. Crop to the bbox
         const croppedCanvas = extractSpriteRegion(sourceCanvas, bbox);
 
-        // 5. Background removal — only if the source didn't already have alpha
+        // Check alpha
         const cropCtx = croppedCanvas.getContext('2d')!;
         const cropData = cropCtx.getImageData(0, 0, croppedCanvas.width, croppedCanvas.height);
         let foundAlpha = false;
         for (let i = 3; i < cropData.data.length; i += 4) {
-          if (cropData.data[i] < 250) {
-            foundAlpha = true;
-            break;
-          }
+          if (cropData.data[i] < 250) { foundAlpha = true; break; }
         }
         setSourceHasAlpha(foundAlpha);
+        croppedCanvasRef.current = croppedCanvas;
+        croppedHasAlphaRef.current = foundAlpha;
 
+        // Bg removal
         let bgRemovedCanvas: HTMLCanvasElement;
         if (foundAlpha) {
-          // Already transparent — skip removal
           bgRemovedCanvas = croppedCanvas;
         } else {
-          const { dataUrl } = removeBackgroundColor(croppedCanvas, 15);
+          const { dataUrl } = removeBackgroundColor(croppedCanvas, tolerance);
           const removedImg = await loadImage(dataUrl);
           if (cancelled) return;
           bgRemovedCanvas = imageToCanvas(removedImg);
         }
 
-        // Cache for cheap re-fits on slider change
         bgRemovedRef.current = bgRemovedCanvas;
         lastSourceRef.current = sourceDataUrl;
+        lastToleranceRef.current = tolerance;
 
-        // 6. Fit to targetSize × targetSize with optional animation padding
-        const prepared = fitToTransparentSquarePadded(
-          bgRemovedCanvas,
-          targetSize,
-          effectivePct
-        );
-
+        const prepared = fitToTransparentSquarePadded(bgRemovedCanvas, targetSize, effectivePct);
         if (cancelled) return;
         setPreparedDataUrl(prepared);
         setStage('ready');
@@ -192,17 +136,61 @@ export default function CharacterAutoPrep({
       }
     })();
 
-    return () => {
-      cancelled = true;
-    };
-  }, [sourceDataUrl, targetSize, paddingEnabled, characterSizePct]);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceDataUrl]);
+
+  // ── Re-run bg removal when tolerance changes (cheap: uses cached cropped canvas) ──
+  useEffect(() => {
+    if (!croppedCanvasRef.current || lastSourceRef.current !== sourceDataUrl) return;
+    if (croppedHasAlphaRef.current) return; // no bg to remove
+    if (tolerance === lastToleranceRef.current && bgRemovedRef.current) {
+      // Tolerance unchanged — just re-fit with current padding
+      const prepared = fitToTransparentSquarePadded(bgRemovedRef.current, targetSize, effectivePct);
+      setPreparedDataUrl(prepared);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const { dataUrl } = removeBackgroundColor(croppedCanvasRef.current!, tolerance);
+        const removedImg = await loadImage(dataUrl);
+        if (cancelled) return;
+        const bgRemovedCanvas = imageToCanvas(removedImg);
+        bgRemovedRef.current = bgRemovedCanvas;
+        lastToleranceRef.current = tolerance;
+
+        const prepared = fitToTransparentSquarePadded(bgRemovedCanvas, targetSize, effectivePct);
+        if (!cancelled) setPreparedDataUrl(prepared);
+      } catch {
+        // ignore
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sourceDataUrl, tolerance, targetSize, effectivePct]);
+
+  // ── Re-fit when padding changes (cheapest: uses cached bg-removed canvas) ──
+  useEffect(() => {
+    if (!bgRemovedRef.current || lastSourceRef.current !== sourceDataUrl) return;
+    const prepared = fitToTransparentSquarePadded(bgRemovedRef.current, targetSize, effectivePct);
+    setPreparedDataUrl(prepared);
+  }, [sourceDataUrl, targetSize, effectivePct]);
 
   const handleAccept = useCallback(() => {
     if (!preparedDataUrl) return;
     onAccept(preparedDataUrl, targetSize, targetSize);
   }, [preparedDataUrl, targetSize, onAccept]);
 
-  // Upscale the target preview so the user can see individual pixels
+  /** Pixel editor saved — replace the prepared image. */
+  const handleEditorSave = useCallback(
+    (editedDataUrl: string) => {
+      setPreparedDataUrl(editedDataUrl);
+      setEditorOpen(false);
+    },
+    []
+  );
+
   const previewScale = Math.max(1, Math.floor(256 / targetSize));
 
   return (
@@ -215,9 +203,9 @@ export default function CharacterAutoPrep({
             Auto-prep Character
           </h3>
           <p className="text-[10px] font-mono text-text-muted leading-relaxed">
-            Detecting your character, cropping to its bounds, removing the
-            background, and resizing to {targetSize}x{targetSize} for animation.
-            You can approve or upload a different image.
+            Detecting your character, cropping, removing the background, and
+            resizing to {targetSize}x{targetSize}. Adjust the tolerance or
+            use the pixel editor to fix details.
           </p>
         </div>
       </div>
@@ -260,21 +248,17 @@ export default function CharacterAutoPrep({
                   src={sourceDataUrl}
                   alt="Original"
                   className="block"
-                  style={{
-                    imageRendering: 'pixelated',
-                    maxWidth: 128,
-                    maxHeight: 128,
-                  }}
+                  style={{ imageRendering: 'pixelated', maxWidth: 128, maxHeight: 128 }}
                 />
               </div>
             </div>
 
             <span className="text-text-muted text-lg font-mono">&rarr;</span>
 
-            {/* Detected / cropped with transparency */}
+            {/* Prepared */}
             <div className="text-center">
               <p className="text-[9px] font-mono text-accent-amber mb-1.5 uppercase tracking-wider">
-                Detected{cropBBox && ` (${cropBBox.width}x${cropBBox.height})`}
+                Prepared{cropBBox && ` (${cropBBox.width}x${cropBBox.height})`}
               </p>
               <div
                 className="inline-block rounded border border-accent-amber/40 overflow-hidden"
@@ -304,6 +288,31 @@ export default function CharacterAutoPrep({
             </div>
           </div>
 
+          {/* Background removal tolerance slider */}
+          {!sourceHasAlpha && (
+            <div className="rounded border border-border-default bg-bg-elevated p-3 space-y-2">
+              <div className="flex items-center gap-3">
+                <label className="text-[10px] font-mono text-text-muted w-20 flex-shrink-0">
+                  BG Removal
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={tolerance}
+                  onChange={(e) => setTolerance(Number(e.target.value))}
+                  className="flex-1 accent-[var(--accent-amber)]"
+                />
+                <span className="text-[10px] font-mono text-text-primary w-8 text-right">
+                  {tolerance}
+                </span>
+              </div>
+              <p className="text-[9px] font-mono text-text-muted">
+                Increase if background pixels remain. Decrease if character pixels are being removed.
+              </p>
+            </div>
+          )}
+
           {/* Detection details */}
           <div className="rounded border border-border-default bg-bg-elevated p-3 space-y-1">
             <DetailRow
@@ -318,7 +327,7 @@ export default function CharacterAutoPrep({
             )}
             <DetailRow
               label="Background"
-              value={sourceHasAlpha ? 'Already transparent' : 'Removed (corner-sampled, ±15)'}
+              value={sourceHasAlpha ? 'Already transparent' : `Removed (tolerance ${tolerance})`}
             />
             <DetailRow
               label="Character size"
@@ -333,10 +342,8 @@ export default function CharacterAutoPrep({
           {/* Animation Padding control */}
           <div className="rounded border border-border-default bg-bg-elevated p-3 space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <label
-                className="flex items-center gap-2 cursor-pointer"
-                title="Shrinks character to leave room for weapon swings and motion effects"
-              >
+              <label className="flex items-center gap-2 cursor-pointer"
+                title="Shrinks character to leave room for weapon swings and motion effects">
                 <input
                   type="checkbox"
                   checked={paddingEnabled}
@@ -346,15 +353,10 @@ export default function CharacterAutoPrep({
                 <span className="text-[11px] font-mono font-semibold text-text-primary">
                   Animation Padding
                 </span>
-                <Info
-                  size={11}
-                  className="text-text-muted"
-                />
+                <Info size={11} className="text-text-muted" />
               </label>
               {paddingEnabled && (
-                <span className="text-[10px] font-mono text-accent-amber">
-                  {characterSizePct}%
-                </span>
+                <span className="text-[10px] font-mono text-accent-amber">{characterSizePct}%</span>
               )}
             </div>
             <p className="text-[9px] font-mono text-text-muted leading-relaxed">
@@ -364,14 +366,9 @@ export default function CharacterAutoPrep({
             {paddingEnabled && (
               <div className="space-y-1">
                 <div className="flex items-center gap-3">
-                  <span className="text-[9px] font-mono text-text-muted w-16">
-                    Character Size
-                  </span>
+                  <span className="text-[9px] font-mono text-text-muted w-16">Character Size</span>
                   <input
-                    type="range"
-                    min={50}
-                    max={95}
-                    step={5}
+                    type="range" min={50} max={95} step={5}
                     value={characterSizePct}
                     onChange={(e) => onCharacterSizePctChange(Number(e.target.value))}
                     className="flex-1 accent-[var(--accent-amber)]"
@@ -379,10 +376,6 @@ export default function CharacterAutoPrep({
                   <span className="text-[10px] font-mono text-text-primary w-10 text-right">
                     {characterSizePct}%
                   </span>
-                </div>
-                <div className="flex justify-between text-[8px] font-mono text-text-muted/70 px-[4.25rem]">
-                  <span>50%</span>
-                  <span>95%</span>
                 </div>
               </div>
             )}
@@ -395,16 +388,30 @@ export default function CharacterAutoPrep({
         <Button variant="ghost" size="sm" onClick={onCancel}>
           Upload Different
         </Button>
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={handleAccept}
-          disabled={stage !== 'ready'}
-        >
-          <Check size={14} />
-          Use This
-        </Button>
+        <div className="flex items-center gap-2">
+          {stage === 'ready' && preparedDataUrl && (
+            <Button variant="secondary" size="sm" onClick={() => setEditorOpen(true)}>
+              <Pencil size={14} />
+              Edit
+            </Button>
+          )}
+          <Button variant="primary" size="sm" onClick={handleAccept} disabled={stage !== 'ready'}>
+            <Check size={14} />
+            Use This
+          </Button>
+        </div>
       </div>
+
+      {/* Pixel Editor modal */}
+      {editorOpen && preparedDataUrl && (
+        <PixelEditor
+          frameDataUrl={preparedDataUrl}
+          frameWidth={targetSize}
+          frameHeight={targetSize}
+          onSave={handleEditorSave}
+          onClose={() => setEditorOpen(false)}
+        />
+      )}
     </div>
   );
 }

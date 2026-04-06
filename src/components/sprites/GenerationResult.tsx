@@ -34,6 +34,9 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const [zoom, setZoom] = useState(4);
   const [history, setHistory] = useState<GenerationHistoryEntry[]>([]);
 
+  // TODO: remove after confirming loading state works in production
+  console.log('[GenerationResult] isGenerating:', isGenerating, 'generatingAction:', generatingAction, 'hasResult:', !!generatedImageDataUrl);
+
   // Background removal state
   const [bgRemovalActive, setBgRemovalActive] = useState(false);
   const [bgRemovedDataUrl, setBgRemovedDataUrl] = useState<string | null>(null);

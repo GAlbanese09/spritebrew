@@ -534,7 +534,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
           {isGenerating ? (
             <>
               <Loader2 size={16} className="animate-spin" />
-              Animating...
+              Brewing...
             </>
           ) : atLimit ? (
             <>

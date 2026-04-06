@@ -404,7 +404,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
           {isGenerating ? (
             <>
               <Loader2 size={16} className="animate-spin" />
-              Generating...
+              Brewing...
             </>
           ) : atLimit ? (
             <>

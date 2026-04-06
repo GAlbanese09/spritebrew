@@ -6,6 +6,11 @@
  * A pixel-art cauldron bubbles with amber/gold potion, with small pixel
  * bubbles rising upward and fading out. Text below shows the action being
  * generated. Pure CSS animation — no canvas, no external libraries.
+ *
+ * IMPORTANT: Bubble/steam animations use inline `style.animation` instead of
+ * Tailwind arbitrary syntax because each element has a unique duration that
+ * Tailwind's `animate-[...]` can't handle dynamically (it doesn't resolve
+ * CSS custom properties like `var(--dur)`).
  */
 
 interface BrewingLoaderProps {
@@ -45,7 +50,7 @@ export default function BrewingLoader({ action }: BrewingLoaderProps) {
           <rect x="3" y="7" width="1" height="2" fill="#5c5550" />
           <rect x="28" y="7" width="1" height="2" fill="#5c5550" />
           {/* Cauldron body */}
-          <rect x="5" y="8" width="22" height="14" rx="0" fill="#2a2420" />
+          <rect x="5" y="8" width="22" height="14" fill="#2a2420" />
           <rect x="6" y="22" width="20" height="2" fill="#2a2420" />
           <rect x="8" y="24" width="16" height="2" fill="#2a2420" />
           <rect x="10" y="26" width="12" height="2" fill="#1e1a16" />
@@ -64,7 +69,7 @@ export default function BrewingLoader({ action }: BrewingLoaderProps) {
           <rect x="22" y="26" width="2" height="2" fill="#3a3430" />
         </svg>
 
-        {/* Bubbles — absolutely positioned, animated */}
+        {/* Bubbles — absolutely positioned, animated via inline style */}
         {[
           { left: 30, size: 6, delay: 0, dur: 2.2 },
           { left: 55, size: 8, delay: 0.6, dur: 2.5 },
@@ -76,15 +81,14 @@ export default function BrewingLoader({ action }: BrewingLoaderProps) {
         ].map((b, i) => (
           <div
             key={i}
-            className="absolute rounded-sm animate-[brewBubble_var(--dur)_ease-out_infinite]"
+            className="absolute rounded-sm"
             style={{
               left: b.left,
               bottom: 45,
               width: b.size,
               height: b.size,
-              backgroundColor: 'var(--accent-amber)',
-              animationDelay: `${b.delay}s`,
-              animationDuration: `${b.dur}s`,
+              backgroundColor: '#d4871c',
+              animation: `brewBubble ${b.dur}s ease-out ${b.delay}s infinite`,
             }}
           />
         ))}
@@ -97,14 +101,12 @@ export default function BrewingLoader({ action }: BrewingLoaderProps) {
         ].map((s, i) => (
           <div
             key={`s${i}`}
-            className="absolute w-2 h-2 rounded-full animate-[brewSteam_var(--dur)_ease-out_infinite]"
+            className="absolute w-2 h-2 rounded-full"
             style={{
               left: s.left,
               bottom: 70,
-              backgroundColor: 'var(--accent-amber)',
-              opacity: 0,
-              animationDelay: `${s.delay}s`,
-              animationDuration: `${s.dur}s`,
+              backgroundColor: '#e8991f',
+              animation: `brewSteam ${s.dur}s ease-out ${s.delay}s infinite`,
             }}
           />
         ))}

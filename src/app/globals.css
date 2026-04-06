@@ -138,6 +138,12 @@ canvas {
   100% { transform: translateY(-40px) scale(0.3); opacity: 0; }
 }
 
+/* Landing page hero: 4-frame walk cycle strip scroll */
+@keyframes heroSprite {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+
 @keyframes whatsNewFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }

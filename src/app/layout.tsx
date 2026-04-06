@@ -19,8 +19,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'SpriteBrew — Pixel Art Sprite Sheet Generator',
-  description: 'Brew pixel-perfect sprite sheets for your game. Upload, preview, and export to Unity, Godot, GameMaker, RPG Maker, and more.',
+  title: 'SpriteBrew — AI-Powered Pixel Art Sprite Sheets',
+  description: 'Describe a character, pick a moveset, and let AI generate game-ready animations. Upload your own art or create from scratch. Export to Unity, Godot, or GameMaker in one click.',
 };
 
 export default function RootLayout({

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import { usePathname } from 'next/navigation';
 import Sidebar from './Sidebar';
 import Header from './Header';
 
@@ -10,6 +11,12 @@ interface AppShellProps {
 
 export default function AppShell({ children }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const pathname = usePathname();
+
+  // The landing page at / has its own nav and layout — no sidebar/header.
+  if (pathname === '/') {
+    return <>{children}</>;
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">

@@ -14,6 +14,8 @@ import {
   FREE_DAILY_LIMIT,
 } from '@/lib/generationLimits';
 
+// TODO: Migrating to RD direct API will restore Any Animation, 8-Dir Rotation,
+// and add 30+ more styles. See Session 7 plan.
 const STYLES = [
   {
     id: 'four_angle_walking',
@@ -42,24 +44,25 @@ const STYLES = [
     desc: 'Compact sprite animations',
     layout: 'Grid sheet',
   },
-  {
-    id: 'any_animation',
-    name: 'Any Animation',
-    size: '64x64',
-    width: 64,
-    height: 64,
-    desc: 'Custom animation from your prompt',
-    layout: 'Freeform',
-  },
-  {
-    id: '8_dir_rotation',
-    name: '8-Dir Rotation',
-    size: '80x80',
-    width: 80,
-    height: 80,
-    desc: 'Character from 8 rotational angles',
-    layout: '8 angles strip',
-  },
+  // Hidden: returns 422 on Replicate. Will be restored when migrating to RD direct API.
+  // {
+  //   id: 'any_animation',
+  //   name: 'Any Animation',
+  //   size: '64x64',
+  //   width: 64,
+  //   height: 64,
+  //   desc: 'Custom animation from your prompt',
+  //   layout: 'Freeform',
+  // },
+  // {
+  //   id: '8_dir_rotation',
+  //   name: '8-Dir Rotation',
+  //   size: '80x80',
+  //   width: 80,
+  //   height: 80,
+  //   desc: 'Character from 8 rotational angles',
+  //   layout: '8 angles strip',
+  // },
   {
     id: 'vfx',
     name: 'VFX',

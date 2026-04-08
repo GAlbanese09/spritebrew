@@ -31,7 +31,7 @@ const FEATURES = [
   {
     icon: Sparkles,
     title: 'AI Character Generation',
-    desc: 'Describe any character in plain text and get a complete animated sprite sheet. Choose from 6 animation styles.',
+    desc: 'Describe any character in plain text and get a complete animated sprite sheet. 4 animation styles available now, more coming soon.',
     span: 'sm:col-span-2',
   },
   {

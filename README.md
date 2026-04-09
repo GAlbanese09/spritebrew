@@ -152,7 +152,7 @@ Built by [George Albanese](https://github.com/GAlbanese09) — an endpoint autom
 - **[Cloudflare](https://cloudflare.com)** — Pages, KV, and the infrastructure that keeps this running on a hobby budget
 - **[PixiJS](https://pixijs.com)** — the rendering engine behind the animation preview
 - **Claude (Anthropic)** — architect, research partner, prompt writer, rubber duck
-- **George's friend** — the reason this exists in the first place
+- **George's friend** — the reason this exists in the first place [https://github.com/mohammadsalim]
 
 ---
 

@@ -125,9 +125,7 @@ Open [http://localhost:3000](http://localhost:3000) to see the app.
 
 SpriteBrew exists because a friend is building a pixel art game and needed sprite sheets. Making them by hand is brutally slow — every frame, every direction, every animation state, hand-drawn. There had to be a better way.
 
-Built by [George Albanese](https://github.com/GAlbanese09) — an endpoint automation engineer by day, solo indie developer by night. Zero prior web dev experience before March 2026. Built with Claude as architect and co-pilot, session by session, from empty repo to production tool.
-
-If you're curious about the journey, the full build diary lives in the project's internal Confluence (not public — but the commit history tells the story too).
+Built by [George Albanese](https://github.com/GAlbanese09) — an endpoint automation engineer by day, solo indie developer by night. Built with Claude, session by session, from empty repo to production tool.
 
 ---
 

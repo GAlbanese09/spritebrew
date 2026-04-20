@@ -13,10 +13,6 @@ import {
   type StyleCategory,
 } from '@/lib/styleRegistry';
 import {
-  getGenerationCount,
-  incrementGenerationCount,
-  isAtDailyLimit,
-  remainingGenerations,
   isAdminUser,
   FREE_DAILY_LIMIT,
 } from '@/lib/generationLimits';
@@ -71,17 +67,49 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
 
+  // Fetch server-side rate limit status and cache in store + localStorage
+  const fetchLimitStatus = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const token = await getToken();
+      const res = await fetch('/api/generation-limit', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success) {
+        setGenerationCount(data.used, new Date().toISOString().slice(0, 10));
+        // Cache in localStorage for instant display on next load
+        try {
+          localStorage.setItem(
+            `spritebrew_gen_${userId}`,
+            JSON.stringify({ count: data.used, date: new Date().toISOString().slice(0, 10) })
+          );
+        } catch { /* localStorage unavailable */ }
+      }
+    } catch { /* network error — keep cached value */ }
+  }, [userId, getToken, setGenerationCount]);
+
+  // On mount: show cached localStorage count immediately, then fetch server truth
   useEffect(() => {
     if (userId) {
-      const count = getGenerationCount(userId);
-      setGenerationCount(count, new Date().toISOString().slice(0, 10));
+      try {
+        const raw = localStorage.getItem(`spritebrew_gen_${userId}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          const today = new Date().toISOString().slice(0, 10);
+          if (parsed?.date === today) {
+            setGenerationCount(parsed.count, today);
+          }
+        }
+      } catch { /* ignore */ }
+      fetchLimitStatus();
     }
-  }, [userId, setGenerationCount]);
+  }, [userId, setGenerationCount, fetchLimitStatus]);
 
   const isAdmin = isAdminUser(userId);
-  const remaining = remainingGenerations(userId);
-  const atLimit = isAtDailyLimit(userId);
-  void generationCount;
+  const remaining = isAdmin ? Infinity : Math.max(0, FREE_DAILY_LIMIT - generationCount);
+  const atLimit = !isAdmin && generationCount >= FREE_DAILY_LIMIT;
 
   const [prompt, setPrompt] = useState('');
   const [selectedStyleId, setSelectedStyleId] = useState('plus-classic');
@@ -107,13 +135,6 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim() || isGenerating) return;
-
-    if (isAtDailyLimit(userId)) {
-      setGenerationError(
-        `You've used all ${FREE_DAILY_LIMIT} free generations today. Your limit resets tomorrow. Pro plan with unlimited generations coming soon!`
-      );
-      return;
-    }
 
     setGenerating(true);
     setGeneratingAction(null);
@@ -145,8 +166,8 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
       setGeneratedImage(dataUrl, dataUrl);
       setGenerationStyle(selectedStyleId);
-      const newCount = incrementGenerationCount(userId);
-      setGenerationCount(newCount, new Date().toISOString().slice(0, 10));
+      // Refresh rate limit from server (count was already incremented server-side)
+      await fetchLimitStatus();
       onGenerated(dataUrl, prompt.trim(), selectedStyleId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -157,8 +178,8 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     }
   }, [
     prompt, selectedStyle, selectedStyleId, effectiveWidth, effectiveHeight,
-    removeBg, isGenerating, userId, getToken, setGenerating, setGeneratingAction,
-    setGenerationError, setGeneratedImage, setGenerationStyle, setGenerationCount, onGenerated,
+    removeBg, isGenerating, getToken, setGenerating, setGeneratingAction,
+    setGenerationError, setGeneratedImage, setGenerationStyle, fetchLimitStatus, onGenerated,
   ]);
 
   return (

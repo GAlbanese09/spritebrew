@@ -14,10 +14,6 @@ import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import CharacterAutoPrep from './CharacterAutoPrep';
 import {
-  getGenerationCount,
-  incrementGenerationCount,
-  isAtDailyLimit,
-  remainingGenerations,
   isAdminUser,
   FREE_DAILY_LIMIT,
 } from '@/lib/generationLimits';
@@ -67,19 +63,48 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
 
-  // Sync count from localStorage on mount / user change.
+  // Fetch server-side rate limit status and cache in store + localStorage
+  const fetchLimitStatus = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const token = await getToken();
+      const res = await fetch('/api/generation-limit', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success) {
+        setGenerationCount(data.used, new Date().toISOString().slice(0, 10));
+        try {
+          localStorage.setItem(
+            `spritebrew_gen_${userId}`,
+            JSON.stringify({ count: data.used, date: new Date().toISOString().slice(0, 10) })
+          );
+        } catch { /* localStorage unavailable */ }
+      }
+    } catch { /* network error — keep cached value */ }
+  }, [userId, getToken, setGenerationCount]);
+
+  // On mount: show cached localStorage count immediately, then fetch server truth
   useEffect(() => {
     if (userId) {
-      const count = getGenerationCount(userId);
-      const today = new Date().toISOString().slice(0, 10);
-      setGenerationCount(count, today);
+      try {
+        const raw = localStorage.getItem(`spritebrew_gen_${userId}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          const today = new Date().toISOString().slice(0, 10);
+          if (parsed?.date === today) {
+            setGenerationCount(parsed.count, today);
+          }
+        }
+      } catch { /* ignore */ }
+      fetchLimitStatus();
     }
-  }, [userId, setGenerationCount]);
+  }, [userId, setGenerationCount, fetchLimitStatus]);
 
   const isAdmin = isAdminUser(userId);
-  const remaining = remainingGenerations(userId);
-  const atLimit = isAtDailyLimit(userId);
-  void generationCount; // trigger re-render on count change
+  const remaining = isAdmin ? Infinity : Math.max(0, FREE_DAILY_LIMIT - generationCount);
+  const atLimit = !isAdmin && generationCount >= FREE_DAILY_LIMIT;
 
   // Final prepared 64x64 character ready for animation
   const [characterDataUrl, setCharacterDataUrl] = useState<string | null>(null);
@@ -198,14 +223,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const handleGenerate = useCallback(async () => {
     if (!characterDataUrl || isGenerating) return;
 
-    // Client-side daily limit check
-    if (isAtDailyLimit(userId)) {
-      setGenerationError(
-        `You've used all ${FREE_DAILY_LIMIT} free generations today. Your limit resets tomorrow. Pro plan with unlimited generations coming soon!`
-      );
-      return;
-    }
-
     const rgbBase64 = convertToRgbBase64();
     if (!rgbBase64) return;
 
@@ -245,9 +262,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
       setGeneratedImage(dataUrl, dataUrl);
       setGenerationStyle(`any_animation_${selectedAction}`);
-      // Increment daily count (client-side soft limit)
-      const newCount = incrementGenerationCount(userId);
-      setGenerationCount(newCount, new Date().toISOString().slice(0, 10));
+      // Refresh rate limit from server (count was already incremented server-side)
+      await fetchLimitStatus();
       onGenerated(dataUrl, motionPrompt.trim() || selectedAction, `any_animation_${selectedAction}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -258,9 +274,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     }
   }, [
     characterDataUrl, isGenerating, selectedAction, charWidth, charHeight,
-    frameCount, motionPrompt, convertToRgbBase64, userId, getToken,
+    frameCount, motionPrompt, convertToRgbBase64, getToken,
     setGenerating, setGeneratingAction, setGenerationError, setGeneratedImage,
-    setGenerationStyle, setOriginalCharacter, setGenerationCount, onGenerated,
+    setGenerationStyle, setOriginalCharacter, fetchLimitStatus, onGenerated,
   ]);
 
   const sizeWarning = charWidth > 0 && (charWidth !== 64 || charHeight !== 64);

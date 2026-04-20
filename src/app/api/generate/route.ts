@@ -111,12 +111,14 @@ function startHeartbeat(writer: WritableStreamDefaultWriter<Uint8Array>, ms = 15
 
 // ── POST handler ──
 
+import { checkAndIncrementGenerationLimit, decrementGenerationCount } from '@/lib/serverRateLimit';
+
 export async function POST(request: Request) {
   const authResult = getAuthedUserId(request);
   if ('error' in authResult) {
     return Response.json({ success: false, error: authResult.error }, { status: 401 });
   }
-  void authResult.userId;
+  const userId = authResult.userId;
 
   let body: GenerateBody;
   try {
@@ -136,6 +138,18 @@ export async function POST(request: Request) {
     if (err) return Response.json({ success: false, error: err }, { status: 400 });
   }
 
+  // Server-side rate limit (KV-backed, admin bypass, fail-open)
+  const rateResult = await checkAndIncrementGenerationLimit(userId);
+  if (!rateResult.allowed) {
+    return Response.json(
+      {
+        success: false,
+        error: `You've used all ${rateResult.limit} free generations today. Your limit resets tomorrow. Pro plan with unlimited generations coming soon!`,
+      },
+      { status: 429 }
+    );
+  }
+
   // Open SSE stream
   const { readable, writable } = new TransformStream<Uint8Array>();
   const writer = writable.getWriter();
@@ -147,6 +161,8 @@ export async function POST(request: Request) {
       const result = mode === 'animate' ? await runAnimate(body) : await runCreate(body);
       await writer.write(sseEvent({ type: 'result', data: result }));
     } catch (err) {
+      // RD API failure — give back the generation credit
+      await decrementGenerationCount(userId);
       const message = err instanceof Error ? err.message : 'Unknown error';
       await writer.write(sseEvent({ type: 'error', message })).catch(() => {});
     } finally {

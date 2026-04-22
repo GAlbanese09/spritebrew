@@ -10,6 +10,7 @@ import {
   Download,
   Sparkles,
   Images,
+  Coins,
   X,
   LogIn,
 } from 'lucide-react';
@@ -24,6 +25,7 @@ const NAV_ITEMS = [
   { href: '/export', label: 'Export', icon: Download, soon: false },
   { href: '/gallery', label: 'Gallery', icon: Images, soon: false },
   { href: '/generate', label: 'Generate', icon: Sparkles, soon: false },
+  { href: '/buy-tokens', label: 'Buy Tokens', icon: Coins, soon: false },
 ];
 
 interface SidebarProps {
@@ -227,9 +229,9 @@ function TokenBalanceDisplay() {
 
   return (
     <div className="px-2 pt-2">
-      <p className="text-[10px] font-mono text-accent-amber">
+      <Link href="/buy-tokens" className="text-[10px] font-mono text-accent-amber hover:underline transition-colors">
         🪙 {tokenBalance} tokens
-      </p>
+      </Link>
     </div>
   );
 }

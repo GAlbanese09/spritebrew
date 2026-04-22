@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import Link from 'next/link';
 import {
   UploadCloud,
   X,
@@ -272,7 +273,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       const errObj = err as Error & { balance?: number; required?: number };
       if (errObj.balance !== undefined && errObj.required !== undefined) {
         setGenerationError(
-          `You need ${errObj.required} tokens for this animation, but you have ${errObj.balance}. Try a cheaper action or come back tomorrow for more tokens!`
+          `You need ${errObj.required} tokens for this animation, but you have ${errObj.balance}. Try a cheaper action or buy more tokens!`
         );
         setTokenBalance(errObj.balance);
         return;
@@ -523,7 +524,14 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       {generationError && (
         <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3">
           <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
-          <p className="text-xs font-mono text-red-400">{generationError}</p>
+          <p className="text-xs font-mono text-red-400">
+            {generationError.includes('buy more tokens') ? (
+              <>
+                {generationError.replace('buy more tokens!', '')}
+                <Link href="/buy-tokens" className="underline hover:text-red-300">buy more tokens</Link>!
+              </>
+            ) : generationError}
+          </p>
           <button
             onClick={() => setGenerationError(null)}
             className="ml-auto text-red-400 hover:text-red-300 cursor-pointer flex-shrink-0"

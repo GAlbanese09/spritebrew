@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
+import Link from 'next/link';
 import { Sparkles, X, Check, Loader2, AlertCircle } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
@@ -163,7 +164,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       const errObj = err as Error & { balance?: number; required?: number };
       if (errObj.balance !== undefined && errObj.required !== undefined) {
         setGenerationError(
-          `You need ${errObj.required} tokens for this style, but you have ${errObj.balance}. Try a cheaper style or come back tomorrow for more tokens!`
+          `You need ${errObj.required} tokens for this style, but you have ${errObj.balance}. Try a cheaper style or buy more tokens!`
         );
         setTokenBalance(errObj.balance);
         return;
@@ -326,7 +327,14 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       {generationError && (
         <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3">
           <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
-          <p className="text-xs font-mono text-red-400">{generationError}</p>
+          <p className="text-xs font-mono text-red-400">
+            {generationError.includes('buy more tokens') ? (
+              <>
+                {generationError.replace('buy more tokens!', '')}
+                <Link href="/buy-tokens" className="underline hover:text-red-300">buy more tokens</Link>!
+              </>
+            ) : generationError}
+          </p>
           <button
             onClick={() => setGenerationError(null)}
             className="ml-auto text-red-400 hover:text-red-300 cursor-pointer flex-shrink-0"

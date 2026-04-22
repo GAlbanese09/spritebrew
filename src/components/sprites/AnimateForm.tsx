@@ -14,7 +14,6 @@ import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import CharacterAutoPrep from './CharacterAutoPrep';
 import {
-  isAdminUser,
   FREE_DAILY_LIMIT,
 } from '@/lib/generationLimits';
 
@@ -102,9 +101,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     }
   }, [userId, setGenerationCount, fetchLimitStatus]);
 
-  const isAdmin = isAdminUser(userId);
-  const remaining = isAdmin ? Infinity : Math.max(0, FREE_DAILY_LIMIT - generationCount);
-  const atLimit = !isAdmin && generationCount >= FREE_DAILY_LIMIT;
+  const remaining = Math.max(0, FREE_DAILY_LIMIT - generationCount);
+  const atLimit = generationCount >= FREE_DAILY_LIMIT;
 
   // Final prepared 64x64 character ready for animation
   const [characterDataUrl, setCharacterDataUrl] = useState<string | null>(null);
@@ -525,10 +523,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-mono text-text-muted">
           {charWidth > 0 ? `64x64 · ${frameCount} frames` : 'Upload a 64x64 character to begin'}
-          {userId && isAdmin && (
-            <span className="ml-2 text-accent-amber">&middot; ∞ remaining (admin)</span>
-          )}
-          {userId && !isAdmin && (
+          {userId && (
             <span className={`ml-2 ${atLimit ? 'text-red-400' : 'text-accent-amber'}`}>
               &middot; {remaining}/{FREE_DAILY_LIMIT} remaining today
             </span>
@@ -549,11 +544,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             <>
               <Play size={16} />
               Daily limit reached
-            </>
-          ) : isAdmin ? (
-            <>
-              <Play size={16} />
-              Animate Character
             </>
           ) : (
             <>

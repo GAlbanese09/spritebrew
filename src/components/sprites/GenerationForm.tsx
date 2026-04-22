@@ -108,8 +108,8 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   }, [userId, setGenerationCount, fetchLimitStatus]);
 
   const isAdmin = isAdminUser(userId);
-  const remaining = isAdmin ? Infinity : Math.max(0, FREE_DAILY_LIMIT - generationCount);
-  const atLimit = !isAdmin && generationCount >= FREE_DAILY_LIMIT;
+  const remaining = Math.max(0, FREE_DAILY_LIMIT - generationCount);
+  const atLimit = generationCount >= FREE_DAILY_LIMIT;
 
   const [prompt, setPrompt] = useState('');
   const [selectedStyleId, setSelectedStyleId] = useState('plus-classic');
@@ -342,11 +342,11 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       {/* Generate button */}
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-mono text-text-muted">
-          {effectiveWidth}x{effectiveHeight}px &middot; ~${selectedStyle.costPerGeneration.toFixed(2)}
-          {userId && isAdmin && (
-            <span className="ml-2 text-accent-amber">&middot; ∞ remaining (admin)</span>
+          {effectiveWidth}x{effectiveHeight}px
+          {isAdmin && (
+            <span> &middot; ~${selectedStyle.costPerGeneration.toFixed(2)}</span>
           )}
-          {userId && !isAdmin && (
+          {userId && (
             <span className={`ml-2 ${atLimit ? 'text-red-400' : 'text-accent-amber'}`}>
               &middot; {remaining}/{FREE_DAILY_LIMIT} remaining
             </span>
@@ -367,11 +367,6 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
             <>
               <Sparkles size={16} />
               Daily limit reached
-            </>
-          ) : isAdmin ? (
-            <>
-              <Sparkles size={16} />
-              {selectedStyle.isAnimation ? 'Generate Animation' : 'Generate Sprite'}
             </>
           ) : (
             <>

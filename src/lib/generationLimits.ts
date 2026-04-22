@@ -9,18 +9,17 @@
 export const FREE_DAILY_LIMIT = 3;
 
 /**
- * Admin user IDs — bypass the daily generation limit.
+ * Admin user IDs — used for cost display visibility and future admin features.
+ * Admins are subject to the same daily generation limit as everyone else.
  *
- * To find your Clerk userId: sign in on spritebrew.com, open the browser
- * console, and look for the `userId:` log printed by the Generate page.
- * Paste the value here and redeploy.
+ * TODO: George — replace these with your production Clerk userIds
+ * Find at: Clerk Dashboard → Users → click your account → user ID at top
  */
 export const ADMIN_USER_IDS: readonly string[] = [
-  'user_3BtzTR8gHfGDiNXd1G8WFLQvEf2', // George
-  'user_3Bu4G35OOLgpdDmYxtqsnoZfui2', // Admin #2
+  'user_3C34WAUmVRoHvKiyhYSNrMt4dvT',
 ];
 
-/** Is this user an admin with unlimited generations? */
+/** Is this user an admin? (used for cost visibility, not rate limit bypass) */
 export function isAdminUser(userId: string | null | undefined): boolean {
   if (!userId) return false;
   return ADMIN_USER_IDS.includes(userId);

@@ -38,7 +38,7 @@ function EarlyAccessBanner() {
   return (
     <div className="flex items-center gap-3 rounded-lg border border-accent-amber/30 bg-accent-amber-glow px-4 py-2.5">
       <p className="flex-1 text-xs font-mono text-accent-amber">
-        🧪 Early Access — Free users get 5 generations per day. Pro plan coming soon.
+        🧪 Early Access — Free users get 3 generations per day. Pro plan coming soon.
       </p>
       <button
         onClick={handleDismiss}

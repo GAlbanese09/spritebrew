@@ -388,6 +388,12 @@ export default function LandingPage() {
             >
               Contact
             </a>
+            <Link href="/privacy" className="hover:text-[#9a918a] transition-colors">
+              Privacy
+            </Link>
+            <Link href="/terms" className="hover:text-[#9a918a] transition-colors">
+              Terms
+            </Link>
           </div>
           <p className="text-[10px] text-[#5c5550]">
             SpriteBrew {CURRENT_VERSION} &middot; Built by George Albanese

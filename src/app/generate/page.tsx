@@ -6,10 +6,12 @@ import { Show, SignInButton, useAuth } from '@clerk/react';
 import GenerationForm from '@/components/sprites/GenerationForm';
 import AnimateForm from '@/components/sprites/AnimateForm';
 import GenerationResult from '@/components/sprites/GenerationResult';
+import Link from 'next/link';
 import { addToHistory } from '@/lib/generationHistory';
 import { useSpriteStore } from '@/stores/spriteStore';
 
 const EARLY_ACCESS_DISMISS_KEY = 'spritebrew_early_access_dismissed';
+const LIMIT_NOTICE_DISMISS_KEY = 'spritebrew_dismissed_limit_notice';
 
 function EarlyAccessBanner() {
   const [visible, setVisible] = useState(false);
@@ -38,7 +40,7 @@ function EarlyAccessBanner() {
   return (
     <div className="flex items-center gap-3 rounded-lg border border-accent-amber/30 bg-accent-amber-glow px-4 py-2.5">
       <p className="flex-1 text-xs font-mono text-accent-amber">
-        🧪 Early Access — Free users get 3 generations per day. Pro plan coming soon.
+        🧪 Early Access — You get 3 free generations per day. Enjoying SpriteBrew? Pro plan with more generations is coming soon!
       </p>
       <button
         onClick={handleDismiss}
@@ -46,6 +48,51 @@ function EarlyAccessBanner() {
         title="Dismiss"
       >
         <X size={14} />
+      </button>
+    </div>
+  );
+}
+
+function LimitNoticeBanner() {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const dismissed = localStorage.getItem(LIMIT_NOTICE_DISMISS_KEY);
+      setVisible(!dismissed);
+    } catch {
+      setVisible(true);
+    }
+  }, []);
+
+  const handleDismiss = useCallback(() => {
+    try {
+      localStorage.setItem(LIMIT_NOTICE_DISMISS_KEY, '1');
+    } catch {
+      // ignore
+    }
+    setVisible(false);
+  }, []);
+
+  if (!visible) return null;
+
+  return (
+    <div className="flex items-start gap-3 rounded-lg border border-accent-amber/20 bg-accent-amber-glow/50 px-4 py-3">
+      <p className="flex-1 text-[11px] font-mono text-text-secondary leading-relaxed">
+        Thanks for being an early user! Free accounts include 3 AI generations per day.
+        We&apos;re working on a Pro plan with higher limits&nbsp;&mdash;{' '}
+        <Link href="/#pricing" className="text-accent-amber hover:underline">
+          join the waitlist
+        </Link>{' '}
+        to be the first to know.
+      </p>
+      <button
+        onClick={handleDismiss}
+        className="flex-shrink-0 p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"
+        title="Dismiss"
+      >
+        <X size={12} />
       </button>
     </div>
   );
@@ -138,6 +185,7 @@ export default function GeneratePage() {
       {/* Two-column layout — signed-in only */}
       <Show when="signed-in">
       <EarlyAccessBanner />
+      <LimitNoticeBanner />
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Form — left 3/5 */}
         <div className="lg:col-span-3 space-y-4">

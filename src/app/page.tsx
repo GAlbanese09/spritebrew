@@ -281,7 +281,7 @@ export default function LandingPage() {
       </section>
 
       {/* ── Pricing ── */}
-      <section className="px-6 py-16 max-w-3xl mx-auto">
+      <section id="pricing" className="px-6 py-16 max-w-3xl mx-auto">
         <h2 className="font-display text-[10px] text-[#9a918a] uppercase tracking-[0.2em] text-center mb-10">
           Simple pricing. Start free.
         </h2>

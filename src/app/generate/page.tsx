@@ -43,7 +43,7 @@ function EarlyAccessBanner() {
     <div className="flex items-center gap-3 rounded-lg border border-accent-amber/30 bg-accent-amber-glow px-4 py-2.5">
       <p className="flex-1 text-xs font-mono text-accent-amber">
         🧪 Early Access — You have 🪙 {tokenBalance} tokens. Each style costs a different amount. Earn more tokens daily (coming soon) or{' '}
-        <Link href="/buy-tokens" className="underline hover:text-accent-amber-strong">purchase token packs</Link>.
+        <Link href="/buy-tokens" prefetch={false} className="underline hover:text-accent-amber-strong">purchase token packs</Link>.
       </p>
       <button
         onClick={handleDismiss}
@@ -85,7 +85,7 @@ function LimitNoticeBanner() {
       <p className="flex-1 text-[11px] font-mono text-text-secondary leading-relaxed">
         Thanks for being an early user! You received bonus tokens to get started.
         Need more?{' '}
-        <Link href="/buy-tokens" className="text-accent-amber hover:underline">
+        <Link href="/buy-tokens" prefetch={false} className="text-accent-amber hover:underline">
           Purchase token packs
         </Link>{' '}
         — they never expire.

@@ -331,7 +331,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
             {generationError.includes('buy more tokens') ? (
               <>
                 {generationError.replace('buy more tokens!', '')}
-                <Link href="/buy-tokens" className="underline hover:text-red-300">buy more tokens</Link>!
+                <Link href="/buy-tokens" prefetch={false} className="underline hover:text-red-300">buy more tokens</Link>!
               </>
             ) : generationError}
           </p>

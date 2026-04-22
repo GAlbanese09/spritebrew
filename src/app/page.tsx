@@ -339,7 +339,7 @@ export default function LandingPage() {
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
-                Pro — 15,000 for $79.99 <span className="text-green-400">(+100%)</span>
+                Pro — 15,000 for $74.99 <span className="text-green-400">(+100%)</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
@@ -352,6 +352,7 @@ export default function LandingPage() {
             </ul>
             <Link
               href="/buy-tokens"
+              prefetch={false}
               className="block text-center px-4 py-2.5 rounded-lg text-xs font-semibold
                 bg-[#d4871c] text-[#0a0a0a] hover:bg-[#e8991f] transition-colors"
             >
@@ -420,10 +421,10 @@ export default function LandingPage() {
             >
               Contact
             </a>
-            <Link href="/privacy" className="hover:text-[#9a918a] transition-colors">
+            <Link href="/privacy" prefetch={false} className="hover:text-[#9a918a] transition-colors">
               Privacy
             </Link>
-            <Link href="/terms" className="hover:text-[#9a918a] transition-colors">
+            <Link href="/terms" prefetch={false} className="hover:text-[#9a918a] transition-colors">
               Terms
             </Link>
           </div>

@@ -15,6 +15,7 @@ const LIMIT_NOTICE_DISMISS_KEY = 'spritebrew_dismissed_limit_notice';
 
 function EarlyAccessBanner() {
   const [visible, setVisible] = useState(false);
+  const tokenBalance = useSpriteStore((s) => s.tokenBalance);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -40,7 +41,7 @@ function EarlyAccessBanner() {
   return (
     <div className="flex items-center gap-3 rounded-lg border border-accent-amber/30 bg-accent-amber-glow px-4 py-2.5">
       <p className="flex-1 text-xs font-mono text-accent-amber">
-        🧪 Early Access — You get 3 free generations per day. Enjoying SpriteBrew? Pro plan with more generations is coming soon!
+        🧪 Early Access — You have 🪙 {tokenBalance} tokens. Each style costs a different amount. Earn more tokens daily (coming soon) or purchase token packs (coming soon).
       </p>
       <button
         onClick={handleDismiss}
@@ -80,8 +81,8 @@ function LimitNoticeBanner() {
   return (
     <div className="flex items-start gap-3 rounded-lg border border-accent-amber/20 bg-accent-amber-glow/50 px-4 py-3">
       <p className="flex-1 text-[11px] font-mono text-text-secondary leading-relaxed">
-        Thanks for being an early user! Free accounts include 3 AI generations per day.
-        We&apos;re working on a Pro plan with higher limits&nbsp;&mdash;{' '}
+        Thanks for being an early user! You received bonus tokens to get started.
+        We&apos;re working on a Pro plan with token packs&nbsp;&mdash;{' '}
         <Link href="/#pricing" className="text-accent-amber hover:underline">
           join the waitlist
         </Link>{' '}

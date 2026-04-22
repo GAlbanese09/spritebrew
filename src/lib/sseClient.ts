@@ -41,11 +41,18 @@ export async function fetchGenerationSSE(
     body: JSON.stringify(payload),
   });
 
-  // If the response is JSON (validation errors, auth errors), handle directly
+  // If the response is JSON (validation errors, auth errors, insufficient tokens), handle directly
   const contentType = res.headers.get('Content-Type') ?? '';
   if (contentType.includes('application/json')) {
     const data = await res.json();
     if (!data.success) {
+      // For 402 (insufficient tokens), include balance info in the error
+      if (res.status === 402 && data.balance !== undefined) {
+        const err = new Error(data.error || `HTTP ${res.status}`);
+        (err as Error & { balance?: number; required?: number }).balance = data.balance;
+        (err as Error & { balance?: number; required?: number }).required = data.required;
+        throw err;
+      }
       throw new Error(data.error || `HTTP ${res.status}`);
     }
     return data as GenerationSSEResult;

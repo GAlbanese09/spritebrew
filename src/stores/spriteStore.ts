@@ -20,6 +20,7 @@ interface SpriteStore {
   originalCharacterDataUrl: string | null;
   generationCount: number;
   generationCountDate: string;
+  tokenBalance: number;
 
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
@@ -43,6 +44,7 @@ interface SpriteStore {
   setOriginalCharacter: (dataUrl: string | null) => void;
   setGenerationCount: (count: number, date: string) => void;
   setGeneratingAction: (action: string | null) => void;
+  setTokenBalance: (balance: number) => void;
 }
 
 export const useSpriteStore = create<SpriteStore>((set) => ({
@@ -61,6 +63,7 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   originalCharacterDataUrl: null,
   generationCount: 0,
   generationCountDate: '',
+  tokenBalance: 0,
 
   setSpriteSheet: (sheet) =>
     set({ spriteSheet: sheet, selectedFrames: [], animations: [] }),
@@ -161,4 +164,6 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   setGenerationCount: (count, date) => set({ generationCount: count, generationCountDate: date }),
 
   setGeneratingAction: (action) => set({ generatingAction: action }),
+
+  setTokenBalance: (balance) => set({ tokenBalance: balance }),
 }));

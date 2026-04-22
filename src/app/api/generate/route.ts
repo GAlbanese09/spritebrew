@@ -111,7 +111,8 @@ function startHeartbeat(writer: WritableStreamDefaultWriter<Uint8Array>, ms = 15
 
 // ── POST handler ──
 
-import { checkAndIncrementGenerationLimit, decrementGenerationCount } from '@/lib/serverRateLimit';
+import { debitTokens, creditTokens } from '@/lib/tokenBalance';
+import { getTokenCost } from '@/lib/styleRegistry';
 
 export async function POST(request: Request) {
   const authResult = getAuthedUserId(request);
@@ -138,15 +139,29 @@ export async function POST(request: Request) {
     if (err) return Response.json({ success: false, error: err }, { status: 400 });
   }
 
-  // Server-side rate limit (KV-backed, admin bypass, fail-open)
-  const rateResult = await checkAndIncrementGenerationLimit(userId);
-  if (!rateResult.allowed) {
+  // Determine the prompt style and token cost
+  let promptStyle: string;
+  if (mode === 'animate') {
+    promptStyle = ACTION_STYLE_MAP[body.action!] ?? FALLBACK_STYLE;
+  } else {
+    promptStyle = body.promptStyle ?? body.style ?? '';
+  }
+  const tokenCost = getTokenCost(promptStyle);
+
+  // Generate a unique idempotency key for this request
+  const requestId = `gen:${userId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+
+  // Debit tokens before generation
+  const debitResult = await debitTokens(userId, tokenCost, requestId);
+  if (!debitResult.success) {
     return Response.json(
       {
         success: false,
-        error: `You've used all ${rateResult.limit} free generations today. Your limit resets tomorrow. Pro plan with unlimited generations coming soon!`,
+        error: 'Insufficient tokens',
+        balance: debitResult.balance,
+        required: debitResult.required,
       },
-      { status: 429 }
+      { status: 402 }
     );
   }
 
@@ -161,8 +176,9 @@ export async function POST(request: Request) {
       const result = mode === 'animate' ? await runAnimate(body) : await runCreate(body);
       await writer.write(sseEvent({ type: 'result', data: result }));
     } catch (err) {
-      // RD API failure — give back the generation credit
-      await decrementGenerationCount(userId);
+      // RD API failure — refund the tokens
+      const refundKey = `refund:${requestId}`;
+      await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey);
       const message = err instanceof Error ? err.message : 'Unknown error';
       await writer.write(sseEvent({ type: 'error', message })).catch(() => {});
     } finally {

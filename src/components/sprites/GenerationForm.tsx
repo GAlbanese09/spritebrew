@@ -12,10 +12,7 @@ import {
   type GenerationStyle,
   type StyleCategory,
 } from '@/lib/styleRegistry';
-import {
-  isAdminUser,
-  FREE_DAILY_LIMIT,
-} from '@/lib/generationLimits';
+import { isAdminUser } from '@/lib/generationLimits';
 
 const EXAMPLE_PROMPTS = [
   'pixel art knight with sword',
@@ -62,54 +59,42 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const setGenerationError = useSpriteStore((s) => s.setGenerationError);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
-  const setGenerationCount = useSpriteStore((s) => s.setGenerationCount);
-  const generationCount = useSpriteStore((s) => s.generationCount);
+  const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
+  const tokenBalance = useSpriteStore((s) => s.tokenBalance);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
 
-  // Fetch server-side rate limit status and cache in store + localStorage
-  const fetchLimitStatus = useCallback(async () => {
+  // Fetch token balance from server
+  const fetchBalance = useCallback(async () => {
     if (!userId) return;
     try {
       const token = await getToken();
-      const res = await fetch('/api/generation-limit', {
+      const res = await fetch('/api/token-balance', {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
-        setGenerationCount(data.used, new Date().toISOString().slice(0, 10));
-        // Cache in localStorage for instant display on next load
+        setTokenBalance(data.balance);
         try {
-          localStorage.setItem(
-            `spritebrew_gen_${userId}`,
-            JSON.stringify({ count: data.used, date: new Date().toISOString().slice(0, 10) })
-          );
+          localStorage.setItem(`spritebrew_tokens_${userId}`, String(data.balance));
         } catch { /* localStorage unavailable */ }
       }
     } catch { /* network error — keep cached value */ }
-  }, [userId, getToken, setGenerationCount]);
+  }, [userId, getToken, setTokenBalance]);
 
-  // On mount: show cached localStorage count immediately, then fetch server truth
+  // On mount: show cached balance immediately, then fetch server truth
   useEffect(() => {
     if (userId) {
       try {
-        const raw = localStorage.getItem(`spritebrew_gen_${userId}`);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          const today = new Date().toISOString().slice(0, 10);
-          if (parsed?.date === today) {
-            setGenerationCount(parsed.count, today);
-          }
-        }
+        const cached = localStorage.getItem(`spritebrew_tokens_${userId}`);
+        if (cached) setTokenBalance(parseInt(cached, 10));
       } catch { /* ignore */ }
-      fetchLimitStatus();
+      fetchBalance();
     }
-  }, [userId, setGenerationCount, fetchLimitStatus]);
+  }, [userId, setTokenBalance, fetchBalance]);
 
   const isAdmin = isAdminUser(userId);
-  const remaining = Math.max(0, FREE_DAILY_LIMIT - generationCount);
-  const atLimit = generationCount >= FREE_DAILY_LIMIT;
 
   const [prompt, setPrompt] = useState('');
   const [selectedStyleId, setSelectedStyleId] = useState('plus-classic');
@@ -121,6 +106,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     () => getStyleById(selectedStyleId) ?? GENERATION_STYLES[0],
     [selectedStyleId]
   );
+
+  const tokenCost = selectedStyle.tokenCost;
+  const insufficientTokens = tokenBalance < tokenCost;
+  const tokensNeeded = tokenCost - tokenBalance;
 
   // Update dimensions when style changes
   useEffect(() => {
@@ -166,11 +155,19 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
       setGeneratedImage(dataUrl, dataUrl);
       setGenerationStyle(selectedStyleId);
-      // Refresh rate limit from server (count was already incremented server-side)
-      await fetchLimitStatus();
+      // Refresh token balance from server (tokens were already debited server-side)
+      await fetchBalance();
       onGenerated(dataUrl, prompt.trim(), selectedStyleId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
+      const errObj = err as Error & { balance?: number; required?: number };
+      if (errObj.balance !== undefined && errObj.required !== undefined) {
+        setGenerationError(
+          `You need ${errObj.required} tokens for this style, but you have ${errObj.balance}. Try a cheaper style or come back tomorrow for more tokens!`
+        );
+        setTokenBalance(errObj.balance);
+        return;
+      }
       setGenerationError(`Connection failed — ${msg}`);
     } finally {
       setGenerating(false);
@@ -178,8 +175,8 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     }
   }, [
     prompt, selectedStyle, selectedStyleId, effectiveWidth, effectiveHeight,
-    removeBg, isGenerating, getToken, setGenerating, setGeneratingAction,
-    setGenerationError, setGeneratedImage, setGenerationStyle, fetchLimitStatus, onGenerated,
+    removeBg, isGenerating, tokenCost, getToken, setGenerating, setGeneratingAction,
+    setGenerationError, setGeneratedImage, setGenerationStyle, setTokenBalance, fetchBalance, onGenerated,
   ]);
 
   return (
@@ -342,36 +339,37 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       {/* Generate button */}
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-mono text-text-muted">
-          {effectiveWidth}x{effectiveHeight}px
+          {effectiveWidth}x{effectiveHeight}px &middot; {tokenCost} tokens
           {isAdmin && (
             <span> &middot; ~${selectedStyle.costPerGeneration.toFixed(2)}</span>
           )}
           {userId && (
-            <span className={`ml-2 ${atLimit ? 'text-red-400' : 'text-accent-amber'}`}>
-              &middot; {remaining}/{FREE_DAILY_LIMIT} remaining
+            <span className={`ml-2 ${insufficientTokens ? 'text-red-400' : 'text-accent-amber'}`}>
+              &middot; Balance: {tokenBalance} 🪙
             </span>
           )}
         </p>
         <Button
           size="lg"
           onClick={handleGenerate}
-          disabled={!prompt.trim() || isGenerating || atLimit}
-          className={!isGenerating && prompt.trim() && !atLimit ? 'animate-pulse' : ''}
+          disabled={!prompt.trim() || isGenerating || insufficientTokens}
+          className={!isGenerating && prompt.trim() && !insufficientTokens ? 'animate-pulse' : ''}
+          title={insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
         >
           {isGenerating ? (
             <>
               <Loader2 size={16} className="animate-spin" />
               Brewing...
             </>
-          ) : atLimit ? (
+          ) : insufficientTokens ? (
             <>
               <Sparkles size={16} />
-              Daily limit reached
+              Need {tokensNeeded} more 🪙
             </>
           ) : (
             <>
               <Sparkles size={16} />
-              {selectedStyle.isAnimation ? 'Generate Animation' : 'Generate'} ({remaining}/{FREE_DAILY_LIMIT})
+              {selectedStyle.isAnimation ? 'Generate Animation' : 'Generate Sprite'} ({tokenCost} 🪙)
             </>
           )}
         </Button>

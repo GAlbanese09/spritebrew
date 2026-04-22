@@ -1,5 +1,6 @@
 'use client';
 
+import { useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -12,8 +13,9 @@ import {
   X,
   LogIn,
 } from 'lucide-react';
-import { Show, SignInButton, useClerk, useUser } from '@clerk/react';
+import { Show, SignInButton, useClerk, useUser, useAuth } from '@clerk/react';
 import Badge from '@/components/ui/Badge';
+import { useSpriteStore } from '@/stores/spriteStore';
 
 const NAV_ITEMS = [
   { href: '/', label: 'Home', icon: Home, soon: false },
@@ -112,6 +114,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           </Show>
           <Show when="signed-in">
             <UserIdentity />
+            <TokenBalanceDisplay />
           </Show>
         </div>
 
@@ -184,6 +187,49 @@ function UserIdentity() {
       >
         Sign out
       </button>
+    </div>
+  );
+}
+
+/** Token balance indicator — fetches on mount and shows in sidebar. */
+function TokenBalanceDisplay() {
+  const { userId, getToken } = useAuth();
+  const tokenBalance = useSpriteStore((s) => s.tokenBalance);
+  const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
+
+  const fetchBalance = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const token = await getToken();
+      const res = await fetch('/api/token-balance', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success) {
+        setTokenBalance(data.balance);
+        try { localStorage.setItem(`spritebrew_tokens_${userId}`, String(data.balance)); } catch { /* */ }
+      }
+    } catch { /* */ }
+  }, [userId, getToken, setTokenBalance]);
+
+  useEffect(() => {
+    if (userId) {
+      try {
+        const cached = localStorage.getItem(`spritebrew_tokens_${userId}`);
+        if (cached) setTokenBalance(parseInt(cached, 10));
+      } catch { /* */ }
+      fetchBalance();
+    }
+  }, [userId, setTokenBalance, fetchBalance]);
+
+  if (!userId) return null;
+
+  return (
+    <div className="px-2 pt-2">
+      <p className="text-[10px] font-mono text-accent-amber">
+        🪙 {tokenBalance} tokens
+      </p>
     </div>
   );
 }

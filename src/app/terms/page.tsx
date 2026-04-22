@@ -31,10 +31,12 @@ export default function TermsPage() {
         <section>
           <h2 className="text-sm font-display text-text-primary mb-3">Free Tier</h2>
           <p>
-            Free accounts get 3 AI generations per day. This limit resets daily. We reserve the
-            right to adjust the free tier limit at any time to manage costs. Abuse of the free tier
-            (including creating multiple accounts to circumvent limits) may result in account
-            suspension.
+            Free accounts receive a one-time signup bonus of tokens and can earn additional tokens
+            through daily rewards (coming soon). Different AI styles cost different token
+            amounts&nbsp;&mdash; simpler styles cost fewer tokens, premium styles cost more. Tokens do
+            not expire. We reserve the right to adjust token grants and costs at any time to manage
+            costs. Abuse of the free tier (including creating multiple accounts to earn multiple
+            signup bonuses) may result in account suspension.
           </p>
         </section>
 

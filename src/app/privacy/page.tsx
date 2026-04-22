@@ -25,8 +25,9 @@ export default function PrivacyPage() {
             <p>
               <strong className="text-text-primary">Generation Data:</strong> When you generate
               sprites, we store the generated images in your browser&apos;s local session so you can
-              access your gallery. We also store a daily generation count (your user ID and the date)
-              in Cloudflare KV to enforce free tier limits. This count auto-deletes after 48 hours.
+              access your gallery. We store your token balance and a log of token transactions
+              (credits and debits with timestamps) in Cloudflare KV. Transaction records are
+              automatically deleted after 90 days. Your token balance persists indefinitely.
             </p>
             <p>
               <strong className="text-text-primary">Waitlist:</strong> If you join the Pro waitlist,
@@ -84,8 +85,8 @@ export default function PrivacyPage() {
           <h2 className="text-sm font-display text-text-primary mb-3">Data Retention</h2>
           <ul className="space-y-2 list-none">
             <li>
-              <strong className="text-text-primary">Generation counts:</strong> Auto-deleted after
-              48 hours.
+              <strong className="text-text-primary">Token balances:</strong> Retained indefinitely.
+              Transaction records auto-deleted after 90 days.
             </li>
             <li>
               <strong className="text-text-primary">Waitlist emails:</strong> Retained until you

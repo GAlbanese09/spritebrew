@@ -10,13 +10,16 @@ import GenerationResult from '@/components/sprites/GenerationResult';
 import Link from 'next/link';
 import { addToHistory } from '@/lib/generationHistory';
 import { useSpriteStore } from '@/stores/spriteStore';
+import { isAdminUser } from '@/lib/generationLimits';
 
 const EARLY_ACCESS_DISMISS_KEY = 'spritebrew_early_access_dismissed';
 const LIMIT_NOTICE_DISMISS_KEY = 'spritebrew_dismissed_limit_notice';
 
 function EarlyAccessBanner() {
+  const { userId } = useAuth();
   const [visible, setVisible] = useState(false);
   const tokenBalance = useSpriteStore((s) => s.tokenBalance);
+  const isAdmin = isAdminUser(userId);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -43,7 +46,11 @@ function EarlyAccessBanner() {
     <div className="flex items-center gap-3 rounded-lg border border-accent-amber/30 bg-accent-amber-glow px-4 py-2.5">
       <p className="flex-1 text-xs font-mono text-accent-amber">
         🧪 Early Access — You have 🪙 {tokenBalance} tokens. Each style costs a different amount. Earn more tokens daily (coming soon) or{' '}
-        <Link href="/buy-tokens" className="underline hover:text-accent-amber-strong">purchase token packs</Link>.
+        {isAdmin ? (
+          <Link href="/buy-tokens" className="underline hover:text-accent-amber-strong">purchase token packs</Link>
+        ) : (
+          <span>purchase token packs (coming soon)</span>
+        )}.
       </p>
       <button
         onClick={handleDismiss}

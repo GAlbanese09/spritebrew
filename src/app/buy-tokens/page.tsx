@@ -7,6 +7,7 @@ import { Loader2, LogIn } from 'lucide-react';
 import { Show, SignInButton, useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { TOKEN_PACKS } from '@/lib/tokenPacks';
+import { isAdminUser } from '@/lib/generationLimits';
 import Button from '@/components/ui/Button';
 
 export default function BuyTokensPage() {
@@ -87,6 +88,17 @@ export default function BuyTokensPage() {
       </Show>
 
       <Show when="signed-in">
+        {!isAdminUser(userId) ? (
+          <div className="max-w-md mx-auto rounded-lg border border-border-default bg-bg-surface p-10 text-center">
+            <p className="text-lg mb-2">🪙</p>
+            <p className="text-sm font-mono text-text-secondary mb-2">
+              Token packs coming soon!
+            </p>
+            <p className="text-xs font-mono text-text-muted">
+              You&apos;ll be the first to know.
+            </p>
+          </div>
+        ) : (<>
         {/* Current balance */}
         <div className="rounded-lg border border-border-default bg-bg-surface px-5 py-4">
           <p className="text-xs font-mono text-text-muted uppercase tracking-wider mb-1">Current Balance</p>
@@ -168,6 +180,7 @@ export default function BuyTokensPage() {
         <p className="text-center text-[10px] font-mono text-text-muted">
           Tokens never expire &middot; Secure checkout by Stripe &middot; Commercial use license included
         </p>
+        </>)}
       </Show>
     </div>
   );

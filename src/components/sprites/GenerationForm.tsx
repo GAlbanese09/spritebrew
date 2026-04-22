@@ -331,7 +331,11 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
             {generationError.includes('buy more tokens') ? (
               <>
                 {generationError.replace('buy more tokens!', '')}
-                <Link href="/buy-tokens" className="underline hover:text-red-300">buy more tokens</Link>!
+                {isAdmin ? (
+                  <Link href="/buy-tokens" className="underline hover:text-red-300">buy more tokens</Link>
+                ) : (
+                  <span>token packs coming soon</span>
+                )}!
               </>
             ) : generationError}
           </p>

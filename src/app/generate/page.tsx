@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Sparkles, Play, LogIn, X, CheckCircle } from 'lucide-react';
 import { Show, SignInButton, useAuth } from '@clerk/react';
@@ -101,28 +101,17 @@ function LimitNoticeBanner() {
   );
 }
 
-type GenerateTab = 'create' | 'animate';
-
-export default function GeneratePage() {
-  const { userId, getToken } = useAuth();
+function PurchaseStatusContent() {
   const searchParams = useSearchParams();
-  const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
-  const setAnimateMode = useSpriteStore((s) => s.setAnimateMode);
+  const { userId, getToken } = useAuth();
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
+  const [status, setStatus] = useState<'success' | 'cancelled' | null>(null);
 
-  const [tab, setTab] = useState<GenerateTab>('create');
-  const [showForm, setShowForm] = useState(true);
-  const [purchaseStatus, setPurchaseStatus] = useState<'success' | 'cancelled' | null>(null);
-  const prevDataUrl = useRef(generatedImageDataUrl);
-
-  // Handle ?purchase=success or ?purchase=cancelled from Stripe redirect
   useEffect(() => {
     const purchase = searchParams.get('purchase');
     if (purchase === 'success' || purchase === 'cancelled') {
-      setPurchaseStatus(purchase);
-      // Clean the URL
+      setStatus(purchase);
       window.history.replaceState({}, '', '/generate');
-      // Re-fetch token balance on success
       if (purchase === 'success' && userId) {
         (async () => {
           try {
@@ -138,6 +127,47 @@ export default function GeneratePage() {
       }
     }
   }, [searchParams, userId, getToken, setTokenBalance]);
+
+  if (status === 'success') {
+    return (
+      <div className="flex items-center gap-3 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-2.5">
+        <CheckCircle size={14} className="text-green-400 flex-shrink-0" />
+        <p className="flex-1 text-xs font-mono text-green-400">
+          Payment received! Your tokens have been credited.
+        </p>
+        <button onClick={() => setStatus(null)} className="p-1 rounded text-green-400/70 hover:text-green-400 cursor-pointer">
+          <X size={14} />
+        </button>
+      </div>
+    );
+  }
+
+  if (status === 'cancelled') {
+    return (
+      <div className="flex items-center gap-3 rounded-lg border border-border-default bg-bg-surface px-4 py-2.5">
+        <p className="flex-1 text-xs font-mono text-text-muted">
+          Purchase cancelled. No charges were made.
+        </p>
+        <button onClick={() => setStatus(null)} className="p-1 rounded text-text-muted hover:text-text-primary cursor-pointer">
+          <X size={14} />
+        </button>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+type GenerateTab = 'create' | 'animate';
+
+export default function GeneratePage() {
+  const { userId } = useAuth();
+  const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
+  const setAnimateMode = useSpriteStore((s) => s.setAnimateMode);
+
+  const [tab, setTab] = useState<GenerateTab>('create');
+  const [showForm, setShowForm] = useState(true);
+  const prevDataUrl = useRef(generatedImageDataUrl);
 
   useEffect(() => {
     if (generatedImageDataUrl && generatedImageDataUrl !== prevDataUrl.current) {
@@ -214,33 +244,9 @@ export default function GeneratePage() {
 
       {/* Two-column layout — signed-in only */}
       <Show when="signed-in">
-      {purchaseStatus === 'success' && (
-        <div className="flex items-center gap-3 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-2.5">
-          <CheckCircle size={14} className="text-green-400 flex-shrink-0" />
-          <p className="flex-1 text-xs font-mono text-green-400">
-            Payment received! Your tokens have been credited.
-          </p>
-          <button
-            onClick={() => setPurchaseStatus(null)}
-            className="p-1 rounded text-green-400/70 hover:text-green-400 cursor-pointer"
-          >
-            <X size={14} />
-          </button>
-        </div>
-      )}
-      {purchaseStatus === 'cancelled' && (
-        <div className="flex items-center gap-3 rounded-lg border border-border-default bg-bg-surface px-4 py-2.5">
-          <p className="flex-1 text-xs font-mono text-text-muted">
-            Purchase cancelled. No charges were made.
-          </p>
-          <button
-            onClick={() => setPurchaseStatus(null)}
-            className="p-1 rounded text-text-muted hover:text-text-primary cursor-pointer"
-          >
-            <X size={14} />
-          </button>
-        </div>
-      )}
+      <Suspense fallback={null}>
+        <PurchaseStatusContent />
+      </Suspense>
       <EarlyAccessBanner />
       <LimitNoticeBanner />
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">

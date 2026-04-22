@@ -15,7 +15,6 @@ import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import CharacterAutoPrep from './CharacterAutoPrep';
 import { getTokenCost } from '@/lib/styleRegistry';
-import { isAdminUser } from '@/lib/generationLimits';
 
 const ACTIONS = [
   { id: 'walking', name: 'Walk', desc: 'Walking cycle animation' },
@@ -73,7 +72,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const tokenBalance = useSpriteStore((s) => s.tokenBalance);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
-  const isAdmin = isAdminUser(userId);
 
   // Fetch token balance from server
   const fetchBalance = useCallback(async () => {
@@ -530,11 +528,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             {generationError.includes('buy more tokens') ? (
               <>
                 {generationError.replace('buy more tokens!', '')}
-                {isAdmin ? (
-                  <Link href="/buy-tokens" className="underline hover:text-red-300">buy more tokens</Link>
-                ) : (
-                  <span>token packs coming soon</span>
-                )}!
+                <Link href="/buy-tokens" className="underline hover:text-red-300">buy more tokens</Link>!
               </>
             ) : generationError}
           </p>

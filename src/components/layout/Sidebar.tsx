@@ -17,16 +17,15 @@ import {
 import { Show, SignInButton, useClerk, useUser, useAuth } from '@clerk/react';
 import Badge from '@/components/ui/Badge';
 import { useSpriteStore } from '@/stores/spriteStore';
-import { isAdminUser } from '@/lib/generationLimits';
 
 const NAV_ITEMS = [
-  { href: '/', label: 'Home', icon: Home, soon: false, adminOnly: false },
-  { href: '/upload', label: 'Upload', icon: UploadCloud, soon: false, adminOnly: false },
-  { href: '/preview', label: 'Preview', icon: PlayCircle, soon: false, adminOnly: false },
-  { href: '/export', label: 'Export', icon: Download, soon: false, adminOnly: false },
-  { href: '/gallery', label: 'Gallery', icon: Images, soon: false, adminOnly: false },
-  { href: '/generate', label: 'Generate', icon: Sparkles, soon: false, adminOnly: false },
-  { href: '/buy-tokens', label: 'Buy Tokens', icon: Coins, soon: false, adminOnly: true },
+  { href: '/', label: 'Home', icon: Home, soon: false },
+  { href: '/upload', label: 'Upload', icon: UploadCloud, soon: false },
+  { href: '/preview', label: 'Preview', icon: PlayCircle, soon: false },
+  { href: '/export', label: 'Export', icon: Download, soon: false },
+  { href: '/gallery', label: 'Gallery', icon: Images, soon: false },
+  { href: '/generate', label: 'Generate', icon: Sparkles, soon: false },
+  { href: '/buy-tokens', label: 'Buy Tokens', icon: Coins, soon: false },
 ];
 
 interface SidebarProps {
@@ -36,8 +35,6 @@ interface SidebarProps {
 
 export default function Sidebar({ open, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const { userId } = useAuth();
-  const isAdmin = isAdminUser(userId);
 
   return (
     <>
@@ -76,7 +73,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
 
         {/* Nav links */}
         <nav className="flex-1 px-3 py-4 space-y-1">
-          {NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin).map(({ href, label, icon: Icon, soon }) => {
+          {NAV_ITEMS.map(({ href, label, icon: Icon, soon }) => {
             const active = pathname === href;
             return (
               <Link

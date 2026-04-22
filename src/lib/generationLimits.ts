@@ -6,7 +6,7 @@
  * source of truth via GET /api/generation-limit.
  */
 
-export const FREE_DAILY_LIMIT = 5;
+export const FREE_DAILY_LIMIT = 3;
 
 /**
  * Admin user IDs — bypass the daily generation limit.

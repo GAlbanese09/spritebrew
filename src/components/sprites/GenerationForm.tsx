@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import Link from 'next/link';
 import { Sparkles, X, Check, Loader2, AlertCircle } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
@@ -331,7 +330,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
             {generationError.includes('buy more tokens') ? (
               <>
                 {generationError.replace('buy more tokens!', '')}
-                <Link href="/buy-tokens" prefetch={false} className="underline hover:text-red-300">buy more tokens</Link>!
+                <a href="/buy-tokens" className="underline hover:text-red-300">buy more tokens</a>!
               </>
             ) : generationError}
           </p>

@@ -75,13 +75,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         <nav className="flex-1 px-3 py-4 space-y-1">
           {NAV_ITEMS.map(({ href, label, icon: Icon, soon }) => {
             const active = pathname === href;
-            return (
-              <Link
-                key={href}
-                href={soon ? '#' : href}
-                prefetch={href === '/buy-tokens' ? false : undefined}
-                onClick={soon ? (e) => e.preventDefault() : onClose}
-                className={`
+            const className = `
                   flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-mono
                   transition-all duration-150 group
                   ${active
@@ -90,14 +84,35 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                       ? 'text-text-muted cursor-default'
                       : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
                   }
-                `}
-              >
+                `;
+            const children = (
+              <>
                 <Icon
                   size={18}
                   className={active ? 'text-accent-amber' : soon ? 'text-text-muted' : 'text-text-muted group-hover:text-text-secondary'}
                 />
                 <span className="flex-1">{label}</span>
                 {soon && <Badge variant="muted">Soon</Badge>}
+              </>
+            );
+
+            // /buy-tokens uses <a> to avoid Next.js RSC prefetch 404s on Cloudflare
+            if (href === '/buy-tokens') {
+              return (
+                <a key={href} href={href} onClick={onClose} className={className}>
+                  {children}
+                </a>
+              );
+            }
+
+            return (
+              <Link
+                key={href}
+                href={soon ? '#' : href}
+                onClick={soon ? (e) => e.preventDefault() : onClose}
+                className={className}
+              >
+                {children}
               </Link>
             );
           })}
@@ -127,13 +142,13 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             SpriteBrew v0.2.0
           </p>
           <div className="flex gap-2 text-[9px] font-mono">
-            <Link href="/privacy" prefetch={false} onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
+            <a href="/privacy" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
               Privacy
-            </Link>
+            </a>
             <span className="text-text-muted/40">&middot;</span>
-            <Link href="/terms" prefetch={false} onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
+            <a href="/terms" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
               Terms
-            </Link>
+            </a>
           </div>
         </div>
       </aside>
@@ -230,9 +245,9 @@ function TokenBalanceDisplay() {
 
   return (
     <div className="px-2 pt-2">
-      <Link href="/buy-tokens" prefetch={false} className="text-[10px] font-mono text-accent-amber hover:underline transition-colors">
+      <a href="/buy-tokens" className="text-[10px] font-mono text-accent-amber hover:underline transition-colors">
         🪙 {tokenBalance} tokens
-      </Link>
+      </a>
     </div>
   );
 }

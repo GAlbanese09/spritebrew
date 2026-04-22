@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import Link from 'next/link';
 import {
   UploadCloud,
   X,
@@ -528,7 +527,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             {generationError.includes('buy more tokens') ? (
               <>
                 {generationError.replace('buy more tokens!', '')}
-                <Link href="/buy-tokens" prefetch={false} className="underline hover:text-red-300">buy more tokens</Link>!
+                <a href="/buy-tokens" className="underline hover:text-red-300">buy more tokens</a>!
               </>
             ) : generationError}
           </p>

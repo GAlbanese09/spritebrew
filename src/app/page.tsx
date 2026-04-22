@@ -350,14 +350,13 @@ export default function LandingPage() {
                 Commercial use included
               </li>
             </ul>
-            <Link
+            <a
               href="/buy-tokens"
-              prefetch={false}
               className="block text-center px-4 py-2.5 rounded-lg text-xs font-semibold
                 bg-[#d4871c] text-[#0a0a0a] hover:bg-[#e8991f] transition-colors"
             >
               See Pack Options
-            </Link>
+            </a>
           </div>
           {/* Pixel Pass */}
           <div className="rounded-xl border border-[#1e1b18] bg-[#121010] p-6 space-y-4">
@@ -421,12 +420,12 @@ export default function LandingPage() {
             >
               Contact
             </a>
-            <Link href="/privacy" prefetch={false} className="hover:text-[#9a918a] transition-colors">
+            <a href="/privacy" className="hover:text-[#9a918a] transition-colors">
               Privacy
-            </Link>
-            <Link href="/terms" prefetch={false} className="hover:text-[#9a918a] transition-colors">
+            </a>
+            <a href="/terms" className="hover:text-[#9a918a] transition-colors">
               Terms
-            </Link>
+            </a>
           </div>
           <p className="text-[10px] text-[#5c5550]">
             SpriteBrew {CURRENT_VERSION} &middot; Built by George Albanese

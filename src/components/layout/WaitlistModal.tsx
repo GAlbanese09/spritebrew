@@ -109,7 +109,7 @@ export default function WaitlistModal({ open, onClose, onJoined }: WaitlistModal
               You&apos;re on the list!
             </h3>
             <p className="text-xs font-mono text-[#9a918a]">
-              We&apos;ll be in touch when Pro launches.
+              We&apos;ll be in touch when Pixel Pass launches.
             </p>
           </div>
         ) : (
@@ -117,10 +117,10 @@ export default function WaitlistModal({ open, onClose, onJoined }: WaitlistModal
           <>
             <div>
               <h3 className="text-sm font-mono font-semibold text-[#e8e0d6]">
-                Get notified when Pro launches
+                Get notified when Pixel Pass launches
               </h3>
               <p className="text-xs font-mono text-[#9a918a] mt-1">
-                We&apos;ll email you when unlimited generations are available. No spam.
+                We&apos;ll email you when the Pixel Pass subscription launches. No spam.
               </p>
             </div>
 

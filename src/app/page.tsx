@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Show, SignInButton } from '@clerk/react';
-import WaitlistModal, { hasJoinedWaitlist } from '@/components/layout/WaitlistModal';
+// WaitlistModal kept for potential future use but no longer opened from pricing
 import {
   Sparkles,
   Upload,
@@ -13,6 +13,8 @@ import {
   Download,
   ArrowRight,
   ChevronDown,
+  Loader2,
+  Check,
 } from 'lucide-react';
 
 /** Simple GitHub mark SVG — lucide-react doesn't include a GitHub icon. */
@@ -96,13 +98,6 @@ const ENGINES = [
 // ── Component ──
 
 export default function LandingPage() {
-  const [waitlistOpen, setWaitlistOpen] = useState(false);
-  const [joined, setJoined] = useState(false);
-
-  // Check localStorage on mount for previously joined state
-  useEffect(() => {
-    setJoined(hasJoinedWaitlist());
-  }, []);
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-[#e8e0d6] font-mono overflow-x-hidden">
@@ -191,7 +186,7 @@ export default function LandingPage() {
           </a>
         </div>
         <p className="mt-4 text-[10px] font-mono text-[#5c5550]">
-          Free during Early Access &middot; No credit card required
+          100 free tokens on signup &middot; No credit card required
         </p>
       </section>
 
@@ -281,29 +276,29 @@ export default function LandingPage() {
       </section>
 
       {/* ── Pricing ── */}
-      <section id="pricing" className="px-6 py-16 max-w-3xl mx-auto">
+      <section id="pricing" className="px-6 py-16 max-w-5xl mx-auto">
         <h2 className="font-display text-[10px] text-[#9a918a] uppercase tracking-[0.2em] text-center mb-10">
           Simple pricing. Start free.
         </h2>
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-3">
           {/* Free tier */}
           <div className="rounded-xl border border-[#d4871c]/30 bg-[#121010] p-6 space-y-4">
             <div>
               <h3 className="text-sm font-semibold text-[#d4871c]">Free</h3>
               <p className="text-[10px] text-[#5c5550] uppercase tracking-wider mt-0.5">
-                Early Access
+                Get Started
               </p>
             </div>
             <ul className="space-y-2 text-xs text-[#9a918a]">
               {[
-                '5 AI generations per day',
-                'Unlimited sprite slicing',
-                'Unlimited exports (all 6 formats)',
-                'Pixel editor',
-                'Background removal',
+                '100 bonus tokens on signup',
+                '200 tokens for early adopters',
+                'All editing tools free forever',
+                'Sprite slicer, pixel editor, BG removal',
+                '6 export formats',
               ].map((item) => (
-                <li key={item} className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-[#d4871c]" />
+                <li key={item} className="flex items-start gap-2">
+                  <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
                   {item}
                 </li>
               ))}
@@ -316,42 +311,79 @@ export default function LandingPage() {
               Start Free
             </Link>
           </div>
-          {/* Pro tier */}
-          <div className="rounded-xl border border-[#1e1b18] bg-[#121010] p-6 space-y-4 opacity-70">
+          {/* Token Packs */}
+          <div className="relative rounded-xl border border-[#d4871c] bg-[#121010] p-6 space-y-4"
+            style={{ boxShadow: '0 0 30px rgba(212,135,28,0.1)' }}>
+            <div className="absolute -top-2.5 left-4 px-2 py-0.5 rounded text-[8px] font-mono font-semibold
+              bg-[#d4871c] text-[#0a0a0a] uppercase tracking-wider">
+              Most Popular
+            </div>
             <div>
-              <h3 className="text-sm font-semibold">Pro</h3>
+              <h3 className="text-sm font-semibold text-[#d4871c]">Token Packs</h3>
+              <p className="text-[10px] text-[#5c5550] uppercase tracking-wider mt-0.5">
+                Pay as You Go
+              </p>
+            </div>
+            <ul className="space-y-2 text-xs text-[#9a918a]">
+              <li className="flex items-start gap-2">
+                <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
+                Starter — 500 tokens for $4.99
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
+                Creator — 1,800 for $14.99 <span className="text-green-400">(+20%)</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
+                Studio — 4,500 for $29.99 <span className="text-green-400">(+50%)</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
+                Pro — 15,000 for $79.99 <span className="text-green-400">(+100%)</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
+                Tokens never expire
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
+                Commercial use included
+              </li>
+            </ul>
+            <Link
+              href="/buy-tokens"
+              className="block text-center px-4 py-2.5 rounded-lg text-xs font-semibold
+                bg-[#d4871c] text-[#0a0a0a] hover:bg-[#e8991f] transition-colors"
+            >
+              See Pack Options
+            </Link>
+          </div>
+          {/* Pixel Pass */}
+          <div className="rounded-xl border border-[#1e1b18] bg-[#121010] p-6 space-y-4">
+            <div>
+              <h3 className="text-sm font-semibold">Pixel Pass</h3>
               <p className="text-[10px] text-[#5c5550] uppercase tracking-wider mt-0.5">
                 Coming Soon
               </p>
             </div>
             <ul className="space-y-2 text-xs text-[#9a918a]">
               {[
-                'Unlimited AI generations',
-                'Priority generation queue',
-                'Higher resolution support',
+                '1,500 tokens per month',
+                '+5 bonus tokens every day you generate',
+                'Priority support',
+                '$9/month',
               ].map((item) => (
-                <li key={item} className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-[#5c5550]" />
+                <li key={item} className="flex items-start gap-2">
+                  <span className="w-1 h-1 rounded-full bg-[#5c5550] mt-1.5 flex-shrink-0" />
                   {item}
                 </li>
               ))}
             </ul>
-            <button
-              onClick={() => !joined && setWaitlistOpen(true)}
-              disabled={joined}
-              className={`block w-full text-center px-4 py-2.5 rounded-lg text-xs font-mono
-                transition-colors ${
-                  joined
-                    ? 'border border-green-500/30 text-green-400 cursor-default'
-                    : 'border border-[#d4871c]/30 text-[#d4871c] hover:bg-[#d4871c]/10 cursor-pointer'
-                }`}
-            >
-              {joined ? 'On the Waitlist \u2713' : 'Join Waitlist'}
-            </button>
+            <PixelPassWaitlist />
           </div>
         </div>
         <p className="text-center text-[10px] text-[#5c5550] mt-4">
-          All free tools work without an account. AI generation requires sign-up.
+          All editing tools work without an account. AI generation requires sign-up. Commercial use included with every generation.
         </p>
       </section>
 
@@ -401,17 +433,94 @@ export default function LandingPage() {
         </div>
       </footer>
 
-      {/* Waitlist modal */}
-      <WaitlistModal
-        open={waitlistOpen}
-        onClose={() => setWaitlistOpen(false)}
-        onJoined={() => setJoined(true)}
-      />
     </div>
   );
 }
 
 // ── Sub-components ──
+
+const PIXEL_PASS_JOINED_KEY = 'spritebrew_pixel_pass_joined';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Inline waitlist signup for the Pixel Pass card. */
+function PixelPassWaitlist() {
+  const [email, setEmail] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(PIXEL_PASS_JOINED_KEY) === 'true') setSuccess(true);
+    } catch { /* */ }
+  }, []);
+
+  const handleSubmit = useCallback(async () => {
+    setError(null);
+    const trimmed = email.trim();
+    if (!trimmed || !EMAIL_RE.test(trimmed)) {
+      setError('Please enter a valid email.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch('/api/waitlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: trimmed, source: 'pixel_pass' }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setError(data.error || 'Something went wrong.');
+        return;
+      }
+      setSuccess(true);
+      try { localStorage.setItem(PIXEL_PASS_JOINED_KEY, 'true'); } catch { /* */ }
+    } catch {
+      setError('Connection failed. Try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  }, [email]);
+
+  if (success) {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-green-500/30 text-green-400 text-xs font-mono">
+        <Check size={14} />
+        We&apos;ll notify you!
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-1.5">
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !submitting) handleSubmit(); }}
+          placeholder="your@email.com"
+          className="flex-1 min-w-0 rounded-lg border px-3 py-2 text-xs font-mono
+            text-[#e8e0d6] placeholder:text-[#5c5550]
+            focus:outline-none focus:border-[#d4871c] transition-colors"
+          style={{ backgroundColor: '#2a2420', borderColor: error ? '#ef4444' : '#3a3430' }}
+        />
+        <button
+          onClick={handleSubmit}
+          disabled={submitting}
+          className="px-3 py-2 rounded-lg text-xs font-mono font-semibold
+            border border-[#d4871c]/30 text-[#d4871c] hover:bg-[#d4871c]/10
+            cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed
+            flex items-center gap-1.5 flex-shrink-0"
+        >
+          {submitting ? <Loader2 size={12} className="animate-spin" /> : 'Notify Me'}
+        </button>
+      </div>
+      {error && <p className="text-[10px] font-mono text-red-400">{error}</p>}
+    </div>
+  );
+}
 
 /** Tiny pixel potion bottle logo — matches the sidebar icon. */
 function BrewLogo() {

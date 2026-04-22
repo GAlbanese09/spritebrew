@@ -18,7 +18,7 @@ function getKV(): KV | null {
 // ── POST /api/waitlist — collect a waitlist email ──
 
 export async function POST(request: Request) {
-  let body: { email?: string };
+  let body: { email?: string; source?: string };
   try {
     body = await request.json();
   } catch {
@@ -26,6 +26,7 @@ export async function POST(request: Request) {
   }
 
   const email = body.email?.trim().toLowerCase();
+  const source = body.source || 'landing-page';
   if (!email || !EMAIL_RE.test(email)) {
     return Response.json(
       { success: false, error: 'Please enter a valid email address.' },
@@ -42,7 +43,7 @@ export async function POST(request: Request) {
       const key = `waitlist:${email}`;
       const existing = await kv.get(key);
       if (!existing) {
-        await kv.put(key, JSON.stringify({ email, joinedAt: timestamp, source: 'landing-page' }));
+        await kv.put(key, JSON.stringify({ email, joinedAt: timestamp, source }));
 
         // Append to master list for easy export
         const allRaw = await kv.get('waitlist:__all_emails');

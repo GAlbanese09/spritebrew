@@ -60,7 +60,8 @@ export default function RefundPolicyPage() {
               george@spritebrew.com
             </a>{' '}
             with the subject line &ldquo;Refund Request&rdquo; and include your account email address
-            and the approximate date of purchase. We will respond within 3 business days.
+            and the approximate date of purchase. Refund requests must be submitted within the
+            14-day window described in Clause 2. We will respond within 3 business days.
           </p>
         </section>
 
@@ -87,6 +88,17 @@ export default function RefundPolicyPage() {
             Pursuant to Connecticut General Statutes &sect; 42-110aa: this refund policy is
             prominently displayed before purchase. SpriteBrew token packs are eligible for refund
             under the conditions stated above. No restocking fees apply.
+          </p>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-display text-text-primary mb-3">8b. Quebec Consumers</h2>
+          <p>
+            Additional rights under the Quebec Consumer Protection Act (CQLR c. P-40.1) are
+            preserved, including &sect; 54.8 (cancellation for non-disclosure) and &sect; 54.13
+            (15-day refund deadline). If you reside in Quebec and we fail to refund within 15 days of
+            approving your request, you may exercise your rights under &sect; 54.14 directly with
+            your card issuer.
           </p>
         </section>
 

@@ -113,6 +113,7 @@ function startHeartbeat(writer: WritableStreamDefaultWriter<Uint8Array>, ms = 15
 
 import { debitTokens, creditTokens } from '@/lib/tokenBalance';
 import { getTokenCost } from '@/lib/styleRegistry';
+import { getAccountStatus } from '@/lib/accountLock';
 
 export async function POST(request: Request) {
   const authResult = getAuthedUserId(request);
@@ -120,6 +121,21 @@ export async function POST(request: Request) {
     return Response.json({ success: false, error: authResult.error }, { status: 401 });
   }
   const userId = authResult.userId;
+
+  // Account lock check
+  const accountStatus = await getAccountStatus(userId);
+  if (accountStatus === 'refund_locked') {
+    return Response.json(
+      { success: false, error: 'Your account is temporarily locked because a recent refund resulted in a negative token balance. Contact george@spritebrew.com to resolve.' },
+      { status: 403 }
+    );
+  }
+  if (accountStatus === 'disputed') {
+    return Response.json(
+      { success: false, error: 'This account has been permanently closed due to a chargeback. If you believe this is an error, contact george@spritebrew.com.' },
+      { status: 403 }
+    );
+  }
 
   let body: GenerateBody;
   try {

@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.2.0';
+export const CURRENT_VERSION = '0.3.0';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -22,6 +22,24 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    emoji: '🪙',
+    title: 'Token Economy',
+    description:
+      'Replaced daily limits with tokens. Signup bonus, token packs from $4.99, and tokens that never expire.',
+  },
+  {
+    emoji: '💳',
+    title: 'Buy Token Packs',
+    description:
+      'Purchase tokens via Stripe. Four packs available — Starter, Creator, Studio, and Pro.',
+  },
+  {
+    emoji: '📜',
+    title: 'Refund Policy',
+    description:
+      'Refund policy now live. 14-day refund on unused token packs. See /refund-policy for full terms.',
+  },
   {
     emoji: '✨',
     title: 'Animate My Character',

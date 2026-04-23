@@ -11,6 +11,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/gallery': 'Gallery',
   '/generate': 'AI Generate',
   '/buy-tokens': 'Buy Tokens',
+  '/refund-policy': 'Refund Policy',
 };
 
 interface HeaderProps {

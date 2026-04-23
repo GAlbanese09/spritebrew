@@ -139,7 +139,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         {/* Footer */}
         <div className="px-5 py-3 border-t border-border-subtle space-y-1.5">
           <p className="text-[10px] text-text-muted font-mono uppercase tracking-widest">
-            SpriteBrew v0.2.0
+            SpriteBrew v0.3.0
           </p>
           <div className="flex gap-2 text-[9px] font-mono">
             <a href="/privacy" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
@@ -148,6 +148,10 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             <span className="text-text-muted/40">&middot;</span>
             <a href="/terms" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
               Terms
+            </a>
+            <span className="text-text-muted/40">&middot;</span>
+            <a href="/refund-policy" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
+              Refunds
             </a>
           </div>
         </div>

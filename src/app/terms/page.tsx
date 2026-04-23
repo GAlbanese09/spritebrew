@@ -56,6 +56,16 @@ export default function TermsPage() {
         </section>
 
         <section>
+          <h2 className="text-sm font-display text-text-primary mb-3">Refunds and Cancellations</h2>
+          <p>
+            SpriteBrew offers a 14-day refund window on unused token packs. Full policy at{' '}
+            <a href="/refund-policy" className="text-accent-amber hover:underline">
+              /refund-policy
+            </a>.
+          </p>
+        </section>
+
+        <section>
           <h2 className="text-sm font-display text-text-primary mb-3">Acceptable Use</h2>
           <p>
             Don&apos;t use SpriteBrew to generate content that is illegal, harmful, or violates the

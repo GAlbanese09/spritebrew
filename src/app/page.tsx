@@ -426,6 +426,9 @@ export default function LandingPage() {
             <a href="/terms" className="hover:text-[#9a918a] transition-colors">
               Terms
             </a>
+            <a href="/refund-policy" className="hover:text-[#9a918a] transition-colors">
+              Refund Policy
+            </a>
           </div>
           <p className="text-[10px] text-[#5c5550]">
             SpriteBrew {CURRENT_VERSION} &middot; Built by George Albanese

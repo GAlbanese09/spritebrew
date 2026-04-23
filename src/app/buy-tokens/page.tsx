@@ -15,6 +15,7 @@ export default function BuyTokensPage() {
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
   const [loadingPack, setLoadingPack] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [consentGiven, setConsentGiven] = useState(false);
 
   // Fetch balance on mount
   useEffect(() => {
@@ -33,6 +34,7 @@ export default function BuyTokensPage() {
   }, [userId, getToken, setTokenBalance]);
 
   const handleBuy = useCallback(async (packId: string) => {
+    if (!consentGiven) return;
     setLoadingPack(packId);
     setError(null);
     try {
@@ -43,7 +45,12 @@ export default function BuyTokensPage() {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ packId }),
+        body: JSON.stringify({
+          packId,
+          consent_given: 'true',
+          consent_timestamp: new Date().toISOString(),
+          consent_article: 'EU_2011_83_Art_16m + UK_CCR_2013_Reg_37',
+        }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -57,7 +64,7 @@ export default function BuyTokensPage() {
     } finally {
       setLoadingPack(null);
     }
-  }, [getToken]);
+  }, [getToken, consentGiven]);
 
   return (
     <div className="max-w-3xl mx-auto space-y-8">
@@ -94,6 +101,29 @@ export default function BuyTokensPage() {
             🪙 {tokenBalance} tokens
           </p>
         </div>
+
+        {/* Refund policy info */}
+        <p className="text-[11px] font-mono text-text-muted">
+          14-day refund on unused token packs. See{' '}
+          <a href="/refund-policy" className="text-accent-amber hover:underline">/refund-policy</a>{' '}
+          for full details.
+        </p>
+
+        {/* Article 16(m) consent checkbox */}
+        <label className="flex items-start gap-3 rounded-lg border border-border-default bg-bg-surface px-4 py-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={consentGiven}
+            onChange={(e) => setConsentGiven(e.target.checked)}
+            className="mt-1 accent-[var(--accent-amber)] cursor-pointer flex-shrink-0"
+          />
+          <span className="text-[10px] font-mono text-text-secondary leading-relaxed">
+            I expressly consent to SpriteBrew beginning performance of this contract immediately by
+            crediting the purchased tokens to my account. I acknowledge that I thereby lose my 14-day
+            right of withdrawal under Article 16(m) of Directive 2011/83/EU and Regulation 37 of the
+            UK Consumer Contracts Regulations 2013 once the tokens are credited and I begin using them.
+          </span>
+        </label>
 
         {/* Error */}
         {error && (
@@ -146,7 +176,7 @@ export default function BuyTokensPage() {
                   <Button
                     size="lg"
                     onClick={() => handleBuy(pack.id)}
-                    disabled={!!loadingPack}
+                    disabled={!consentGiven || !!loadingPack}
                     className="w-full"
                   >
                     {isLoading ? (
@@ -155,7 +185,7 @@ export default function BuyTokensPage() {
                         Processing...
                       </>
                     ) : (
-                      `Buy for ${pack.priceDisplay}`
+                      <>Buy now &mdash; obligation to pay {pack.priceDisplay}</>
                     )}
                   </Button>
                 </div>

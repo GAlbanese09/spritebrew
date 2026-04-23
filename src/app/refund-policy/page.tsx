@@ -56,8 +56,8 @@ export default function RefundPolicyPage() {
           <h2 className="text-sm font-display text-text-primary mb-3">5. How to Request a Refund</h2>
           <p>
             Email{' '}
-            <a href="mailto:george@spritebrew.com" className="text-accent-amber hover:underline">
-              george@spritebrew.com
+            <a href="mailto:support@spritebrew.com" className="text-accent-amber hover:underline">
+              support@spritebrew.com
             </a>{' '}
             with the subject line &ldquo;Refund Request&rdquo; and include your account email address
             and the approximate date of purchase. Refund requests must be submitted within the

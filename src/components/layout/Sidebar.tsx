@@ -11,12 +11,14 @@ import {
   Sparkles,
   Images,
   Coins,
+  MessageCircle,
   X,
   LogIn,
 } from 'lucide-react';
 import { Show, SignInButton, useClerk, useUser, useAuth } from '@clerk/react';
 import Badge from '@/components/ui/Badge';
 import { useSpriteStore } from '@/stores/spriteStore';
+import { FEEDBACK_URL, BETA_TOOLTIP } from '@/lib/externalLinks';
 
 const NAV_ITEMS = [
   { href: '/', label: 'Home', icon: Home, soon: false },
@@ -63,6 +65,17 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
               Sprite<br />Brew
             </span>
           </Link>
+          <a
+            href={FEEDBACK_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={BETA_TOOLTIP}
+            className="text-[9px] font-mono font-bold tracking-wider px-1.5 py-0.5 rounded
+              bg-accent-amber text-bg-primary hover:bg-accent-amber/80 transition-colors
+              cursor-pointer select-none"
+          >
+            BETA
+          </a>
           <button
             onClick={onClose}
             className="lg:hidden p-1 text-text-muted hover:text-text-primary cursor-pointer"
@@ -118,6 +131,23 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           })}
         </nav>
 
+        {/* Feedback link */}
+        <div className="px-3 pb-2">
+          <a
+            href={FEEDBACK_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-mono
+              text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-all duration-150 group"
+          >
+            <MessageCircle
+              size={18}
+              className="text-text-muted group-hover:text-text-secondary"
+            />
+            <span>Feedback</span>
+          </a>
+        </div>
+
         {/* Auth section */}
         <div className="px-3 py-3 border-t border-border-subtle">
           <Show when="signed-out">
@@ -152,6 +182,10 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             <span className="text-text-muted/40">&middot;</span>
             <a href="/refund-policy" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
               Refunds
+            </a>
+            <span className="text-text-muted/40">&middot;</span>
+            <a href={FEEDBACK_URL} target="_blank" rel="noopener noreferrer" className="text-text-muted hover:text-text-secondary transition-colors">
+              Feedback
             </a>
           </div>
         </div>

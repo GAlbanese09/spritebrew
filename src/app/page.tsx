@@ -429,6 +429,14 @@ export default function LandingPage() {
             <a href="/refund-policy" className="hover:text-[#9a918a] transition-colors">
               Refund Policy
             </a>
+            <a
+              href="https://tally.so/r/Y5oGp6"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-[#9a918a] transition-colors"
+            >
+              Feedback
+            </a>
           </div>
           <p className="text-[10px] text-[#5c5550]">
             SpriteBrew {CURRENT_VERSION} &middot; Built by George Albanese

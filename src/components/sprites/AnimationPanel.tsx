@@ -14,6 +14,7 @@ import { ANIMATION_TYPES } from '@/lib/constants';
 import { generateAnimationId } from '@/lib/spriteUtils';
 import { useSpriteStore } from '@/stores/spriteStore';
 import type { SpriteAnimation, SpriteFrame } from '@/lib/types';
+import type { SlicerHints } from '@/lib/generationHistory';
 import Button from '@/components/ui/Button';
 
 interface AnimationPanelProps {
@@ -69,7 +70,8 @@ interface ProposedAnimation {
 
 /**
  * Compute proposed animation labels and frame splits.
- * Priority: layoutOverride > sheetMetadata > selectedType default > heuristic.
+ * Priority: sheetMetadata (when no layoutOverride) > any_animation_* > STYLE_ROW_NAMES >
+ *           layoutOverride > selectedType default > heuristic.
  */
 function computeAutoAssignProposal(
   allFrames: SpriteFrame[],
@@ -77,10 +79,47 @@ function computeAutoAssignProposal(
   selectedTypeId: string,
   layoutOverride: LayoutMode | null,
   generationStyle: string | null,
+  sheetMetadata: SlicerHints | null,
 ): ProposedAnimation[] {
   const rowCount = Math.ceil(allFrames.length / columns);
   const selectedType = ANIMATION_TYPES.find((t) => t.id === selectedTypeId);
   const typeLabel = selectedType?.label ?? selectedTypeId;
+
+  // Priority 0: explicit sheet metadata from gallery handoff.
+  // If the sheet carries a known animationType, use it to label the proposal,
+  // regardless of what the Type dropdown currently shows.
+  // User can still override via layoutOverride toggle.
+  if (sheetMetadata?.animationType && !layoutOverride) {
+    const metaType = ANIMATION_TYPES.find((t) => t.id === sheetMetadata.animationType);
+    if (metaType) {
+      if (!sheetMetadata.directional) {
+        return [{
+          name: metaType.label.toUpperCase(),
+          type: metaType.id,
+          fps: metaType.defaultFps,
+          frameCount: allFrames.length,
+          frameIndices: [0, allFrames.length],
+        }];
+      } else {
+        const directions = ['UP', 'RIGHT', 'DOWN', 'LEFT'];
+        const result: ProposedAnimation[] = [];
+        for (let r = 0; r < rowCount; r++) {
+          const start = r * columns;
+          const end = Math.min(start + columns, allFrames.length);
+          if (end <= start) continue;
+          const dir = r < directions.length ? directions[r] : `ROW ${r + 1}`;
+          result.push({
+            name: `${metaType.label.toUpperCase()} ${dir}`,
+            type: metaType.id,
+            fps: metaType.defaultFps,
+            frameCount: end - start,
+            frameIndices: [start, end],
+          });
+        }
+        return result;
+      }
+    }
+  }
 
   // Special case: known RD "Animate My Character" single-animation results
   if (generationStyle && generationStyle.startsWith('any_animation_')) {
@@ -134,7 +173,6 @@ function computeAutoAssignProposal(
   } else if (selectedType) {
     layout = selectedType.defaultDirectional ? 'directional' : 'single';
   } else {
-    // Heuristic: 4 rows + divisible by 4 → directional
     layout = (rowCount === 4 && allFrames.length % 4 === 0) ? 'directional' : 'single';
   }
 
@@ -185,6 +223,7 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
   const [customName, setCustomName] = useState('');
   const [layoutOverride, setLayoutOverride] = useState<LayoutMode | null>(null);
   const [autoAssignPreview, setAutoAssignPreview] = useState<ProposedAnimation[] | null>(null);
+  const [nameManuallyEdited, setNameManuallyEdited] = useState<boolean[]>([]);
 
   // When sheet metadata arrives (gallery handoff), pre-select type and layout
   useEffect(() => {
@@ -192,15 +231,20 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
       const matchingType = ANIMATION_TYPES.find((t) => t.id === currentSheetMetadata.animationType);
       if (matchingType) {
         setSelectedType(matchingType.id);
+      } else {
+        console.warn(
+          '[Slicer] Unknown animationType from gallery metadata:',
+          currentSheetMetadata.animationType,
+          '— Type dropdown unchanged. User can select manually or override in preview.'
+        );
       }
       setLayoutOverride(currentSheetMetadata.directional ? 'directional' : 'single');
     }
   }, [currentSheetMetadata]);
 
-  // When user changes Type dropdown, update layout to the type's default (unless manually overridden)
+  // When user changes Type dropdown, update layout to the type's default
   const handleTypeChange = useCallback((typeId: string) => {
     setSelectedType(typeId);
-    // Auto-update layout to type's default only if user hasn't manually set one
     const type = ANIMATION_TYPES.find((t) => t.id === typeId);
     if (type) {
       setLayoutOverride(type.defaultDirectional ? 'directional' : 'single');
@@ -233,7 +277,7 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
     setCustomName('');
   }, [selectedType, customName, addAnimation]);
 
-  // Show preview instead of immediately committing
+  // Show editable preview
   const handleAutoAssign = useCallback(() => {
     if (!spriteSheet) return;
 
@@ -244,9 +288,11 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
       selectedType,
       layoutOverride,
       generationStyle,
+      currentSheetMetadata,
     );
     setAutoAssignPreview(proposal);
-  }, [spriteSheet, selectedType, layoutOverride, generationStyle]);
+    setNameManuallyEdited(new Array(proposal.length).fill(false));
+  }, [spriteSheet, selectedType, layoutOverride, generationStyle, currentSheetMetadata]);
 
   // Apply the preview
   const handleApplyAutoAssign = useCallback(() => {
@@ -267,11 +313,56 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
       addAnimation(anim);
     }
     setAutoAssignPreview(null);
+    setNameManuallyEdited([]);
   }, [spriteSheet, autoAssignPreview, addAnimation]);
 
   const handleCancelPreview = useCallback(() => {
     setAutoAssignPreview(null);
+    setNameManuallyEdited([]);
   }, []);
+
+  // ── Preview row editors ──
+
+  const handlePreviewTypeChange = useCallback((rowIdx: number, newTypeId: string) => {
+    setAutoAssignPreview((prev) => {
+      if (!prev) return prev;
+      const newPreview = [...prev];
+      const currentRow = newPreview[rowIdx];
+      const newType = ANIMATION_TYPES.find((t) => t.id === newTypeId);
+      if (!newType) return prev;
+
+      let newName = currentRow.name;
+      if (!nameManuallyEdited[rowIdx]) {
+        const directionMatch = currentRow.name.match(/\s(UP|RIGHT|DOWN|LEFT)$/);
+        const suffix = directionMatch ? directionMatch[0] : '';
+        newName = newType.label.toUpperCase() + suffix;
+      }
+
+      newPreview[rowIdx] = {
+        ...currentRow,
+        type: newTypeId,
+        name: newName,
+        fps: newType.defaultFps,
+      };
+      return newPreview;
+    });
+  }, [nameManuallyEdited]);
+
+  const handlePreviewNameChange = useCallback((rowIdx: number, newName: string) => {
+    setAutoAssignPreview((prev) => {
+      if (!prev) return prev;
+      const newPreview = [...prev];
+      newPreview[rowIdx] = { ...newPreview[rowIdx], name: newName };
+      return newPreview;
+    });
+    setNameManuallyEdited((prev) => {
+      const updated = [...prev];
+      updated[rowIdx] = true;
+      return updated;
+    });
+  }, []);
+
+  // ── Frame manipulation ──
 
   const handleRemoveFrame = useCallback(
     (animId: string, positionIdx: number) => {
@@ -336,21 +427,47 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
         )}
       </div>
 
-      {/* Auto-assign preview */}
+      {/* Auto-assign preview — editable */}
       {autoAssignPreview && (
         <div className="rounded-lg border border-accent-amber/30 bg-accent-amber-glow/30 p-4 space-y-3">
           <p className="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
             Auto-assign will create these animations:
           </p>
-          <ul className="space-y-1">
-            {autoAssignPreview.map((proposed, i) => (
-              <li key={i} className="flex items-center gap-2 text-xs font-mono text-text-primary">
-                <span className="w-1 h-1 rounded-full bg-accent-amber" />
-                <span className="font-semibold">{proposed.name}</span>
-                <span className="text-text-muted">— {proposed.frameCount} frame{proposed.frameCount !== 1 ? 's' : ''}</span>
-              </li>
+          <div className="space-y-2">
+            {autoAssignPreview.map((proposed, idx) => (
+              <div
+                key={idx}
+                className="flex items-center gap-2 flex-wrap bg-bg-surface/50 rounded px-2 py-1.5 border border-border-subtle"
+              >
+                <span className="w-1 h-1 rounded-full bg-accent-amber flex-shrink-0" />
+                <select
+                  value={proposed.type}
+                  onChange={(e) => handlePreviewTypeChange(idx, e.target.value)}
+                  className="rounded bg-bg-elevated border border-border-default px-2 py-1
+                    text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber cursor-pointer"
+                  title="Animation type"
+                >
+                  {ANIMATION_TYPES.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={proposed.name}
+                  onChange={(e) => handlePreviewNameChange(idx, e.target.value)}
+                  className="flex-1 min-w-[100px] rounded bg-bg-elevated border border-border-default px-2 py-1
+                    text-xs font-mono text-text-primary placeholder:text-text-muted
+                    focus:outline-none focus:border-accent-amber"
+                  title="Animation name"
+                />
+                <span className="text-[10px] font-mono text-text-muted flex-shrink-0">
+                  {proposed.frameCount} frame{proposed.frameCount !== 1 ? 's' : ''}
+                </span>
+              </div>
             ))}
-          </ul>
+          </div>
           <div className="flex gap-2">
             <Button variant="primary" size="sm" onClick={handleApplyAutoAssign}>
               <Check size={12} />

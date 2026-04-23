@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   Plus,
   Trash2,
@@ -8,11 +8,12 @@ import {
   ChevronDown,
   X,
   Wand2,
+  Check,
 } from 'lucide-react';
 import { ANIMATION_TYPES } from '@/lib/constants';
 import { generateAnimationId } from '@/lib/spriteUtils';
 import { useSpriteStore } from '@/stores/spriteStore';
-import type { SpriteAnimation } from '@/lib/types';
+import type { SpriteAnimation, SpriteFrame } from '@/lib/types';
 import Button from '@/components/ui/Button';
 
 interface AnimationPanelProps {
@@ -27,7 +28,6 @@ const STYLE_ROW_NAMES: Record<string, string[]> = {
   any_animation: ['Animation'],
   '8_dir_rotation': ['Down', 'Down-Left', 'Left', 'Up-Left', 'Up', 'Up-Right', 'Right', 'Down-Right'],
   vfx: ['Effect'],
-  // Advanced animation styles — single-direction strips
   advanced_animation_walking: ['Walk'],
   advanced_animation_idle: ['Idle'],
   advanced_animation_attack: ['Attack'],
@@ -38,7 +38,6 @@ const STYLE_ROW_NAMES: Record<string, string[]> = {
   advanced_animation_custom_action: ['Animation'],
 };
 
-// Row type mappings for styles
 const STYLE_ROW_TYPES: Record<string, string[]> = {
   four_angle_walking: ['walk', 'walk', 'walk', 'walk'],
   walking_and_idle: ['walk', 'walk', 'walk', 'walk', 'idle', 'idle', 'idle', 'idle'],
@@ -50,33 +49,122 @@ const STYLE_ROW_TYPES: Record<string, string[]> = {
   advanced_animation_idle: ['idle'],
   advanced_animation_attack: ['attack'],
   advanced_animation_jump: ['jump'],
-  advanced_animation_crouch: ['idle'],
+  advanced_animation_crouch: ['crouch'],
   advanced_animation_destroy: ['death'],
-  advanced_animation_subtle_motion: ['idle'],
-  advanced_animation_custom_action: ['idle'],
+  advanced_animation_subtle_motion: ['subtle'],
+  advanced_animation_custom_action: ['custom'],
 };
 
-// Default row names by row count for user-uploaded sheets
-function getDefaultRowNames(rowCount: number): string[] {
-  switch (rowCount) {
-    case 1: return ['Walk'];
-    case 2: return ['Idle', 'Walk'];
-    case 3: return ['Idle', 'Walk', 'Run'];
-    case 4: return ['Walk Up', 'Walk Right', 'Walk Down', 'Walk Left'];
-    case 8: return ['Walk Down', 'Walk Down-Left', 'Walk Left', 'Walk Up-Left', 'Walk Up', 'Walk Up-Right', 'Walk Right', 'Walk Down-Right'];
-    default: return Array.from({ length: rowCount }, (_, i) => `Row ${i + 1}`);
-  }
+// ── Auto-assign helpers ──
+
+type LayoutMode = 'directional' | 'single';
+
+interface ProposedAnimation {
+  name: string;
+  type: string;
+  fps: number;
+  frameCount: number;
+  frameIndices: [number, number]; // [startIdx, endIdx] into allFrames
 }
 
-function getDefaultRowTypes(rowCount: number): string[] {
-  switch (rowCount) {
-    case 1: return ['walk'];
-    case 2: return ['idle', 'walk'];
-    case 3: return ['idle', 'walk', 'run'];
-    case 4: return ['walk', 'walk', 'walk', 'walk'];
-    case 8: return ['walk', 'walk', 'walk', 'walk', 'walk', 'walk', 'walk', 'walk'];
-    default: return Array.from({ length: rowCount }, () => 'walk');
+/**
+ * Compute proposed animation labels and frame splits.
+ * Priority: layoutOverride > sheetMetadata > selectedType default > heuristic.
+ */
+function computeAutoAssignProposal(
+  allFrames: SpriteFrame[],
+  columns: number,
+  selectedTypeId: string,
+  layoutOverride: LayoutMode | null,
+  generationStyle: string | null,
+): ProposedAnimation[] {
+  const rowCount = Math.ceil(allFrames.length / columns);
+  const selectedType = ANIMATION_TYPES.find((t) => t.id === selectedTypeId);
+  const typeLabel = selectedType?.label ?? selectedTypeId;
+
+  // Special case: known RD "Animate My Character" single-animation results
+  if (generationStyle && generationStyle.startsWith('any_animation_')) {
+    const action = generationStyle.replace('any_animation_', '');
+    const nameMap: Record<string, { name: string; type: string; fps: number }> = {
+      walking: { name: 'WALK', type: 'walk', fps: 8 },
+      idle: { name: 'IDLE', type: 'idle', fps: 6 },
+      attack: { name: 'ATTACK', type: 'attack', fps: 12 },
+      jump: { name: 'JUMP', type: 'jump', fps: 10 },
+      crouch: { name: 'CROUCH', type: 'crouch', fps: 6 },
+      destroy: { name: 'DEATH', type: 'death', fps: 8 },
+      subtle_motion: { name: 'SUBTLE MOTION', type: 'subtle', fps: 4 },
+      custom_action: { name: 'ANIMATION', type: 'custom', fps: 8 },
+    };
+    const info = nameMap[action] ?? { name: 'ANIMATION', type: 'custom', fps: 8 };
+    return [{
+      name: info.name,
+      type: info.type,
+      fps: ANIMATION_TYPES.find((t) => t.id === info.type)?.defaultFps ?? info.fps,
+      frameCount: allFrames.length,
+      frameIndices: [0, allFrames.length],
+    }];
   }
+
+  // Known style row names take precedence (for Create New tab outputs)
+  if (generationStyle && STYLE_ROW_NAMES[generationStyle]) {
+    const rowNames = STYLE_ROW_NAMES[generationStyle];
+    const rowTypes = STYLE_ROW_TYPES[generationStyle] ?? [];
+    const result: ProposedAnimation[] = [];
+    for (let r = 0; r < rowCount; r++) {
+      const start = r * columns;
+      const end = Math.min(start + columns, allFrames.length);
+      if (end <= start) continue;
+      const name = r < rowNames.length ? rowNames[r].toUpperCase() : `ROW ${r + 1}`;
+      const type = r < rowTypes.length ? rowTypes[r] : 'walk';
+      result.push({
+        name,
+        type,
+        fps: ANIMATION_TYPES.find((t) => t.id === type)?.defaultFps ?? 8,
+        frameCount: end - start,
+        frameIndices: [start, end],
+      });
+    }
+    return result;
+  }
+
+  // Determine layout: override > type default > heuristic
+  let layout: LayoutMode;
+  if (layoutOverride) {
+    layout = layoutOverride;
+  } else if (selectedType) {
+    layout = selectedType.defaultDirectional ? 'directional' : 'single';
+  } else {
+    // Heuristic: 4 rows + divisible by 4 → directional
+    layout = (rowCount === 4 && allFrames.length % 4 === 0) ? 'directional' : 'single';
+  }
+
+  if (layout === 'single') {
+    return [{
+      name: typeLabel.toUpperCase(),
+      type: selectedTypeId,
+      fps: selectedType?.defaultFps ?? 8,
+      frameCount: allFrames.length,
+      frameIndices: [0, allFrames.length],
+    }];
+  }
+
+  // Directional: split into 4 rows
+  const directions = ['UP', 'RIGHT', 'DOWN', 'LEFT'];
+  const result: ProposedAnimation[] = [];
+  for (let r = 0; r < rowCount; r++) {
+    const start = r * columns;
+    const end = Math.min(start + columns, allFrames.length);
+    if (end <= start) continue;
+    const dir = r < directions.length ? directions[r] : `ROW ${r + 1}`;
+    result.push({
+      name: `${typeLabel.toUpperCase()} ${dir}`,
+      type: selectedTypeId,
+      fps: selectedType?.defaultFps ?? 8,
+      frameCount: end - start,
+      frameIndices: [start, end],
+    });
+  }
+  return result;
 }
 
 export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
@@ -84,14 +172,48 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
   const animations = useSpriteStore((s) => s.animations);
   const selectedFrames = useSpriteStore((s) => s.selectedFrames);
   const generationStyle = useSpriteStore((s) => s.generationStyle);
+  const currentSheetMetadata = useSpriteStore((s) => s.currentSheetMetadata);
   const addAnimation = useSpriteStore((s) => s.addAnimation);
   const removeAnimation = useSpriteStore((s) => s.removeAnimation);
   const assignFramesToAnimation = useSpriteStore((s) => s.assignFramesToAnimation);
   const updateAnimationFps = useSpriteStore((s) => s.updateAnimationFps);
   const updateFrameOrder = useSpriteStore((s) => s.updateFrameOrder);
 
-  const [selectedType, setSelectedType] = useState<string>(ANIMATION_TYPES[0].id);
+  const [selectedType, setSelectedType] = useState<string>(
+    currentSheetMetadata?.animationType ?? ANIMATION_TYPES[0].id
+  );
   const [customName, setCustomName] = useState('');
+  const [layoutOverride, setLayoutOverride] = useState<LayoutMode | null>(null);
+  const [autoAssignPreview, setAutoAssignPreview] = useState<ProposedAnimation[] | null>(null);
+
+  // When sheet metadata arrives (gallery handoff), pre-select type and layout
+  useEffect(() => {
+    if (currentSheetMetadata) {
+      const matchingType = ANIMATION_TYPES.find((t) => t.id === currentSheetMetadata.animationType);
+      if (matchingType) {
+        setSelectedType(matchingType.id);
+      }
+      setLayoutOverride(currentSheetMetadata.directional ? 'directional' : 'single');
+    }
+  }, [currentSheetMetadata]);
+
+  // When user changes Type dropdown, update layout to the type's default (unless manually overridden)
+  const handleTypeChange = useCallback((typeId: string) => {
+    setSelectedType(typeId);
+    // Auto-update layout to type's default only if user hasn't manually set one
+    const type = ANIMATION_TYPES.find((t) => t.id === typeId);
+    if (type) {
+      setLayoutOverride(type.defaultDirectional ? 'directional' : 'single');
+    }
+  }, []);
+
+  // Compute effective layout for display
+  const effectiveLayout: LayoutMode = (() => {
+    if (layoutOverride) return layoutOverride;
+    if (currentSheetMetadata) return currentSheetMetadata.directional ? 'directional' : 'single';
+    const type = ANIMATION_TYPES.find((t) => t.id === selectedType);
+    return type?.defaultDirectional ? 'directional' : 'single';
+  })();
 
   const handleAddAnimation = useCallback(() => {
     const preset = ANIMATION_TYPES.find((t) => t.id === selectedType);
@@ -111,76 +233,46 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
     setCustomName('');
   }, [selectedType, customName, addAnimation]);
 
+  // Show preview instead of immediately committing
   const handleAutoAssign = useCallback(() => {
     if (!spriteSheet) return;
 
     const allFrames = spriteSheet.animations.flatMap((a) => a.frames);
-    const { columns } = spriteSheet;
-    const rowCount = Math.ceil(allFrames.length / columns);
+    const proposal = computeAutoAssignProposal(
+      allFrames,
+      spriteSheet.columns,
+      selectedType,
+      layoutOverride,
+      generationStyle,
+    );
+    setAutoAssignPreview(proposal);
+  }, [spriteSheet, selectedType, layoutOverride, generationStyle]);
 
-    // Special case: "Animate My Character" results (any_animation_{action}) are
-    // a single-animation sheet. Put ALL frames into one group named after the action.
-    if (generationStyle && generationStyle.startsWith('any_animation_')) {
-      const action = generationStyle.replace('any_animation_', '');
-      const nameMap: Record<string, { name: string; type: string; fps: number }> = {
-        walking: { name: 'Walking', type: 'walk', fps: 8 },
-        idle: { name: 'Idle', type: 'idle', fps: 6 },
-        attack: { name: 'Attack', type: 'attack', fps: 12 },
-        jump: { name: 'Jump', type: 'jump', fps: 10 },
-        crouch: { name: 'Crouch', type: 'idle', fps: 6 },
-        destroy: { name: 'Death', type: 'death', fps: 8 },
-        subtle_motion: { name: 'Subtle Motion', type: 'idle', fps: 4 },
-        custom_action: { name: 'Animation', type: 'idle', fps: 8 },
-      };
-      const info = nameMap[action] ?? { name: 'Animation', type: 'idle', fps: 8 };
-      const preset = ANIMATION_TYPES.find((t) => t.id === info.type);
+  // Apply the preview
+  const handleApplyAutoAssign = useCallback(() => {
+    if (!spriteSheet || !autoAssignPreview) return;
 
+    const allFrames = spriteSheet.animations.flatMap((a) => a.frames);
+    for (const proposed of autoAssignPreview) {
+      const frames = allFrames.slice(proposed.frameIndices[0], proposed.frameIndices[1]);
+      const preset = ANIMATION_TYPES.find((t) => t.id === proposed.type);
       const anim: SpriteAnimation = {
         id: generateAnimationId(),
-        name: info.name,
-        type: preset?.id ?? info.type,
-        frames: allFrames,
-        fps: preset?.defaultFps ?? info.fps,
-        loop: true,
-      };
-      addAnimation(anim);
-      return;
-    }
-
-    // Determine row names and types based on generation style or row count
-    let rowNames: string[];
-    let rowTypes: string[];
-
-    if (generationStyle && STYLE_ROW_NAMES[generationStyle]) {
-      rowNames = STYLE_ROW_NAMES[generationStyle];
-      rowTypes = STYLE_ROW_TYPES[generationStyle] ?? getDefaultRowTypes(rowCount);
-    } else {
-      rowNames = getDefaultRowNames(rowCount);
-      rowTypes = getDefaultRowTypes(rowCount);
-    }
-
-    for (let r = 0; r < rowCount; r++) {
-      const rowFrames = allFrames.slice(r * columns, (r + 1) * columns);
-      if (rowFrames.length === 0) continue;
-
-      const name = r < rowNames.length ? rowNames[r] : `Row ${r + 1}`;
-      const type = r < rowTypes.length ? rowTypes[r] : 'walk';
-      const preset = ANIMATION_TYPES.find((t) => t.id === type);
-
-      const anim: SpriteAnimation = {
-        id: generateAnimationId(),
-        name,
-        type: preset?.id ?? type,
-        frames: rowFrames,
-        fps: preset?.defaultFps ?? 8,
+        name: proposed.name,
+        type: preset?.id ?? proposed.type,
+        frames,
+        fps: proposed.fps,
         loop: true,
       };
       addAnimation(anim);
     }
-  }, [spriteSheet, generationStyle, addAnimation]);
+    setAutoAssignPreview(null);
+  }, [spriteSheet, autoAssignPreview, addAnimation]);
 
-  // Remove by position index (not by frame ID) so removing one instance of a
-  // duplicated frame doesn't remove all instances.
+  const handleCancelPreview = useCallback(() => {
+    setAutoAssignPreview(null);
+  }, []);
+
   const handleRemoveFrame = useCallback(
     (animId: string, positionIdx: number) => {
       const anim = animations.find((a) => a.id === animId);
@@ -191,7 +283,6 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
     [animations, updateFrameOrder]
   );
 
-  // Swap by position index — works correctly even with duplicate frame IDs.
   const handleMoveFrame = useCallback(
     (animId: string, frameIdx: number, direction: -1 | 1) => {
       const anim = animations.find((a) => a.id === animId);
@@ -207,17 +298,70 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      {/* Header row with Auto-assign + Layout toggle */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <label className="text-xs font-mono text-text-secondary uppercase tracking-wider">
           Animations
         </label>
-        {animations.length === 0 && (
-          <Button variant="ghost" size="sm" onClick={handleAutoAssign}>
-            <Wand2 size={14} />
-            Auto-assign rows
-          </Button>
+        {animations.length === 0 && !autoAssignPreview && (
+          <div className="flex items-center gap-2">
+            {/* Layout toggle */}
+            <div className="flex gap-0.5 rounded bg-bg-elevated p-0.5">
+              <button
+                onClick={() => setLayoutOverride('directional')}
+                className={`px-2 py-1 rounded text-[9px] font-mono cursor-pointer transition-colors ${
+                  effectiveLayout === 'directional'
+                    ? 'bg-accent-amber text-bg-primary'
+                    : 'text-text-muted hover:text-text-secondary'
+                }`}
+              >
+                4-Directional
+              </button>
+              <button
+                onClick={() => setLayoutOverride('single')}
+                className={`px-2 py-1 rounded text-[9px] font-mono cursor-pointer transition-colors ${
+                  effectiveLayout === 'single'
+                    ? 'bg-accent-amber text-bg-primary'
+                    : 'text-text-muted hover:text-text-secondary'
+                }`}
+              >
+                Single Animation
+              </button>
+            </div>
+            <Button variant="ghost" size="sm" onClick={handleAutoAssign}>
+              <Wand2 size={14} />
+              Auto-assign
+            </Button>
+          </div>
         )}
       </div>
+
+      {/* Auto-assign preview */}
+      {autoAssignPreview && (
+        <div className="rounded-lg border border-accent-amber/30 bg-accent-amber-glow/30 p-4 space-y-3">
+          <p className="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
+            Auto-assign will create these animations:
+          </p>
+          <ul className="space-y-1">
+            {autoAssignPreview.map((proposed, i) => (
+              <li key={i} className="flex items-center gap-2 text-xs font-mono text-text-primary">
+                <span className="w-1 h-1 rounded-full bg-accent-amber" />
+                <span className="font-semibold">{proposed.name}</span>
+                <span className="text-text-muted">— {proposed.frameCount} frame{proposed.frameCount !== 1 ? 's' : ''}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="flex gap-2">
+            <Button variant="primary" size="sm" onClick={handleApplyAutoAssign}>
+              <Check size={12} />
+              Apply
+            </Button>
+            <Button variant="ghost" size="sm" onClick={handleCancelPreview}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Add animation form */}
       <div className="flex flex-wrap gap-2 items-end">
@@ -225,7 +369,7 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
           <label className="block text-[10px] font-mono text-text-muted mb-1">Type</label>
           <select
             value={selectedType}
-            onChange={(e) => setSelectedType(e.target.value)}
+            onChange={(e) => handleTypeChange(e.target.value)}
             className="w-full rounded bg-bg-elevated border border-border-default px-3 py-2
               text-sm font-mono text-text-primary focus:outline-none focus:border-accent-amber cursor-pointer"
           >
@@ -256,16 +400,17 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
         </Button>
       </div>
 
-      {/* Animation groups */}
-      {animations.length === 0 && (
+      {/* Empty state */}
+      {animations.length === 0 && !autoAssignPreview && (
         <div className="rounded-lg border border-dashed border-border-default bg-bg-surface p-8 text-center">
           <p className="text-xs font-mono text-text-muted">
-            No animation groups yet. Add one above, or use &quot;Auto-assign rows&quot; to
+            No animation groups yet. Add one above, or use &quot;Auto-assign&quot; to
             create groups from sprite sheet rows.
           </p>
         </div>
       )}
 
+      {/* Animation groups */}
       <div className="space-y-3">
         {animations.map((anim) => (
           <div
@@ -360,12 +505,10 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
                         )}
                       </div>
 
-                      {/* Position number (visible when duplicates exist or always for clarity) */}
                       <span className="absolute -bottom-1.5 left-0.5 text-[7px] font-mono text-text-muted leading-none">
                         {idx + 1}
                       </span>
 
-                      {/* Reorder + remove controls (visible on hover) */}
                       <div className="absolute -top-1 -right-1 hidden group-hover:flex gap-0.5">
                         {idx > 0 && (
                           <button

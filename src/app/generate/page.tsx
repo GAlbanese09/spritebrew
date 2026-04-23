@@ -7,7 +7,7 @@ import { Show, SignInButton, useAuth } from '@clerk/react';
 import GenerationForm from '@/components/sprites/GenerationForm';
 import AnimateForm from '@/components/sprites/AnimateForm';
 import GenerationResult from '@/components/sprites/GenerationResult';
-import { addToHistory } from '@/lib/generationHistory';
+import { addToHistory, type SlicerHints } from '@/lib/generationHistory';
 import { useSpriteStore } from '@/stores/spriteStore';
 
 const EARLY_ACCESS_DISMISS_KEY = 'spritebrew_early_access_dismissed';
@@ -187,6 +187,23 @@ export default function GeneratePage() {
     // Determine mode + action from the style key
     const isAnimate = style.startsWith('any_animation_');
     const action = isAnimate ? style.replace('any_animation_', '') : undefined;
+
+    // Build slicerHints for animate-mode results
+    const ANIMATE_ACTION_TO_SLICER_TYPE: Record<string, string> = {
+      walking: 'walk', idle: 'idle', attack: 'attack', jump: 'jump',
+      crouch: 'crouch', destroy: 'destroy', subtle_motion: 'subtle', custom_action: 'custom',
+    };
+    let slicerHints: SlicerHints | undefined;
+    if (isAnimate && action) {
+      slicerHints = {
+        source: 'animate',
+        animationType: ANIMATE_ACTION_TO_SLICER_TYPE[action] ?? 'custom',
+        frameCount: 4, // default; actual count depends on user selection but we don't have it here
+        directional: false,
+        rows: 2,
+      };
+    }
+
     await addToHistory({
       userId,
       prompt,
@@ -194,6 +211,7 @@ export default function GeneratePage() {
       mode: isAnimate ? 'animate' : 'create',
       action,
       fullImageDataUrl: dataUrl,
+      slicerHints,
     });
   }, [userId]);
 

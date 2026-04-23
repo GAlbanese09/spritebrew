@@ -11,14 +11,18 @@ export const SPRITE_SIZES = [
 
 // Animation type presets
 export const ANIMATION_TYPES = [
-  { id: 'idle', label: 'Idle', defaultFrames: 4, defaultFps: 6, description: 'Breathing/subtle movement' },
-  { id: 'walk', label: 'Walk', defaultFrames: 6, defaultFps: 8, description: 'Standard walk cycle' },
-  { id: 'run', label: 'Run', defaultFrames: 8, defaultFps: 10, description: 'Fast movement' },
-  { id: 'attack', label: 'Attack', defaultFrames: 6, defaultFps: 12, description: 'Melee attack swing' },
-  { id: 'hurt', label: 'Hurt', defaultFrames: 3, defaultFps: 8, description: 'Taking damage flinch' },
-  { id: 'death', label: 'Death', defaultFrames: 6, defaultFps: 8, description: 'Death animation' },
-  { id: 'jump', label: 'Jump', defaultFrames: 6, defaultFps: 10, description: 'Jump arc phases' },
-  { id: 'cast', label: 'Cast/Magic', defaultFrames: 6, defaultFps: 8, description: 'Spell casting' },
+  { id: 'idle', label: 'Idle', defaultFrames: 4, defaultFps: 6, description: 'Breathing/subtle movement', defaultDirectional: false },
+  { id: 'walk', label: 'Walk', defaultFrames: 6, defaultFps: 8, description: 'Standard walk cycle', defaultDirectional: true },
+  { id: 'run', label: 'Run', defaultFrames: 8, defaultFps: 10, description: 'Fast movement', defaultDirectional: true },
+  { id: 'attack', label: 'Attack', defaultFrames: 6, defaultFps: 12, description: 'Melee attack swing', defaultDirectional: false },
+  { id: 'hurt', label: 'Hurt', defaultFrames: 3, defaultFps: 8, description: 'Taking damage flinch', defaultDirectional: false },
+  { id: 'death', label: 'Death', defaultFrames: 6, defaultFps: 8, description: 'Death animation', defaultDirectional: false },
+  { id: 'jump', label: 'Jump', defaultFrames: 6, defaultFps: 10, description: 'Jump arc phases', defaultDirectional: false },
+  { id: 'cast', label: 'Cast/Magic', defaultFrames: 6, defaultFps: 8, description: 'Spell casting', defaultDirectional: false },
+  { id: 'crouch', label: 'Crouch', defaultFrames: 4, defaultFps: 6, description: 'Crouch/duck', defaultDirectional: false },
+  { id: 'destroy', label: 'Destroy', defaultFrames: 6, defaultFps: 8, description: 'Death/destruction', defaultDirectional: false },
+  { id: 'subtle', label: 'Subtle Motion', defaultFrames: 4, defaultFps: 4, description: 'Wind, cape flutter', defaultDirectional: false },
+  { id: 'custom', label: 'Custom Action', defaultFrames: 4, defaultFps: 8, description: 'Describe any action', defaultDirectional: false },
 ] as const;
 
 // Export engine targets

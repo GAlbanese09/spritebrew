@@ -24,6 +24,7 @@ export default function GalleryPage() {
   const { userId } = useAuth();
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
+  const setCurrentSheetMetadata = useSpriteStore((s) => s.setCurrentSheetMetadata);
 
   const [entries, setEntries] = useState<GenerationHistoryEntry[]>([]);
   const [filter, setFilter] = useState<FilterTab>('all');
@@ -62,9 +63,10 @@ export default function GalleryPage() {
       if (!entry.fullImageDataUrl) return;
       setGeneratedImage(entry.fullImageDataUrl, entry.fullImageDataUrl);
       setGenerationStyle(entry.style);
+      setCurrentSheetMetadata(entry.slicerHints ?? null);
       router.push('/upload');
     },
-    [setGeneratedImage, setGenerationStyle, router]
+    [setGeneratedImage, setGenerationStyle, setCurrentSheetMetadata, router]
   );
 
   const handleDelete = useCallback((id: string) => {

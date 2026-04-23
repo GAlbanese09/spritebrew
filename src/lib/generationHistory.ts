@@ -7,6 +7,15 @@
 
 export type GenerationMode = 'create' | 'animate';
 
+export interface SlicerHints {
+  source: 'animate' | 'create';
+  animationType: string; // slicer type id (e.g. 'walk', 'idle', 'attack')
+  frameCount: number;
+  directional: boolean;
+  rows?: number;
+  cols?: number;
+}
+
 export interface GenerationHistoryEntry {
   id: string;
   prompt: string;
@@ -16,6 +25,7 @@ export interface GenerationHistoryEntry {
   timestamp: number;
   thumbnailDataUrl: string;
   fullImageDataUrl?: string; // only for recent entries
+  slicerHints?: SlicerHints;
 }
 
 const MAX_HISTORY = 50;
@@ -129,6 +139,7 @@ interface AddHistoryInput {
   mode: GenerationMode;
   action?: string;
   fullImageDataUrl: string;
+  slicerHints?: SlicerHints;
 }
 
 /** Add a new entry to history for the given user. */
@@ -144,6 +155,7 @@ export async function addToHistory(input: AddHistoryInput): Promise<void> {
     timestamp: Date.now(),
     thumbnailDataUrl: thumbnail,
     fullImageDataUrl: input.fullImageDataUrl,
+    slicerHints: input.slicerHints,
   };
 
   const entries = loadHistory(input.userId);

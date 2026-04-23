@@ -29,11 +29,11 @@ export default function RefundPolicyPage() {
         <section>
           <h2 className="text-sm font-display text-text-primary mb-3">3. Used Tokens</h2>
           <p>
-            If you have used (spent) any tokens from a purchased pack, the pack is no longer eligible
-            for a full refund. We will offer a pro-rata refund for the unused portion of the pack,
-            calculated as: (unused tokens / total tokens in pack) &times; purchase price. The minimum
-            refund amount is $1.00 USD. If the pro-rata amount is below $1.00, no refund will be
-            issued.
+            If you have used (spent) any tokens from a purchased pack, the pack is not eligible for a
+            refund. This is because generated pixel art cannot be &ldquo;returned&rdquo; and each
+            generation incurs real compute costs. The only exception is where required by mandatory
+            consumer-protection law (see Clause 4 for EU/UK specifics; Clause 2 applies in all cases
+            for unused packs).
           </p>
         </section>
 

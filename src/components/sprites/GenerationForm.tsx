@@ -98,8 +98,8 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
   const [prompt, setPrompt] = useState('');
   const [selectedStyleId, setSelectedStyleId] = useState('plus-classic');
-  const [customWidth, setCustomWidth] = useState(128);
-  const [customHeight, setCustomHeight] = useState(128);
+  const [customWidth, setCustomWidth] = useState(256);
+  const [customHeight, setCustomHeight] = useState(256);
   const [removeBg, setRemoveBg] = useState(true);
 
   const selectedStyle = useMemo(
@@ -305,6 +305,11 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         ) : (
           <p className="text-[9px] font-mono text-text-muted">
             This style uses fixed {effectiveWidth}x{effectiveHeight} dimensions.
+          </p>
+        )}
+        {!selectedStyle.fixedSize && (
+          <p className="text-[9px] font-mono text-text-muted/70 mt-1">
+            Larger canvas = more room for detail and extended poses. Tokens scale with canvas size.
           </p>
         )}
       </div>

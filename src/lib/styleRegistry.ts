@@ -29,19 +29,19 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   {
     id: 'pro-default', label: 'Character (Pro)', description: 'Clean modern pixel art with detailed prompting',
     promptStyle: 'rd_pro__default', tier: 'pro', category: 'characters',
-    defaultWidth: 128, defaultHeight: 128, minSize: 96, maxSize: 256,
+    defaultWidth: 256, defaultHeight: 256, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'pro-fantasy', label: 'Fantasy', description: 'Fantasy-themed characters and scenes',
     promptStyle: 'rd_pro__fantasy', tier: 'pro', category: 'characters',
-    defaultWidth: 128, defaultHeight: 128, minSize: 96, maxSize: 256,
+    defaultWidth: 256, defaultHeight: 256, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'pro-platformer', label: 'Platformer', description: 'Side-scrolling platformer characters',
     promptStyle: 'rd_pro__platformer', tier: 'pro', category: 'characters',
-    defaultWidth: 128, defaultHeight: 128, minSize: 96, maxSize: 256,
+    defaultWidth: 256, defaultHeight: 256, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: true,
   },
   {
@@ -59,13 +59,13 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   {
     id: 'pro-fps-weapon', label: 'FPS Weapon', description: 'First-person perspective weapons and items',
     promptStyle: 'rd_pro__fps_weapon', tier: 'pro', category: 'items',
-    defaultWidth: 128, defaultHeight: 128, minSize: 96, maxSize: 256,
+    defaultWidth: 256, defaultHeight: 256, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'pro-hex-tiles', label: 'Hexagonal Tiles', description: 'Hexagonal tiles for game maps',
     promptStyle: 'rd_pro__hexagonal_tiles', tier: 'pro', category: 'tiles',
-    defaultWidth: 128, defaultHeight: 128, minSize: 96, maxSize: 256,
+    defaultWidth: 256, defaultHeight: 256, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: false,
   },
   {
@@ -79,7 +79,7 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   {
     id: 'plus-classic', label: 'Classic Pixel Art', description: 'Strongly outlined, simple shading, clear design',
     promptStyle: 'rd_plus__classic', tier: 'plus', category: 'characters',
-    defaultWidth: 128, defaultHeight: 128, minSize: 32, maxSize: 192,
+    defaultWidth: 192, defaultHeight: 192, minSize: 32, maxSize: 192,
     fixedSize: false, costPerGeneration: 0.06, tokenCost: 10, isAnimation: false, supportsRemoveBg: true,
   },
   {
@@ -111,13 +111,13 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   {
     id: 'fast-retro', label: 'Retro Arcade', description: 'Fast retro arcade style pixel art',
     promptStyle: 'rd_fast__retro', tier: 'fast', category: 'characters',
-    defaultWidth: 128, defaultHeight: 128, minSize: 64, maxSize: 384,
+    defaultWidth: 256, defaultHeight: 256, minSize: 64, maxSize: 384,
     fixedSize: false, costPerGeneration: 0.02, tokenCost: 3, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'fast-no-style', label: 'No Style (Fast)', description: 'Fast generation with no style influence',
     promptStyle: 'rd_fast__no_style', tier: 'fast', category: 'characters',
-    defaultWidth: 128, defaultHeight: 128, minSize: 64, maxSize: 384,
+    defaultWidth: 256, defaultHeight: 256, minSize: 64, maxSize: 384,
     fixedSize: false, costPerGeneration: 0.02, tokenCost: 3, isAnimation: false, supportsRemoveBg: true,
   },
 

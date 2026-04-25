@@ -13,7 +13,11 @@ import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import CharacterAutoPrep from './CharacterAutoPrep';
-import { getTokenCost } from '@/lib/styleRegistry';
+import {
+  getTokenCost,
+  ADVANCED_ANIM_RESOLUTION_PRESETS,
+  ADVANCED_ANIM_DEFAULT_RESOLUTION,
+} from '@/lib/styleRegistry';
 
 const ACTIONS = [
   { id: 'walking', name: 'Walk', desc: 'Walking cycle animation' },
@@ -102,24 +106,21 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     }
   }, [userId, setTokenBalance, fetchBalance]);
 
-  // Final prepared 64x64 character ready for animation
+  // Character state
   const [characterDataUrl, setCharacterDataUrl] = useState<string | null>(null);
   const [charWidth, setCharWidth] = useState(0);
   const [charHeight, setCharHeight] = useState(0);
   const [hasAlpha, setHasAlpha] = useState(false);
-  // Raw upload awaiting auto-prep review (before becoming the character)
   const [pendingDataUrl, setPendingDataUrl] = useState<string | null>(null);
   const [pendingWidth, setPendingWidth] = useState(0);
   const [pendingHeight, setPendingHeight] = useState(0);
   const [bgColor, setBgColor] = useState('#000000');
-  // Animation padding — shrinks character on canvas to leave room for
-  // weapon swings and motion FX. Auto-toggles based on selected action,
-  // but user manual toggles stick until they pick a different action.
   const [paddingEnabled, setPaddingEnabled] = useState(false);
   const [characterSizePct, setCharacterSizePct] = useState(75);
   const [selectedAction, setSelectedAction] = useState('walking');
   const [frameCount, setFrameCount] = useState<number>(4);
   const [motionPrompt, setMotionPrompt] = useState('');
+  const [selectedResolution, setSelectedResolution] = useState<number>(ADVANCED_ANIM_DEFAULT_RESOLUTION);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Token cost depends on selected action
@@ -129,10 +130,26 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const tokensNeeded = tokenCost - tokenBalance;
 
   // Auto-toggle animation padding based on selected action.
-  // User manual toggles (after this fires) stick until the next action change.
   useEffect(() => {
     setPaddingEnabled(PADDING_ON_ACTIONS.has(selectedAction));
   }, [selectedAction]);
+
+  // When resolution changes after a character is already prepped, invalidate it
+  // so the user re-runs Auto-Prep at the new size. This is simpler and more
+  // reliable than trying to silently re-resize the prepped image.
+  const handleResolutionChange = useCallback((newRes: number) => {
+    if (newRes === selectedResolution) return;
+    setSelectedResolution(newRes);
+    // If character was already prepped at a different size, clear it
+    if (characterDataUrl && (charWidth !== newRes || charHeight !== newRes)) {
+      setCharacterDataUrl(null);
+      setCharWidth(0);
+      setCharHeight(0);
+      setHasAlpha(false);
+      // Re-show the pending image so Auto-Prep can re-run at new size
+      // (only if we still have the original upload)
+    }
+  }, [selectedResolution, characterDataUrl, charWidth, charHeight]);
 
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -149,13 +166,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       const dataUrl = reader.result as string;
       const img = new Image();
       img.onload = () => {
-        // Upload goes into the "pending" slot — the CharacterAutoPrep panel
-        // runs the detect → crop → bg-remove → resize pipeline and emits a
-        // prepared 64x64 data URL via `handleAutoPrepAccept`.
         setPendingDataUrl(dataUrl);
         setPendingWidth(img.naturalWidth);
         setPendingHeight(img.naturalHeight);
-        // Clear any previously confirmed character
         setCharacterDataUrl(null);
         setCharWidth(0);
         setCharHeight(0);
@@ -176,14 +189,12 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setPendingHeight(0);
   }, []);
 
-  /** User approved the auto-prepped character. It's already 64x64 with
-   *  transparent padding — promote it to the confirmed character slot. */
   const handleAutoPrepAccept = useCallback(
     (preparedDataUrl: string, w: number, h: number) => {
       setCharacterDataUrl(preparedDataUrl);
       setCharWidth(w);
       setCharHeight(h);
-      setHasAlpha(true); // prepared image always has transparent padding
+      setHasAlpha(true);
       setPendingDataUrl(null);
       setPendingWidth(0);
       setPendingHeight(0);
@@ -191,7 +202,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     []
   );
 
-  /** User rejected the auto-prepped character — return to the upload zone. */
   const handleAutoPrepCancel = useCallback(() => {
     setPendingDataUrl(null);
     setPendingWidth(0);
@@ -204,21 +214,16 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
     const img = new Image();
     img.src = characterDataUrl;
-    // Image should already be loaded since we showed it as preview
     const canvas = document.createElement('canvas');
     canvas.width = charWidth;
     canvas.height = charHeight;
     const ctx = canvas.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
 
-    // Fill with background color first
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, charWidth, charHeight);
-
-    // Draw image on top (composites alpha onto solid bg)
     ctx.drawImage(img, 0, 0);
 
-    // Get as PNG base64 without the data URL prefix
     return canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
   }, [characterDataUrl, charWidth, charHeight, bgColor]);
 
@@ -238,8 +243,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         mode: 'animate',
         inputImage: rgbBase64,
         action: selectedAction,
-        width: 64,
-        height: 64,
+        width: selectedResolution,
+        height: selectedResolution,
         framesDuration: frameCount,
       };
 
@@ -247,10 +252,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         body.motionPrompt = motionPrompt.trim();
       }
 
-      // Get Clerk session token for Bearer auth on the API route
       const sessionToken = await getToken();
 
-      // Use SSE streaming to avoid Cloudflare 524 timeout
       const { fetchGenerationSSE } = await import('@/lib/sseClient');
       const data = await fetchGenerationSSE(body, sessionToken);
 
@@ -259,12 +262,10 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         return;
       }
 
-      // Retro Diffusion direct API returns a data URL directly (not a remote URL)
       const dataUrl = data.imageUrl!;
 
       setGeneratedImage(dataUrl, dataUrl);
       setGenerationStyle(`any_animation_${selectedAction}`);
-      // Refresh token balance from server (tokens were already debited server-side)
       await fetchBalance();
       onGenerated(dataUrl, motionPrompt.trim() || selectedAction, `any_animation_${selectedAction}`);
     } catch (err) {
@@ -283,13 +284,13 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       setGeneratingAction(null);
     }
   }, [
-    characterDataUrl, isGenerating, selectedAction, charWidth, charHeight,
+    characterDataUrl, isGenerating, selectedAction, selectedResolution, charWidth, charHeight,
     frameCount, motionPrompt, convertToRgbBase64, tokenCost, getToken,
     setGenerating, setGeneratingAction, setGenerationError, setGeneratedImage,
     setGenerationStyle, setOriginalCharacter, setTokenBalance, fetchBalance, onGenerated,
   ]);
 
-  const sizeWarning = charWidth > 0 && (charWidth !== 64 || charHeight !== 64);
+  const sizeWarning = charWidth > 0 && (charWidth !== selectedResolution || charHeight !== selectedResolution);
   const isCustomAction = selectedAction === 'custom_action';
   const canGenerate = characterDataUrl && !sizeWarning && (!isCustomAction || motionPrompt.trim()) && !insufficientTokens;
 
@@ -375,17 +376,13 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         />
       </div>
 
-      {/* Auto-prep pipeline — runs detect → crop → bg-remove → fit 64x64
-          on any uploaded image. User reviews the before/after and clicks
-          Use This to confirm, or Upload Different to try another file.
-          Animation Padding shrinks the character within the 64x64 canvas
-          to leave margin for weapon swings and motion effects. */}
+      {/* Auto-prep pipeline — resizes to selectedResolution × selectedResolution */}
       {pendingDataUrl && (
         <CharacterAutoPrep
           sourceDataUrl={pendingDataUrl}
           sourceWidth={pendingWidth}
           sourceHeight={pendingHeight}
-          targetSize={64}
+          targetSize={selectedResolution}
           onAccept={handleAutoPrepAccept}
           onCancel={handleAutoPrepCancel}
           paddingEnabled={paddingEnabled}
@@ -461,6 +458,31 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         </div>
       </div>
 
+      {/* Resolution picker */}
+      <div>
+        <label className="block text-[10px] font-mono text-text-muted mb-2">
+          Resolution (per frame)
+        </label>
+        <div className="flex gap-1.5">
+          {ADVANCED_ANIM_RESOLUTION_PRESETS.map((res) => (
+            <button
+              key={res}
+              onClick={() => handleResolutionChange(res)}
+              className={`px-3 py-1.5 rounded text-xs font-mono cursor-pointer transition-colors
+                ${selectedResolution === res
+                  ? 'bg-accent-amber text-bg-primary'
+                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
+                }`}
+            >
+              {res}
+            </button>
+          ))}
+        </div>
+        <p className="text-[9px] font-mono text-text-muted/70 mt-1">
+          Larger = more detail. Cost is flat per generation — no resolution surcharge.
+        </p>
+      </div>
+
       {/* Frame count */}
       <div>
         <label className="block text-[10px] font-mono text-text-muted mb-2">
@@ -509,9 +531,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       {/* Note about constraints */}
       <div className="text-[9px] font-mono text-text-muted/70 border-t border-border-subtle pt-3 space-y-1">
         <p>
-          Character animation is optimized for 64x64 sprites. Generates a
-          single-direction sprite strip — generate separately for each direction
-          if you need a full 4-direction sheet.
+          Generates a single-direction sprite strip — generate separately for each
+          direction if you need a full 4-direction sheet.
         </p>
         <p>
           For best results, your character should be on a solid color background
@@ -543,7 +564,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       {/* Generate button */}
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-mono text-text-muted">
-          {charWidth > 0 ? `64x64 · ${frameCount} frames · ${tokenCost} tokens` : 'Upload a 64x64 character to begin'}
+          {charWidth > 0 ? `${selectedResolution}x${selectedResolution} · ${frameCount} frames · ${tokenCost} tokens` : `Upload a character to begin (${selectedResolution}x${selectedResolution})`}
           {userId && (
             <span className={`ml-2 ${insufficientTokens ? 'text-red-400' : 'text-accent-amber'}`}>
               &middot; Balance: {tokenBalance} 🪙

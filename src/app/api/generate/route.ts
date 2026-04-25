@@ -226,8 +226,10 @@ function validateAnimateBody(body: GenerateBody): string | null {
   if (!body.inputImage) return 'An input image is required for animation. Please upload a character first.';
   if (!body.action || !VALID_ACTIONS.includes(body.action))
     return `Invalid action. Must be one of: ${VALID_ACTIONS.join(', ')}`;
-  if (body.width !== 64 || body.height !== 64)
-    return `Animate My Character supports 64x64 images only. Your image is ${body.width}x${body.height}.`;
+  const w = body.width ?? 64;
+  const h = body.height ?? 64;
+  if (w !== h) return `Animation requires square dimensions. Got ${w}x${h}.`;
+  if (w < 32 || w > 256) return `Animation resolution must be between 32 and 256. Got ${w}.`;
   return null;
 }
 
@@ -288,6 +290,7 @@ async function runAnimate(body: GenerateBody): Promise<Record<string, unknown>> 
   const { inputImage, action, framesDuration, motionPrompt } = body;
   const duration = framesDuration && VALID_FRAME_DURATIONS.includes(framesDuration) ? framesDuration : 4;
   const rawBase64 = inputImage!.replace(/^data:image\/[a-z]+;base64,/, '');
+  const animSize = body.width ?? 64;
 
   const prefix = ACTION_PROMPT_PREFIX[action!] ?? '';
   const userMotion = motionPrompt?.trim() ?? '';
@@ -298,7 +301,7 @@ async function runAnimate(body: GenerateBody): Promise<Record<string, unknown>> 
   const promptStyle = ACTION_STYLE_MAP[action!] ?? FALLBACK_STYLE;
 
   const payload: Record<string, unknown> = {
-    prompt, width: 64, height: 64, num_images: 1,
+    prompt, width: animSize, height: animSize, num_images: 1,
     prompt_style: promptStyle, frames_duration: duration,
     return_spritesheet: true, input_image: rawBase64,
   };

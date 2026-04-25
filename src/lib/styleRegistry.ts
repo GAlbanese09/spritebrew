@@ -176,6 +176,16 @@ export function getTierLabel(tier: StyleTier): string {
 }
 
 /**
+ * Resolution presets for rd_advanced_animation__* styles (Animate tab).
+ * These styles support variable per-frame resolution from 32 to 256.
+ * Cost is flat regardless of resolution.
+ */
+export const ADVANCED_ANIM_RESOLUTION_PRESETS = [32, 64, 128, 256] as const;
+export const ADVANCED_ANIM_DEFAULT_RESOLUTION = 128;
+export const ADVANCED_ANIM_MIN_SIZE = 32;
+export const ADVANCED_ANIM_MAX_SIZE = 256;
+
+/**
  * Look up the token cost for a given prompt_style string.
  * Handles both Create New styles (in the registry) and Animate tab styles
  * (rd_advanced_animation__* which aren't in the registry).

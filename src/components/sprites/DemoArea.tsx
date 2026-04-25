@@ -402,6 +402,7 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
 
       // Track previous resolved anim ID to detect changes
       let prevAnimId: string | null = null;
+      let prevIdleFallback = false;
 
       // Game loop
       let lastFpsTime = performance.now();
@@ -504,8 +505,12 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           }
         }
 
-        // If resolved animation changed, restart it
-        if (targetAnimId !== prevAnimId && targetAnim) {
+        // If resolved animation OR idle-fallback flag changed, restart playback.
+        // Tracking idleFallback transitions catches the case where the same
+        // sprite is used as both synthetic-idle (stopped) and walking (playing).
+        const animOrFallbackChanged =
+          targetAnimId !== prevAnimId || idleFallback !== prevIdleFallback;
+        if (animOrFallbackChanged && targetAnim) {
           const s = spriteMap.get(targetAnim.id);
           if (s) {
             if (idleFallback) {
@@ -517,6 +522,7 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           }
         }
         prevAnimId = targetAnimId;
+        prevIdleFallback = idleFallback;
 
         // Update overlay
         setOverlayInfo({

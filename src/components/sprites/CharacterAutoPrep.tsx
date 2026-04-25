@@ -205,13 +205,15 @@ export default function CharacterAutoPrep({
     return () => { cancelled = true; };
   }, [sourceDataUrl, tolerance, targetSize, effectivePct]);
 
-  // ── Re-fit when padding changes — uses editedBaseDataUrl if available ──
+  // ── Re-fit when padding OR target size changes — uses editedBaseDataUrl if available ──
+  // effectivePct + targetSize fully cover when re-fitting is needed;
+  // other refs are intentionally read via closure to avoid stale-data races.
   useEffect(() => {
     if (lastSourceRef.current !== sourceDataUrl) return;
     if (stage !== 'ready') return;
     recomputeDisplay(effectivePct);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectivePct]);
+  }, [effectivePct, targetSize]);
 
   const handleAccept = useCallback(() => {
     if (!preparedDataUrl) return;
@@ -313,7 +315,9 @@ export default function CharacterAutoPrep({
             <div className="text-center">
               <p className="text-[9px] font-mono text-accent-amber mb-1.5 uppercase tracking-wider">
                 {editedBaseDataUrl ? 'Edited' : 'Prepared'}
-                {cropBBox && !editedBaseDataUrl && ` (${cropBBox.width}x${cropBBox.height})`}
+                {/* Was: ${cropBBox.width}x${cropBBox.height} (showed pre-resize bbox)
+                    Now: ${targetSize}x${targetSize} (matches actual preparedDataUrl resolution) */}
+                {cropBBox && !editedBaseDataUrl && ` (${targetSize}x${targetSize})`}
               </p>
               <div
                 className="inline-block rounded border border-accent-amber/40 overflow-hidden"

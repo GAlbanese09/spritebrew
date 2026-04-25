@@ -376,6 +376,31 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         />
       </div>
 
+      {/* Resolution picker — placed before Auto-Prep so users choose size first */}
+      <div>
+        <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2">
+          Resolution
+        </label>
+        <div className="flex gap-1.5">
+          {ADVANCED_ANIM_RESOLUTION_PRESETS.map((res) => (
+            <button
+              key={res}
+              onClick={() => handleResolutionChange(res)}
+              className={`px-3 py-1.5 rounded text-xs font-mono cursor-pointer transition-colors
+                ${selectedResolution === res
+                  ? 'bg-accent-amber text-bg-primary'
+                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
+                }`}
+            >
+              {res}
+            </button>
+          ))}
+        </div>
+        <p className="text-[9px] font-mono text-text-muted/70 mt-1">
+          Larger = more detail. Cost is flat per generation — no resolution surcharge.
+        </p>
+      </div>
+
       {/* Auto-prep pipeline — resizes to selectedResolution × selectedResolution */}
       {pendingDataUrl && (
         <CharacterAutoPrep
@@ -456,31 +481,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             );
           })}
         </div>
-      </div>
-
-      {/* Resolution picker */}
-      <div>
-        <label className="block text-[10px] font-mono text-text-muted mb-2">
-          Resolution (per frame)
-        </label>
-        <div className="flex gap-1.5">
-          {ADVANCED_ANIM_RESOLUTION_PRESETS.map((res) => (
-            <button
-              key={res}
-              onClick={() => handleResolutionChange(res)}
-              className={`px-3 py-1.5 rounded text-xs font-mono cursor-pointer transition-colors
-                ${selectedResolution === res
-                  ? 'bg-accent-amber text-bg-primary'
-                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
-                }`}
-            >
-              {res}
-            </button>
-          ))}
-        </div>
-        <p className="text-[9px] font-mono text-text-muted/70 mt-1">
-          Larger = more detail. Cost is flat per generation — no resolution surcharge.
-        </p>
       </div>
 
       {/* Frame count */}

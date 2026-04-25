@@ -70,11 +70,24 @@ body {
   font-family: var(--font-mono);
 }
 
-/* Pixel-perfect rendering for all images */
+/* Pixel-perfect rendering for all images.
+   Order matters: legacy Firefox fallback first, then `crisp-edges`,
+   then `pixelated` LAST so it wins in modern Chrome/Edge/Safari. */
 img,
 canvas {
-  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
   image-rendering: crisp-edges;
+  image-rendering: pixelated;
+}
+
+/* Explicit utility class for elements that absolutely must never smooth.
+   Applied defensively on Auto-Prep preview images and pixel-art thumbnails. */
+@layer utilities {
+  .pixel-art-render {
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+    image-rendering: pixelated;
+  }
 }
 
 /* ── Pixel grid background ── */

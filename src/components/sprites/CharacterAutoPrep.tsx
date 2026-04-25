@@ -301,8 +301,8 @@ export default function CharacterAutoPrep({
                 <img
                   src={sourceDataUrl}
                   alt="Original"
-                  className="block"
-                  style={{ imageRendering: 'pixelated', maxWidth: 128, maxHeight: 128 }}
+                  className="block pixel-art-render"
+                  style={{ maxWidth: 128, maxHeight: 128 }}
                 />
               </div>
             </div>
@@ -328,9 +328,8 @@ export default function CharacterAutoPrep({
                   <img
                     src={preparedDataUrl}
                     alt="Prepared character"
-                    className="block"
+                    className="block pixel-art-render"
                     style={{
-                      imageRendering: 'pixelated',
                       width: targetSize * previewScale,
                       height: targetSize * previewScale,
                     }}

@@ -25,6 +25,7 @@ type WorldScale = typeof VALID_WORLD_SCALES[number];
 type CharState = 'idle' | 'walking' | 'running' | 'attacking' | 'jumping' | 'hurt';
 type Direction = 'up' | 'down' | 'left' | 'right';
 type BgPreset = 'grid' | 'grass' | 'dungeon' | 'black' | 'white';
+type NaturalFacing = 'left' | 'right';
 
 // Internal canvas resolution. The CSS display size is responsive (max 100%
 // width preserving 16:9 aspect ratio) so pixel-art scales cleanly on smaller
@@ -173,6 +174,7 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
   const directionRef = useRef<Direction>('down');
   const lockedRef = useRef(false);
   const worldScaleRef = useRef<WorldScale>(2);
+  const naturalFacingRef = useRef<NaturalFacing>('right');
 
   const animMapsRef = useRef<ReturnType<typeof buildAnimMaps>>({
     hasDirectional: false,
@@ -188,6 +190,7 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
   // Default 2× — most generated sprites are 64–128 and 2× reads well on 1280×720.
   const [worldScale, setWorldScale] = useState<WorldScale>(2);
   const [showcaseMode, setShowcaseMode] = useState(false);
+  const [naturalFacing, setNaturalFacing] = useState<NaturalFacing>('right');
   const [overlayInfo, setOverlayInfo] = useState({
     animation: 'idle',
     state: 'idle' as CharState,
@@ -202,6 +205,11 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
   useEffect(() => {
     animMapsRef.current = buildAnimMaps(animations);
   }, [animations]);
+
+  // Sync natural-facing into a ref so the game loop reads it without re-render churn.
+  useEffect(() => {
+    naturalFacingRef.current = naturalFacing;
+  }, [naturalFacing]);
 
   // Get best animation for a state+direction, with fallbacks.
   const getAnimForState = useCallback(
@@ -558,7 +566,12 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
               sprite.scale.x = absScale;
             } else {
               const absScale = Math.abs(sprite.scale.x);
-              sprite.scale.x = facingRef.current * absScale;
+              // facingRef = +1 (moving right) / -1 (moving left).
+              // For right-natural sheets: scale.x = facingRef * absScale (right=+, left=-).
+              // For left-natural sheets: invert — sheet faces left at rest, so moving
+              // left = no flip, moving right = flip.
+              const naturalSign = naturalFacingRef.current === 'right' ? 1 : -1;
+              sprite.scale.x = naturalSign * facingRef.current * absScale;
             }
 
             const storeAnim = animations.find((a) => a.id === animId);
@@ -884,6 +897,30 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
               Showcase
             </button>
           </div>
+
+          {/* Natural facing toggle — for sheets generated facing left
+              (single-direction sheets only; ignored when directional anims exist). */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
+              Facing
+            </label>
+            {([
+              { id: 'left', label: '← Left' },
+              { id: 'right', label: 'Right →' },
+            ] as const).map(({ id, label }) => (
+              <button
+                key={id}
+                onClick={() => setNaturalFacing(id)}
+                className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
+                  ${naturalFacing === id
+                    ? 'bg-accent-amber text-bg-primary'
+                    : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
+                  }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </>
       )}
 
@@ -975,6 +1012,9 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
             <p className="text-[9px] font-mono text-text-muted/70 pt-1 border-t border-border-subtle">
               Arrow keys control direction when directional animations (Walk Up/Down/Left/Right) are available.
               Vertical direction takes priority on diagonals.
+            </p>
+            <p className="text-[9px] font-mono text-text-muted/70">
+              Sprite moonwalking? Try toggling natural facing if your sheet was generated facing left.
             </p>
           </div>
         )}

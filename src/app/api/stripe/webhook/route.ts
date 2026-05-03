@@ -2,7 +2,7 @@ export const runtime = 'edge';
 
 import Stripe from 'stripe';
 import { stripe } from '@/lib/stripe';
-import { creditTokens, getTokenBalance } from '@/lib/tokenBalance';
+import { creditTokens, getTokenBalance, setUserPaid } from '@/lib/tokenBalance';
 import { debitTokensForRefund } from '@/lib/tokenDebit';
 import { setAccountStatus } from '@/lib/accountLock';
 import { recordEvidenceSnapshot, loadConsentSnapshot } from '@/lib/disputeEvidence';
@@ -119,6 +119,8 @@ async function handleCheckoutCompleted(event: Stripe.Event, kv: KV | null): Prom
   try {
     await creditTokens(userId, tokens, `token_pack_purchase:${packId}`, event.id);
     console.log(`[Stripe Webhook] Credited ${tokens} tokens to ${userId} (pack: ${packId})`);
+    // Mark user as paid — bypasses free-tier lifetime caps from this point on.
+    await setUserPaid(userId);
   } catch (err) {
     console.error('[Stripe Webhook] Credit failed:', err);
   }

@@ -263,3 +263,13 @@ export function getTokenCost(promptStyle: string): number {
   // Unknown style — default to Plus tier
   return 10;
 }
+
+/**
+ * Map a prompt_style → free-tier counter bucket. Fast styles use the `fast`
+ * counter; everything else (Plus, Pro, Animation) rolls up under `pro`.
+ */
+export function getFreeTierBucket(promptStyle: string): 'pro' | 'fast' {
+  const style = GENERATION_STYLES.find((s) => s.promptStyle === promptStyle);
+  if (style?.tier === 'fast') return 'fast';
+  return 'pro';
+}

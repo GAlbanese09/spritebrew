@@ -46,11 +46,20 @@ export async function fetchGenerationSSE(
   if (contentType.includes('application/json')) {
     const data = await res.json();
     if (!data.success) {
-      // For 402 (insufficient tokens), include balance info in the error
-      if (res.status === 402 && data.balance !== undefined) {
-        const err = new Error(data.error || `HTTP ${res.status}`);
-        (err as Error & { balance?: number; required?: number }).balance = data.balance;
-        (err as Error & { balance?: number; required?: number }).required = data.required;
+      // 402 — surface balance/required (for insufficient_tokens) and code/tier
+      // (for free_tier_cap_reached) so forms can render specific UX.
+      if (res.status === 402) {
+        const message = data.message || data.error || `HTTP ${res.status}`;
+        const err = new Error(message) as Error & {
+          balance?: number;
+          required?: number;
+          code?: string;
+          tier?: 'pro' | 'fast';
+        };
+        if (data.balance !== undefined) err.balance = data.balance;
+        if (data.required !== undefined) err.required = data.required;
+        if (data.code) err.code = data.code;
+        if (data.tier) err.tier = data.tier;
         throw err;
       }
       throw new Error(data.error || `HTTP ${res.status}`);

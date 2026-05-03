@@ -168,7 +168,19 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       onGenerated(dataUrl, prompt.trim(), selectedStyleId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      const errObj = err as Error & { balance?: number; required?: number };
+      const errObj = err as Error & {
+        balance?: number;
+        required?: number;
+        code?: string;
+        tier?: 'pro' | 'fast';
+      };
+      if (errObj.code === 'free_tier_cap_reached') {
+        const tierLabel = errObj.tier === 'fast' ? 'Fast' : 'Pro';
+        setGenerationError(
+          `You've used all free ${tierLabel} generations on this account. Token packs start at $4.99 — top up to keep brewing.`
+        );
+        return;
+      }
       if (errObj.balance !== undefined && errObj.required !== undefined) {
         setGenerationError(
           `You need ${errObj.required} tokens for this style, but you have ${errObj.balance}. Try a cheaper style or buy more tokens!`
@@ -345,22 +357,33 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
       {/* Error */}
       {generationError && (
-        <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3">
-          <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
-          <p className="text-xs font-mono text-red-400">
-            {generationError.includes('buy more tokens') ? (
-              <>
-                {generationError.replace('buy more tokens!', '')}
-                <a href="/buy-tokens" className="underline hover:text-red-300">buy more tokens</a>!
-              </>
-            ) : generationError}
-          </p>
-          <button
-            onClick={() => setGenerationError(null)}
-            className="ml-auto text-red-400 hover:text-red-300 cursor-pointer flex-shrink-0"
-          >
-            <X size={12} />
-          </button>
+        <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3">
+          <div className="flex items-start gap-2">
+            <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
+            <p className="text-xs font-mono text-red-400">
+              {generationError.includes('buy more tokens') ? (
+                <>
+                  {generationError.replace('buy more tokens!', '')}
+                  <a href="/buy-tokens" className="underline hover:text-red-300">buy more tokens</a>!
+                </>
+              ) : generationError}
+            </p>
+            <button
+              onClick={() => setGenerationError(null)}
+              className="ml-auto text-red-400 hover:text-red-300 cursor-pointer flex-shrink-0"
+            >
+              <X size={12} />
+            </button>
+          </div>
+          {generationError.includes('top up') && (
+            <a
+              href="/buy-tokens"
+              className="inline-block mt-2 ml-6 px-3 py-1.5 rounded text-[10px] font-mono
+                bg-accent-amber text-bg-primary hover:bg-accent-amber/90 transition-colors"
+            >
+              Buy Tokens
+            </a>
+          )}
         </div>
       )}
 

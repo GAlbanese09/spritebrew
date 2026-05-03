@@ -59,6 +59,21 @@ export const ENGINE_TARGETS = [
   { id: 'raw-frames', label: 'Individual Frames (PNG)', engines: ['Any'] },
 ] as const;
 
+// ── Free-tier lifetime caps (S15 anti-farming) ──
+// Apply only to users who have not yet purchased tokens (no purchase:{userId}:has_paid flag).
+// Plus / Pro / Animation all roll up under the Pro counter; Fast has its own counter.
+// Admin user IDs (see generationLimits.ts) bypass these caps.
+export const FREE_TIER_LIFETIME_PRO_CAP = 10;
+export const FREE_TIER_LIFETIME_FAST_CAP = 30;
+
+// ── Signup / earn-back bonuses (S15 reduction) ──
+export const SIGNUP_BONUS_TOKENS = 30;
+export const EARLY_ADOPTER_BONUS_TOKENS = 200; // grandfather clause — unchanged
+export const EARN_BACK_EMAIL_VERIFIED_TOKENS = 30;
+export const EARN_BACK_DISCORD_JOINED_TOKENS = 40;
+export const EARN_BACK_FIRST_SHARE_TOKENS = 20;
+export const EARN_BACK_FLAG_TTL_SECONDS = 50 * 24 * 60 * 60; // 50 days
+
 // Demo area keyboard controls
 export const DEMO_CONTROLS = {
   move: { keys: ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'], alt: ['a', 'd', 'w', 's'], description: 'Move character' },

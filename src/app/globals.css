@@ -189,3 +189,29 @@ canvas {
   from { opacity: 0; transform: translateY(16px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* Reward modal — coin bounce with overshoot. Drops in from above, lands large
+   (1.15x overshoot), settles to 1.0. Pixel-art rendering preserved via the
+   .pixel-art-render class on the SVG itself. */
+@keyframes rewardCoinBounce {
+  0%   { transform: translateY(-40px) scale(0.6); opacity: 0; }
+  55%  { transform: translateY(8px)   scale(1.15); opacity: 1; }
+  75%  { transform: translateY(-4px)  scale(0.95); }
+  100% { transform: translateY(0)     scale(1); }
+}
+
+@keyframes rewardBackdropFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes rewardCardPopIn {
+  0%   { opacity: 0; transform: scale(0.85); }
+  60%  { opacity: 1; transform: scale(1.04); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes rewardAmountGlow {
+  0%, 100% { text-shadow: 0 0 4px var(--accent-amber-glow); }
+  50%      { text-shadow: 0 0 16px var(--accent-amber-strong); }
+}

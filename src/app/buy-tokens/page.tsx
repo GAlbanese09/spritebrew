@@ -8,6 +8,7 @@ import { Show, SignInButton, useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { TOKEN_PACKS } from '@/lib/tokenPacks';
 import Button from '@/components/ui/Button';
+import EmailListPanel from '@/components/account/EmailListPanel';
 
 export default function BuyTokensPage() {
   const { userId, getToken } = useAuth();
@@ -94,6 +95,9 @@ export default function BuyTokensPage() {
       </Show>
 
       <Show when="signed-in">
+        {/* Newsletter earn-back — hides itself once claimed */}
+        <EmailListPanel variant="full" />
+
         {/* Current balance */}
         <div className="rounded-lg border border-border-default bg-bg-surface px-5 py-4">
           <p className="text-xs font-mono text-text-muted uppercase tracking-wider mb-1">Current Balance</p>

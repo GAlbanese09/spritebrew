@@ -125,7 +125,6 @@ function startHeartbeat(writer: WritableStreamDefaultWriter<Uint8Array>, ms = 15
 import {
   debitTokens,
   creditTokens,
-  grantEarnBackBonus,
   getLifetimeFreeCount,
   incrementLifetimeFreeCount,
   hasUserPaid,
@@ -144,62 +143,6 @@ const FREE_TIER_CAP: Record<FreeTierBucket, number> = {
   fast: FREE_TIER_LIFETIME_FAST_CAP,
 };
 
-// ── KV (for the email-verified cache used by the earn-back grant) ──
-interface KVMin {
-  get(key: string): Promise<string | null>;
-  put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
-}
-function getKV(): KVMin | null {
-  const kv = (process.env as Record<string, unknown>).SPRITEBREW_KV;
-  if (kv && typeof (kv as KVMin).put === 'function') return kv as KVMin;
-  return null;
-}
-
-/**
- * Best-effort check that the user's primary email is verified, with a 24h
- * KV cache to keep latency off the hot path. Returns false on any failure
- * so the earn-back grant simply waits until next time.
- */
-async function isEmailVerified(userId: string): Promise<boolean> {
-  const kv = getKV();
-  if (!kv) return false;
-
-  try {
-    const cached = await kv.get(`email_verified_cache:${userId}`);
-    if (cached === 'yes') return true;
-    if (cached === 'no') return false;
-
-    const secret = process.env.CLERK_SECRET_KEY;
-    if (!secret) return false;
-
-    const res = await fetch(`https://api.clerk.com/v1/users/${userId}`, {
-      headers: { Authorization: `Bearer ${secret}` },
-    });
-    if (!res.ok) return false;
-
-    const user = await res.json() as {
-      primary_email_address_id?: string;
-      email_addresses?: Array<{
-        id: string;
-        verification?: { status?: string };
-      }>;
-    };
-
-    const primary = user.email_addresses?.find(
-      (e) => e.id === user.primary_email_address_id
-    );
-    const verified = primary?.verification?.status === 'verified';
-
-    await kv.put(
-      `email_verified_cache:${userId}`,
-      verified ? 'yes' : 'no',
-      { expirationTtl: 86_400 }
-    );
-    return verified;
-  } catch {
-    return false;
-  }
-}
 
 export async function POST(request: Request) {
   const authResult = getAuthedUserId(request);
@@ -252,17 +195,10 @@ export async function POST(request: Request) {
   const bucket: FreeTierBucket = getFreeTierBucket(promptStyle);
   const isAdmin = isAdminUser(userId);
 
-  // Email-verified earn-back — fire-and-forget grant on every authed call.
-  // The helper is idempotent (50-day flag) and silent if the user isn't
-  // verified yet. Awaited so the earn-back lands before the balance read,
-  // but failure is swallowed so it never blocks generation.
-  if (!isAdmin) {
-    try {
-      if (await isEmailVerified(userId)) {
-        await grantEarnBackBonus(userId, 'email_verified');
-      }
-    } catch { /* never block on earn-back */ }
-  }
+  // (S16: email-verify earn-back removed — bots pass OTP trivially. Engagement
+  // rewards now live in the daily-login + email-list flows. We keep the
+  // bonus_email_verified:* and email_verified_cache:* KV keys untouched for
+  // historical analytics; nothing here writes to them anymore.)
 
   // Free-tier lifetime cap enforcement — only for users who haven't paid.
   // Admins are exempt. Plus / Pro / Animation roll up under the `pro` bucket;

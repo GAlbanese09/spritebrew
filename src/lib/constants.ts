@@ -66,10 +66,18 @@ export const ENGINE_TARGETS = [
 export const FREE_TIER_LIFETIME_PRO_CAP = 10;
 export const FREE_TIER_LIFETIME_FAST_CAP = 30;
 
-// ── Signup / earn-back bonuses (S15 reduction) ──
-export const SIGNUP_BONUS_TOKENS = 30;
-export const EARLY_ADOPTER_BONUS_TOKENS = 200; // grandfather clause — unchanged
-export const EARN_BACK_EMAIL_VERIFIED_TOKENS = 30;
+// ── Signup / earn-back bonuses (S16 — engagement-driven rewards) ──
+// Email-verify earn-back removed: bots can pass OTP trivially, so it added no
+// real signal. Replaced with newsletter signup (real engagement) + daily login
+// streak (bot-resistant via the open-the-app gate).
+export const SIGNUP_BONUS_TOKENS = 5;            // was 30 — theater reduction
+export const EARLY_ADOPTER_BONUS_TOKENS = 200;   // grandfather clause — unchanged
+export const EMAIL_LIST_BONUS_TOKENS = 5;        // newsletter subscribe — real signal
+export const DAILY_LOGIN_TOKENS = 3;             // per-day visit reward
+export const STREAK_WEEKLY_BONUS_TOKENS = 6;     // every 7th consecutive day → doubled
+export const STREAK_INTERVAL_DAYS = 7;
+// Earn-back KV flags retained for analytics — no longer written for email_verified.
+// Discord / first-share remain wired but unused (no UI trigger yet).
 export const EARN_BACK_DISCORD_JOINED_TOKENS = 40;
 export const EARN_BACK_FIRST_SHARE_TOKENS = 20;
 export const EARN_BACK_FLAG_TTL_SECONDS = 50 * 24 * 60 * 60; // 50 days

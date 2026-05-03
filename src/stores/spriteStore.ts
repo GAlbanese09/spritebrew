@@ -2,6 +2,15 @@ import { create } from 'zustand';
 import type { SpriteSheet, SpriteAnimation, SpriteFrame } from '@/lib/types';
 import type { SlicerHints } from '@/lib/generationHistory';
 
+/** Reward types pushed onto the celebration queue. Discriminated union so the
+ *  modal can render appropriate copy + icon for each. */
+export type PendingReward =
+  | { id: string; type: 'signup'; amount: number }
+  | { id: string; type: 'early_adopter'; amount: number }
+  | { id: string; type: 'email_list'; amount: number }
+  | { id: string; type: 'daily_login'; amount: number; streakDay: number }
+  | { id: string; type: 'streak_bonus'; amount: number; streakDay: number };
+
 interface SpriteStore {
   spriteSheet: SpriteSheet | null;
   selectedFrames: string[];
@@ -23,6 +32,15 @@ interface SpriteStore {
   generationCount: number;
   generationCountDate: string;
   tokenBalance: number;
+
+  // Reward celebration queue + streak snapshot
+  pendingRewards: PendingReward[];
+  streakCount: number;
+  streakLifetimeMax: number;
+  /** True once the user has subscribed to the newsletter. Hides the email-list
+   *  CTA in the sidebar and the panel on /buy-tokens. Hydrated from server
+   *  on rewards check. Optimistically set after a successful subscribe. */
+  emailListClaimed: boolean;
 
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
@@ -48,9 +66,15 @@ interface SpriteStore {
   setGeneratingAction: (action: string | null) => void;
   setTokenBalance: (balance: number) => void;
   setCurrentSheetMetadata: (metadata: SlicerHints | null) => void;
+
+  // Reward queue
+  enqueueRewards: (rewards: Omit<PendingReward, 'id'>[]) => void;
+  dequeueReward: () => PendingReward | null;
+  setStreak: (count: number, lifetimeMax: number) => void;
+  setEmailListClaimed: (claimed: boolean) => void;
 }
 
-export const useSpriteStore = create<SpriteStore>((set) => ({
+export const useSpriteStore = create<SpriteStore>((set, get) => ({
   spriteSheet: null,
   selectedFrames: [],
   animations: [],
@@ -68,6 +92,11 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   generationCount: 0,
   generationCountDate: '',
   tokenBalance: 0,
+
+  pendingRewards: [],
+  streakCount: 0,
+  streakLifetimeMax: 0,
+  emailListClaimed: false,
 
   setSpriteSheet: (sheet) =>
     set({ spriteSheet: sheet, selectedFrames: [], animations: [] }),
@@ -172,4 +201,28 @@ export const useSpriteStore = create<SpriteStore>((set) => ({
   setTokenBalance: (balance) => set({ tokenBalance: balance }),
 
   setCurrentSheetMetadata: (metadata) => set({ currentSheetMetadata: metadata }),
+
+  // Reward queue actions. enqueue assigns each reward a unique id so React
+  // keys and the modal's "currentReward" selection stay stable.
+  enqueueRewards: (rewards) =>
+    set((state) => {
+      if (rewards.length === 0) return state;
+      const stamped = rewards.map((r, i) => ({
+        ...r,
+        id: `${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+      })) as PendingReward[];
+      return { pendingRewards: [...state.pendingRewards, ...stamped] };
+    }),
+
+  dequeueReward: () => {
+    const queue = get().pendingRewards;
+    if (queue.length === 0) return null;
+    const [head, ...rest] = queue;
+    set({ pendingRewards: rest });
+    return head;
+  },
+
+  setStreak: (count, lifetimeMax) => set({ streakCount: count, streakLifetimeMax: lifetimeMax }),
+
+  setEmailListClaimed: (claimed) => set({ emailListClaimed: claimed }),
 }));

@@ -159,6 +159,10 @@ function PurchaseStatusContent() {
 
 type GenerateTab = 'create' | 'animate';
 
+// Daily-login + signup reward claim is handled by the Sidebar's StreakIndicator
+// hydration on mount, so it works on every signed-in page (not just Generate).
+// Server-side flags make the POST idempotent.
+
 export default function GeneratePage() {
   const { userId } = useAuth();
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);

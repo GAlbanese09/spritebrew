@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import RewardModal from '@/components/rewards/RewardModal';
 
 interface AppShellProps {
   children: ReactNode;
@@ -15,7 +16,12 @@ export default function AppShell({ children }: AppShellProps) {
 
   // The landing page at / has its own nav and layout — no sidebar/header.
   if (pathname === '/') {
-    return <>{children}</>;
+    return (
+      <>
+        {children}
+        <RewardModal />
+      </>
+    );
   }
 
   return (
@@ -31,6 +37,8 @@ export default function AppShell({ children }: AppShellProps) {
           </div>
         </main>
       </div>
+
+      <RewardModal />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -19,6 +19,8 @@ import { Show, SignInButton, useClerk, useUser, useAuth } from '@clerk/react';
 import Badge from '@/components/ui/Badge';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { FEEDBACK_URL, BETA_TOOLTIP } from '@/lib/externalLinks';
+import EmailListPanel from '@/components/account/EmailListPanel';
+import FlameIcon from '@/components/rewards/FlameIcon';
 
 const NAV_ITEMS = [
   { href: '/', label: 'Home', icon: Home, soon: false },
@@ -163,6 +165,10 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           <Show when="signed-in">
             <UserIdentity />
             <TokenBalanceDisplay />
+            <StreakIndicator />
+            <div className="px-2">
+              <EmailListPanel variant="compact" />
+            </div>
           </Show>
         </div>
 
@@ -286,6 +292,65 @@ function TokenBalanceDisplay() {
       <a href="/buy-tokens" className="text-[10px] font-mono text-accent-amber hover:underline transition-colors">
         🪙 {tokenBalance} tokens
       </a>
+    </div>
+  );
+}
+
+/**
+ * Streak indicator under the token balance. Shows the current streak count
+ * with a pixel-art flame, plus a tooltip explaining the every-7-days bonus.
+ *
+ * Hydrates on mount via the daily-reward endpoint (idempotent — same-day
+ * double-fires are no-ops on the server). This means the sidebar populates
+ * the streak even when the user lands on a page other than Generate first.
+ */
+function StreakIndicator() {
+  const { userId, getToken } = useAuth();
+  const streakCount = useSpriteStore((s) => s.streakCount);
+  const setStreak = useSpriteStore((s) => s.setStreak);
+  const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
+  const setEmailListClaimed = useSpriteStore((s) => s.setEmailListClaimed);
+  const enqueueRewards = useSpriteStore((s) => s.enqueueRewards);
+  const fired = useRef(false);
+
+  useEffect(() => {
+    if (!userId || fired.current) return;
+    fired.current = true;
+    (async () => {
+      try {
+        const token = await getToken();
+        if (!token) return;
+        const res = await fetch('/api/account/daily-reward', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data?.success) return;
+        if (data.streak) setStreak(data.streak.count, data.streak.lifetimeMax);
+        if (typeof data.balance === 'number') setTokenBalance(data.balance);
+        if (typeof data.emailListClaimed === 'boolean') setEmailListClaimed(data.emailListClaimed);
+        if (Array.isArray(data.rewards) && data.rewards.length > 0) enqueueRewards(data.rewards);
+      } catch { /* silent */ }
+    })();
+  }, [userId, getToken, setStreak, setTokenBalance, setEmailListClaimed, enqueueRewards]);
+
+  if (!userId) return null;
+
+  const tooltip = 'Visit Generate daily to keep your streak alive. Every 7th day = double tokens!';
+  const hasStreak = streakCount > 0;
+
+  return (
+    <div className="px-2 pt-1.5">
+      <span
+        title={tooltip}
+        className={`inline-flex items-center gap-1.5 text-[10px] font-mono cursor-help select-none ${
+          hasStreak ? 'text-accent-amber' : 'text-text-muted'
+        }`}
+      >
+        <FlameIcon size={11} muted={!hasStreak} />
+        {hasStreak ? `${streakCount} day${streakCount === 1 ? '' : 's'}` : 'Build a streak!'}
+      </span>
     </div>
   );
 }

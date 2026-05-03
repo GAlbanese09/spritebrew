@@ -19,7 +19,6 @@
 import {
   SIGNUP_BONUS_TOKENS,
   EARLY_ADOPTER_BONUS_TOKENS,
-  EARN_BACK_EMAIL_VERIFIED_TOKENS,
   EARN_BACK_DISCORD_JOINED_TOKENS,
   EARN_BACK_FIRST_SHARE_TOKENS,
   EARN_BACK_FLAG_TTL_SECONDS,
@@ -28,19 +27,25 @@ import {
 const TX_TTL = 7_776_000; // 90 days
 const IDEMPOTENCY_TTL = 604_800; // 7 days
 
-export type EarnBackType = 'email_verified' | 'discord_joined' | 'first_share';
+// S16: email_verified removed (bot-passable). Discord / first_share remain
+// wired via grantEarnBackBonus but lack a UI trigger — they'll be activated
+// once the Discord bot ships.
+export type EarnBackType = 'discord_joined' | 'first_share';
 export type FreeTierBucket = 'pro' | 'fast';
 
 const EARN_BACK_FLAG: Record<EarnBackType, string> = {
-  email_verified: 'bonus_email_verified',
   discord_joined: 'bonus_discord_joined',
   first_share: 'bonus_first_share',
 };
 
 const EARN_BACK_AMOUNT: Record<EarnBackType, number> = {
-  email_verified: EARN_BACK_EMAIL_VERIFIED_TOKENS,
   discord_joined: EARN_BACK_DISCORD_JOINED_TOKENS,
   first_share: EARN_BACK_FIRST_SHARE_TOKENS,
+};
+
+const EARN_BACK_SOURCE: Record<EarnBackType, TransactionSource> = {
+  discord_joined: 'discord_joined',
+  first_share: 'first_share',
 };
 
 const LIFETIME_COUNTER_KEY: Record<FreeTierBucket, string> = {
@@ -70,13 +75,35 @@ interface BalanceRecord {
   last_updated: string;
 }
 
+export type TransactionSource =
+  | 'signup'
+  | 'early_adopter'
+  | 'email_list'
+  | 'daily_login'
+  | 'streak_bonus'
+  | 'discord_joined'
+  | 'first_share'
+  | 'token_pack_purchase'
+  | 'generation_failed_refund'
+  | 'refund_debit'
+  | 'dispute_debit'
+  | 'generation';
+
 interface TransactionRecord {
   type: 'credit' | 'debit';
   amount: number;
   reason: string;
+  source?: TransactionSource;
+  streakDay?: number;
   balance_after: number;
   style?: string;
   timestamp: string;
+}
+
+/** Optional metadata threaded through creditTokens → writeTx. */
+export interface CreditMeta {
+  source?: TransactionSource;
+  streakDay?: number;
 }
 
 function txKey(userId: string): string {
@@ -132,15 +159,19 @@ async function initBalance(kv: KV, userId: string): Promise<number> {
 
   let bonus: number;
   let reason: string;
+  let source: TransactionSource | undefined;
   if (blocked === 'true') {
     bonus = 0;
     reason = 'disposable_email_no_bonus';
+    source = undefined;
   } else if (isExisting) {
     bonus = EARLY_ADOPTER_BONUS_TOKENS;
     reason = 'early_adopter_bonus';
+    source = 'early_adopter';
   } else {
     bonus = SIGNUP_BONUS_TOKENS;
     reason = 'signup_bonus';
+    source = 'signup';
   }
 
   const now = new Date().toISOString();
@@ -157,9 +188,23 @@ async function initBalance(kv: KV, userId: string): Promise<number> {
     type: 'credit',
     amount: bonus,
     reason,
+    source,
     balance_after: bonus,
     timestamp: now,
   });
+
+  // Persist the granted amount so the celebration modal can read it without
+  // scanning the tx log. No TTL — the modal might fire weeks after signup.
+  if (bonus > 0 && source) {
+    try {
+      await kv.put(
+        `signup_grant:${userId}`,
+        JSON.stringify({ amount: bonus, source, granted_at: now })
+      );
+    } catch {
+      // best effort
+    }
+  }
 
   return bonus;
 }
@@ -250,13 +295,15 @@ export interface CreditResult {
 }
 
 /**
- * Credit tokens back (refund on failure, future: purchases, daily brew).
+ * Credit tokens back (refund on failure, purchases, daily/streak rewards).
+ * Optional `meta` is recorded on the tx log entry for analytics.
  */
 export async function creditTokens(
   userId: string,
   amount: number,
   reason: string,
-  idempotencyKeyValue: string
+  idempotencyKeyValue: string,
+  meta?: CreditMeta
 ): Promise<CreditResult> {
   const kv = getKV();
   if (!kv) return { success: true, balance: 0 };
@@ -293,6 +340,8 @@ export async function creditTokens(
       type: 'credit',
       amount,
       reason,
+      source: meta?.source,
+      streakDay: meta?.streakDay,
       balance_after: newBalance,
       timestamp: now,
     });
@@ -328,7 +377,13 @@ export async function grantEarnBackBonus(
     const reason = `earn_back_${type}`;
     // Use the flag key as idempotency key for the credit too — guarantees the
     // credit and the flag write share the same one-shot semantics.
-    const result = await creditTokens(userId, amount, reason, `earnback:${type}:${userId}`);
+    const result = await creditTokens(
+      userId,
+      amount,
+      reason,
+      `earnback:${type}:${userId}`,
+      { source: EARN_BACK_SOURCE[type] }
+    );
     if (!result.success) return false;
 
     await kv.put(flagKey, '1', { expirationTtl: EARN_BACK_FLAG_TTL_SECONDS });
@@ -407,6 +462,68 @@ export async function setDisposableBlocked(userId: string): Promise<void> {
   if (!kv) return;
   try {
     await kv.put(`disposable_blocked:${userId}`, 'true');
+  } catch {
+    // best effort
+  }
+}
+
+// ── Signup-bonus modal claim ──
+
+export interface SignupGrantRecord {
+  amount: number;
+  source: TransactionSource;
+  granted_at?: string;
+}
+
+/**
+ * If the user has an unacknowledged signup grant, return its amount and atomically
+ * mark it shown. Returns null if no grant or already acknowledged.
+ */
+export async function consumeSignupGrant(userId: string): Promise<SignupGrantRecord | null> {
+  const kv = getKV();
+  if (!kv) return null;
+  try {
+    const shown = await kv.get(`signup_bonus_modal_shown:${userId}`);
+    if (shown === '1') return null;
+
+    const raw = await kv.get(`signup_grant:${userId}`);
+    if (!raw) {
+      // No record (older signups before S16 — mark shown so we don't keep checking)
+      await kv.put(`signup_bonus_modal_shown:${userId}`, '1');
+      return null;
+    }
+
+    const grant = JSON.parse(raw) as SignupGrantRecord;
+    await kv.put(`signup_bonus_modal_shown:${userId}`, '1');
+    return grant;
+  } catch {
+    return null;
+  }
+}
+
+// ── Email-list earn-back ──
+
+/** True if the user has already claimed the newsletter signup bonus. */
+export async function hasClaimedEmailList(userId: string): Promise<boolean> {
+  const kv = getKV();
+  if (!kv) return false;
+  try {
+    const v = await kv.get(`bonus_email_list:${userId}`);
+    return v === '1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Mark the email-list bonus as claimed. The actual token credit happens via
+ * creditTokens(); this only sets the idempotency flag.
+ */
+export async function markEmailListClaimed(userId: string): Promise<void> {
+  const kv = getKV();
+  if (!kv) return;
+  try {
+    await kv.put(`bonus_email_list:${userId}`, '1');
   } catch {
     // best effort
   }

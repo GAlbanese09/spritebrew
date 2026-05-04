@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.3.0';
+export const CURRENT_VERSION = '0.4.0';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -22,6 +22,50 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.4.0 — Daily Brew & Pixel Polish (May 2026) ──
+  {
+    emoji: '🔥',
+    title: 'Daily Login Rewards',
+    description:
+      'Earn +3 tokens every day you generate. Streak builds with each consecutive day.',
+  },
+  {
+    emoji: '⭐',
+    title: '7-Day Streak Bonus',
+    description:
+      'Hit a 7-day streak and earn +6 tokens instead of +3. Miss a day and the streak resets.',
+  },
+  {
+    emoji: '📬',
+    title: 'Newsletter Signup Bonus',
+    description:
+      'Subscribe to product updates from inside the app and earn +5 tokens. One-time, your account email only.',
+  },
+  {
+    emoji: '🖼️',
+    title: 'Reference Images on Pro Styles',
+    description:
+      'Attach up to 9 images to guide the style, palette, and design feel of your generation. Pro tier only.',
+  },
+  {
+    emoji: '↔️',
+    title: 'Sprite-Flip Toggle',
+    description:
+      'Demo Area now lets you flip your sprite’s natural facing — fixes moonwalk on left-facing sheets.',
+  },
+  {
+    emoji: '🔍',
+    title: 'Pixel-Perfect Demo Area',
+    description:
+      'Integer-scale rendering (1×/2×/4×/8×) with drop shadows. Crisp pixels at every zoom level.',
+  },
+  {
+    emoji: '🎬',
+    title: 'Showcase Mode',
+    description:
+      'Press F in the Demo Area for distraction-free fullscreen preview. Esc or F to exit.',
+  },
+  // ── 0.3.0 — Token Economy ──
   {
     emoji: '🪙',
     title: 'Token Economy',

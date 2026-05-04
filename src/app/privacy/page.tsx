@@ -4,7 +4,7 @@ export default function PrivacyPage() {
   return (
     <div className="max-w-2xl mx-auto px-6 py-12">
       <h1 className="text-lg font-display text-accent-amber mb-1">Privacy Policy</h1>
-      <p className="text-xs font-mono text-text-muted mb-8">Last updated: April 21, 2026</p>
+      <p className="text-xs font-mono text-text-muted mb-8">Last updated: May 3, 2026</p>
 
       <div className="space-y-6 text-sm font-mono text-text-secondary leading-relaxed">
         <p>
@@ -103,8 +103,8 @@ export default function PrivacyPage() {
           <h2 className="text-sm font-display text-text-primary mb-3">Contact</h2>
           <p>
             For any privacy questions or data requests, email:{' '}
-            <a href="mailto:george@spritebrew.com" className="text-accent-amber hover:underline">
-              george@spritebrew.com
+            <a href="mailto:support@spritebrew.com" className="text-accent-amber hover:underline">
+              support@spritebrew.com
             </a>
           </p>
         </section>

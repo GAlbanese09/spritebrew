@@ -41,7 +41,7 @@ function EarlyAccessBanner() {
   return (
     <div className="flex items-center gap-3 rounded-lg border border-accent-amber/30 bg-accent-amber-glow px-4 py-2.5">
       <p className="flex-1 text-xs font-mono text-accent-amber">
-        🧪 Early Access — You have 🪙 {tokenBalance} tokens. Each style costs a different amount. Earn more tokens daily (coming soon) or{' '}
+        🧪 Early Access — You have 🪙 {tokenBalance} tokens. Each style costs a different amount. Earn +3 tokens daily (+6 on 7-day streaks) or{' '}
         <a href="/buy-tokens" className="underline hover:text-accent-amber-strong">purchase token packs</a>.
       </p>
       <button

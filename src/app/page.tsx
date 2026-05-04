@@ -186,7 +186,7 @@ export default function LandingPage() {
           </a>
         </div>
         <p className="mt-4 text-[10px] font-mono text-[#5c5550]">
-          100 free tokens on signup &middot; No credit card required
+          Start free. Earn +3 tokens every day you log in. No credit card required.
         </p>
       </section>
 
@@ -291,10 +291,11 @@ export default function LandingPage() {
             </div>
             <ul className="space-y-2 text-xs text-[#9a918a]">
               {[
-                '100 bonus tokens on signup',
-                '200 tokens for early adopters',
-                'All editing tools free forever',
-                'Sprite slicer, pixel editor, BG removal',
+                '5 tokens to start',
+                'Earn +3 every day you log in',
+                '+6 bonus on 7-day streaks',
+                '+5 for joining the newsletter',
+                'Sprite slicer, pixel editor, BG removal — free forever',
                 '6 export formats',
               ].map((item) => (
                 <li key={item} className="flex items-start gap-2">
@@ -415,7 +416,7 @@ export default function LandingPage() {
               <GithubIcon size={12} /> GitHub
             </a>
             <a
-              href="mailto:george@spritebrew.com"
+              href="mailto:support@spritebrew.com"
               className="hover:text-[#9a918a] transition-colors"
             >
               Contact

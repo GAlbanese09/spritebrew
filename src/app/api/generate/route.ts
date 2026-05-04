@@ -155,13 +155,13 @@ export async function POST(request: Request) {
   const accountStatus = await getAccountStatus(userId);
   if (accountStatus === 'refund_locked') {
     return Response.json(
-      { success: false, error: 'Your account is temporarily locked because a recent refund resulted in a negative token balance. Contact george@spritebrew.com to resolve.' },
+      { success: false, error: 'Your account is temporarily locked because a recent refund resulted in a negative token balance. Contact support@spritebrew.com to resolve.' },
       { status: 403 }
     );
   }
   if (accountStatus === 'disputed') {
     return Response.json(
-      { success: false, error: 'This account has been permanently closed due to a chargeback. If you believe this is an error, contact george@spritebrew.com.' },
+      { success: false, error: 'This account has been permanently closed due to a chargeback. If you believe this is an error, contact support@spritebrew.com.' },
       { status: 403 }
     );
   }

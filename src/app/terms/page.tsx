@@ -4,7 +4,7 @@ export default function TermsPage() {
   return (
     <div className="max-w-2xl mx-auto px-6 py-12">
       <h1 className="text-lg font-display text-accent-amber mb-1">Terms of Service</h1>
-      <p className="text-xs font-mono text-text-muted mb-8">Last updated: April 21, 2026</p>
+      <p className="text-xs font-mono text-text-muted mb-8">Last updated: May 3, 2026</p>
 
       <div className="space-y-6 text-sm font-mono text-text-secondary leading-relaxed">
         <p>By using SpriteBrew, you agree to these terms.</p>
@@ -32,7 +32,7 @@ export default function TermsPage() {
           <h2 className="text-sm font-display text-text-primary mb-3">Free Tier</h2>
           <p>
             Free accounts receive a one-time signup bonus of tokens and can earn additional tokens
-            through daily rewards (coming soon). Different AI styles cost different token
+            through daily login rewards, streak bonuses, and newsletter signup. Different AI styles cost different token
             amounts&nbsp;&mdash; simpler styles cost fewer tokens, premium styles cost more. Tokens do
             not expire. We reserve the right to adjust token grants and costs at any time to manage
             costs. Abuse of the free tier (including creating multiple accounts to earn multiple
@@ -134,8 +134,8 @@ export default function TermsPage() {
           <h2 className="text-sm font-display text-text-primary mb-3">Contact</h2>
           <p>
             For questions about these terms, email:{' '}
-            <a href="mailto:george@spritebrew.com" className="text-accent-amber hover:underline">
-              george@spritebrew.com
+            <a href="mailto:support@spritebrew.com" className="text-accent-amber hover:underline">
+              support@spritebrew.com
             </a>
           </p>
         </section>

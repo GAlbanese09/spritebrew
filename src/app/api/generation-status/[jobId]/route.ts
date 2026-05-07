@@ -1,9 +1,7 @@
 export const runtime = 'edge';
 
-import { NextResponse } from 'next/server';
-
 interface KV {
-  get(key: string, options?: { cacheTtl?: number }): Promise<string | null>;
+  get(key: string): Promise<string | null>;
 }
 
 function getKV(): KV | null {
@@ -35,6 +33,13 @@ function getAuthedUserId(request: Request): string | null {
   return payload.sub;
 }
 
+function jsonResponse(payload: unknown, status: number): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
 export async function GET(
   request: Request,
   context: { params: Promise<{ jobId: string }> }
@@ -42,46 +47,47 @@ export async function GET(
   const { jobId } = await context.params;
   const userId = getAuthedUserId(request);
   if (!userId) {
-    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    return jsonResponse({ error: 'unauthorized' }, 401);
   }
 
   const kv = getKV();
   if (!kv) {
-    return NextResponse.json({ error: 'kv_unavailable' }, { status: 503 });
+    return jsonResponse({ error: 'kv_unavailable' }, 503);
   }
 
-  // cacheTtl: 0 forces fresh regional read; default 60s would mask
-  // just-completed states. Per Confluence 87490562 §7.
-  const raw = await kv.get(`job:${jobId}`, { cacheTtl: 0 });
+  // Default KV cache behavior is fine: client polls every 3s, KV's default
+  // ~60s edge cache resolves stale terminal states within 1-2 poll cycles.
+  // (Previously passed { cacheTtl: 0 }, which throws — KV requires cacheTtl >= 60.)
+  const raw = await kv.get(`job:${jobId}`);
   if (!raw) {
-    return NextResponse.json({ status: 'unknown' }, { status: 404 });
+    return jsonResponse({ status: 'unknown' }, 404);
   }
 
   const state = JSON.parse(raw);
 
   // Authorization: only the job's owner can read.
   if (state.userId !== userId) {
-    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+    return jsonResponse({ error: 'forbidden' }, 403);
   }
 
   // Emit minimal payload during in-flight; full result only on terminal success.
   if (state.status === 'success') {
-    return NextResponse.json({
+    return jsonResponse({
       status: 'success',
       resultBase64: state.resultBase64,
       completedAt: state.completedAt,
-    });
+    }, 200);
   }
   if (state.status === 'error') {
-    return NextResponse.json({
+    return jsonResponse({
       status: 'error',
       error: state.error,
       errorCode: state.errorCode,
       refunded: state.refunded ?? false,
-    });
+    }, 200);
   }
-  return NextResponse.json({
+  return jsonResponse({
     status: state.status,
     startedAt: state.startedAt ?? null,
-  });
+  }, 200);
 }

@@ -16,7 +16,8 @@ export const FREE_DAILY_LIMIT = 3;
  * Find at: Clerk Dashboard → Users → click your account → user ID at top
  */
 export const ADMIN_USER_IDS: readonly string[] = [
-  'user_3C34WAUmVRoHvKiyhYSNrMt4dvT',
+  'user_3C34WAUmVRoHvKiyhYSNrMt4dvT', // George (Clerk Production)
+  'user_3BtzTR8gHfGDiNXd1G8WFLQvEf2', // George (Clerk Development — for dev-env queue-kickoff smoke testing)
 ];
 
 /** Is this user an admin? (used for cost visibility, not rate limit bypass) */

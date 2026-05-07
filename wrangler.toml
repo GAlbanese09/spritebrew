@@ -18,10 +18,17 @@ NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = "pk_live_51TP0INPJhXMHCZ9NsAiTY1UbtRJJQcQoQ
 NODE_ENV = "production"
 NODE_VERSION = "20"
 APP_ENV = "production"
+# Queue-kickoff feature flag (Confluence 87490562 §14). Day-1 stays "false";
+# admin auto-included via isAdminUser. Flip to "true" globally on Day-4.
+QUEUE_KICKOFF_ENABLED = "false"
 
 [[env.production.kv_namespaces]]
 id = "ed99497beaaa432f88000689ab78821c"
 binding = "SPRITEBREW_KV"
+
+[[env.production.queues.producers]]
+binding = "RD_QUEUE"
+queue = "spritebrew-rd-jobs"
 
 # === Preview (dev branch) ===
 [env.preview]
@@ -33,7 +40,13 @@ NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = "pk_test_51TP0IYA1tzIxjEgSwhuXyQd7jZjAufLuJ
 NODE_ENV = "production"
 NODE_VERSION = "20"
 APP_ENV = "dev"
+# Queue-kickoff feature flag — same gate as production. Admin auto-included.
+QUEUE_KICKOFF_ENABLED = "false"
 
 [[env.preview.kv_namespaces]]
 id = "18dd9502fdde4a2ea76f9b9eb9cc5e8b"
 binding = "SPRITEBREW_KV"
+
+[[env.preview.queues.producers]]
+binding = "RD_QUEUE"
+queue = "spritebrew-rd-jobs-dev"

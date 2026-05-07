@@ -83,7 +83,7 @@ const RD_MAX_REFERENCE_IMAGES = 9;
 // (base64 inflates raw bytes by ~4/3, so 12MB raw ≈ 16MB base64 chars).
 const REF_TOTAL_BASE64_BUDGET = 12 * 1024 * 1024 * 4 / 3;
 
-interface GenerateBody {
+export interface GenerateBody {
   prompt?: string;
   // Create New fields
   promptStyle?: string;   // the RD prompt_style value from the style registry
@@ -100,6 +100,9 @@ interface GenerateBody {
   action?: string;
   motionPrompt?: string;
   framesDuration?: number;
+  /** Client-supplied UUID for the queue-kickoff path (Build #2A).
+   *  Required only when QUEUE_KICKOFF_ENABLED is on for this user. */
+  idempotencyKey?: string;
 }
 
 // ── SSE helpers ──
@@ -133,6 +136,10 @@ import {
 import { getTokenCost, getResolutionMode, getFreeTierBucket, GENERATION_STYLES } from '@/lib/styleRegistry';
 import { getAccountStatus } from '@/lib/accountLock';
 import { isAdminUser } from '@/lib/generationLimits';
+import { isQueueKickoffEnabled } from '@/lib/featureFlag';
+import { deriveJobId } from '@/lib/jobIdHelper';
+import { enqueueJob } from '@/lib/queueProducer';
+import { buildRdCreateBody, buildRdAnimateBody } from '@/lib/rdBodyBuilder';
 import {
   FREE_TIER_LIFETIME_PRO_CAP,
   FREE_TIER_LIFETIME_FAST_CAP,
@@ -250,6 +257,75 @@ export async function POST(request: Request) {
       }
     } catch { /* best effort */ }
   }
+
+  // === QUEUE-KICKOFF FEATURE FLAG (Confluence 87490562 §14) ===
+  // When enabled for this user, return 202 {jobId} after enqueueing instead
+  // of opening the SSE stream. The consumer Worker (sibling repo) handles
+  // the long-running RD call out-of-band; browser polls /api/generation-status.
+  //
+  // Day-1 rollout: env var stays 'false', admin auto-included via isAdminUser.
+  // When flag is OFF, behavior below is byte-identical to pre-refactor.
+  if (isQueueKickoffEnabled(userId, process.env as Record<string, unknown>)) {
+    // Client must supply idempotencyKey for this path.
+    const idempotencyKey = body.idempotencyKey;
+    if (typeof idempotencyKey !== 'string' || idempotencyKey.length < 8) {
+      return new Response(
+        JSON.stringify({ error: 'idempotencyKey required for queue-kickoff path' }),
+        { status: 400, headers: { 'content-type': 'application/json' } }
+      );
+    }
+
+    const jobId = await deriveJobId(userId, idempotencyKey);
+    const env = process.env as Record<string, unknown>;
+    const kv = env.SPRITEBREW_KV as {
+      get: (k: string) => Promise<string | null>;
+      put: (k: string, v: string, opts?: unknown) => Promise<void>;
+    };
+
+    // Request-side idempotency: same jobId already exists → return it without re-enqueue.
+    const existing = await kv.get(`job:${jobId}`);
+    if (existing) {
+      return new Response(
+        JSON.stringify({ jobId, replayed: true }),
+        { status: 202, headers: { 'content-type': 'application/json' } }
+      );
+    }
+
+    const now = Date.now();
+    await kv.put(
+      `job:${jobId}`,
+      JSON.stringify({
+        status: 'pending',
+        userId,
+        mode,
+        enqueuedAt: now,
+      }),
+      { expirationTtl: 3600 }
+    );
+
+    // Translate camelCase request body → snake_case RD wire format BEFORE
+    // enqueueing. The consumer forwards body verbatim to RD, so the producer
+    // must hand it the exact RD shape (Build #2A.1). Mirrors runCreate/runAnimate.
+    const rdBody = mode === 'animate'
+      ? buildRdAnimateBody(body)
+      : buildRdCreateBody(body);
+
+    await enqueueJob(env.RD_QUEUE, {
+      jobId,
+      userId,
+      idempotencyKey,
+      tokenCost,
+      mode,
+      body: rdBody,
+      enqueuedAt: now,
+    });
+
+    return new Response(
+      JSON.stringify({ jobId }),
+      { status: 202, headers: { 'content-type': 'application/json' } }
+    );
+  }
+  // === END QUEUE-KICKOFF GATE ===
 
   // Open SSE stream
   const { readable, writable } = new TransformStream<Uint8Array>();

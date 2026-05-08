@@ -11,6 +11,8 @@
 
 import { useState } from 'react';
 import { useUser, useAuth } from '@clerk/react';
+import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
+import { pollJobStatus } from '@/lib/pollClient';
 
 const ADMIN_USER_ID = 'user_3C34WAUmVRoHvKiyhYSNrMt4dvT';
 
@@ -67,24 +69,37 @@ export default function TestReferencesPage() {
         return;
       }
 
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(TEST_REQUEST_BODY),
-      });
+      // Admin's userId is in the queue-kickoff allowlist, so this WILL hit
+      // the 202+jobId path. Inline-poll until terminal — keeps the page
+      // self-contained without dragging in useGenerationPoll's localStorage.
+      const probeBody: Payload = {
+        ...TEST_REQUEST_BODY,
+        idempotencyKey: crypto.randomUUID(),
+      };
 
-      let body: unknown;
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        body = await res.json();
-      } else {
-        body = await res.text();
+      const result = await fetchGeneration(probeBody, token);
+
+      if (result.mode === 'poll') {
+        const terminal = await pollJobStatus(
+          result.jobId,
+          getToken,
+          {
+            // Probe deadline matches the form-side default; admin can refresh
+            // if the job somehow stalls past 8 min.
+            abandonAfterMs: 8 * 60 * 1_000,
+          }
+        );
+        setResponse({
+          status: 200,
+          body: { jobId: result.jobId, replayed: result.replayed ?? false, terminal },
+        });
+        return;
       }
 
-      setResponse({ status: res.status, body });
+      // Legacy SSE path — only hits this if the flag flips OFF for admin
+      // somehow (e.g., manual override). Kept for parity.
+      const sseResult = await consumeSSEStream(result.response);
+      setResponse({ status: 200, body: sseResult });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setResponse({ status: 0, body: null, error: msg });

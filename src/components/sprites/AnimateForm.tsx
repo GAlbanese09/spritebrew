@@ -20,6 +20,8 @@ import {
   ADVANCED_ANIM_RESOLUTION_PRESETS,
   ADVANCED_ANIM_DEFAULT_RESOLUTION,
 } from '@/lib/styleRegistry';
+import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
+import { useGenerationPoll } from '@/hooks/useGenerationPoll';
 
 const ACTIONS = [
   { id: 'walking', name: 'Walk', desc: 'Walking cycle animation' },
@@ -107,6 +109,17 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       fetchBalance();
     }
   }, [userId, setTokenBalance, fetchBalance]);
+
+  // Queue-and-poll integration. Auto-resumes from localStorage on mount
+  // when a fresh-enough activeJob entry exists.
+  const poll = useGenerationPoll();
+
+  // Captures click-time action/motion so the poll-success effect can write
+  // history with the right context. Null on resume.
+  const inFlightRef = useRef<{ action: string; motionPrompt: string } | null>(null);
+
+  // 1s click-debounce (one-render race window beyond isGenerating).
+  const lastGenerateAtRef = useRef<number>(0);
 
   // Character state
   const [characterDataUrl, setCharacterDataUrl] = useState<string | null>(null);
@@ -246,6 +259,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const handleGenerate = useCallback(async () => {
     if (!characterDataUrl || isGenerating) return;
 
+    // 1s click-debounce.
+    const clickedAt = Date.now();
+    if (clickedAt - lastGenerateAtRef.current < 1_000) return;
+    lastGenerateAtRef.current = clickedAt;
+
     const rgbBase64 = convertToRgbBase64();
     if (!rgbBase64) return;
 
@@ -253,25 +271,44 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setGeneratingAction(selectedAction);
     setGenerationError(null);
     setOriginalCharacter(characterDataUrl);
+    poll.reset();
+
+    // Click-time context for the poll-success effect.
+    const capturedAction = selectedAction;
+    const capturedMotion = motionPrompt.trim();
+
+    let tookPollPath = false;
 
     try {
-      const body: Record<string, unknown> = {
+      const body: Payload = {
         mode: 'animate',
         inputImage: rgbBase64,
-        action: selectedAction,
+        action: capturedAction,
         width: selectedResolution,
         height: selectedResolution,
         framesDuration: frameCount,
       };
 
-      if (motionPrompt.trim()) {
-        body.motionPrompt = motionPrompt.trim();
+      if (capturedMotion) {
+        body.motionPrompt = capturedMotion;
       }
 
-      const sessionToken = await getToken();
+      // Per-attempt UUID — required by the queue-kickoff path; legacy SSE ignores it.
+      const idempotencyKey = crypto.randomUUID();
+      body.idempotencyKey = idempotencyKey;
 
-      const { fetchGenerationSSE } = await import('@/lib/sseClient');
-      const data = await fetchGenerationSSE(body, sessionToken);
+      const sessionToken = await getToken();
+      const result = await fetchGeneration(body, sessionToken);
+
+      if (result.mode === 'poll') {
+        tookPollPath = true;
+        inFlightRef.current = { action: capturedAction, motionPrompt: capturedMotion };
+        poll.startPolling(result.jobId, idempotencyKey, 'animate');
+        return;
+      }
+
+      // Legacy SSE path — byte-identical to pre-refactor behavior.
+      const data = await consumeSSEStream(result.response);
 
       if (!data.success) {
         setGenerationError(String(data.error ?? 'Animation failed — try again.'));
@@ -281,9 +318,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       const dataUrl = data.imageUrl!;
 
       setGeneratedImage(dataUrl, dataUrl);
-      setGenerationStyle(`any_animation_${selectedAction}`);
+      setGenerationStyle(`any_animation_${capturedAction}`);
       await fetchBalance();
-      onGenerated(dataUrl, motionPrompt.trim() || selectedAction, `any_animation_${selectedAction}`);
+      onGenerated(dataUrl, capturedMotion || capturedAction, `any_animation_${capturedAction}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       const errObj = err as Error & {
@@ -308,15 +345,56 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       }
       setGenerationError(`Connection failed — ${msg}`);
     } finally {
-      setGenerating(false);
-      setGeneratingAction(null);
+      // Poll path keeps generating state alive until the poll-effect terminates.
+      if (!tookPollPath) {
+        setGenerating(false);
+        setGeneratingAction(null);
+      }
     }
   }, [
     characterDataUrl, isGenerating, selectedAction, selectedResolution, charWidth, charHeight,
     frameCount, motionPrompt, convertToRgbBase64, tokenCost, getToken,
     setGenerating, setGeneratingAction, setGenerationError, setGeneratedImage,
-    setGenerationStyle, setOriginalCharacter, setTokenBalance, fetchBalance, onGenerated,
+    setGenerationStyle, setOriginalCharacter, setTokenBalance, fetchBalance, onGenerated, poll,
   ]);
+
+  // Poll-effect: react to terminal states from the queue path.
+  useEffect(() => {
+    if (poll.status === 'polling') {
+      // Resume — mirror to global isGenerating so the UI shows "Brewing…".
+      setGenerating(true);
+      return;
+    }
+    if (poll.status === 'success' && poll.result) {
+      const dataUrl = `data:image/png;base64,${poll.result.resultBase64}`;
+      setGeneratedImage(dataUrl, dataUrl);
+      const ctx = inFlightRef.current;
+      if (ctx) {
+        setGenerationStyle(`any_animation_${ctx.action}`);
+        void fetchBalance();
+        onGenerated(
+          dataUrl,
+          ctx.motionPrompt || ctx.action,
+          `any_animation_${ctx.action}`
+        );
+        inFlightRef.current = null;
+      }
+      setGenerating(false);
+      setGeneratingAction(null);
+      poll.reset();
+      return;
+    }
+    if (poll.status === 'error' || poll.status === 'abandoned') {
+      const message = poll.error?.message ?? 'Animation failed.';
+      const refundedNote = poll.error?.refunded ? ' (tokens refunded)' : '';
+      setGenerationError(`${message}${refundedNote}`);
+      setGenerating(false);
+      setGeneratingAction(null);
+      inFlightRef.current = null;
+      poll.reset();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poll.status, poll.result, poll.error]);
 
   const sizeWarning = charWidth > 0 && (charWidth !== selectedResolution || charHeight !== selectedResolution);
   const isCustomAction = selectedAction === 'custom_action';

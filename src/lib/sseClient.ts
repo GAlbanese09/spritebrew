@@ -1,16 +1,22 @@
 /**
- * SSE stream consumer for the /api/generate endpoint.
+ * Generate-endpoint client.
  *
- * The API returns a Server-Sent Events stream with heartbeat comments to keep
- * the Cloudflare proxy alive. This helper reads the stream, ignores comments
- * and heartbeats, and resolves with the generation result (or throws on error).
+ * Two response modes today:
+ *   1. 202 + JSON `{ jobId, replayed? }`  → queue-and-poll path (Build #2A).
+ *      Caller polls /api/generation-status/[jobId] (see lib/pollClient).
+ *   2. 200 + text/event-stream            → legacy synchronous SSE path.
+ *      Caller drives consumeSSEStream(response) to await the result.
  *
- * SSE format:
- *   : heartbeat          ← comment, ignored
- *   data: {"type":"status","message":"..."}  ← informational
- *   data: {"type":"result","data":{...}}     ← success payload
- *   data: {"type":"error","message":"..."}   ← error
- *   data: [DONE]                            ← stream end
+ * Errors (4xx / 5xx) come back as JSON. 402 carries balance/required (insufficient
+ * tokens) or code/tier (free-tier cap reached) — surfaced via Error properties so
+ * forms can render specific UX.
+ *
+ * SSE format (legacy path):
+ *   : heartbeat                            ← comment, ignored
+ *   data: {"type":"status","message":"…"}  ← informational, ignored
+ *   data: {"type":"result","data":{…}}     ← success payload
+ *   data: {"type":"error","message":"…"}   ← error
+ *   data: [DONE]                           ← stream end
  */
 
 export interface GenerationSSEResult {
@@ -20,14 +26,25 @@ export interface GenerationSSEResult {
   [key: string]: unknown;
 }
 
+export type FetchGenerationResult =
+  | { mode: 'poll'; jobId: string; replayed?: boolean }
+  | { mode: 'stream'; response: Response };
+
+export type Payload = Record<string, unknown> & {
+  /** Client-supplied UUID. Required by the queue-kickoff path; harmless on the
+   *  legacy SSE path (the route ignores it). */
+  idempotencyKey?: string;
+};
+
 /**
- * POST to the generate endpoint, consume the SSE stream, and return the
- * generation result. Throws on HTTP errors, stream errors, and API errors.
+ * POST to /api/generate. Detects whether the producer chose the queue path
+ * (returns { mode: 'poll' }) or the legacy SSE path (returns { mode: 'stream' }).
+ * Throws on 4xx/5xx with JSON error bodies.
  */
-export async function fetchGenerationSSE(
-  payload: Record<string, unknown>,
+export async function fetchGeneration(
+  payload: Payload,
   authToken: string | null
-): Promise<GenerationSSEResult> {
+): Promise<FetchGenerationResult> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
@@ -41,13 +58,28 @@ export async function fetchGenerationSSE(
     body: JSON.stringify(payload),
   });
 
-  // If the response is JSON (validation errors, auth errors, insufficient tokens), handle directly
   const contentType = res.headers.get('Content-Type') ?? '';
+
+  // Queue-kickoff path — 202 + JSON.
+  if (res.status === 202 && contentType.includes('application/json')) {
+    const json = await res.json();
+    if (typeof json.jobId !== 'string') {
+      throw new Error('Server returned 202 without jobId.');
+    }
+    return { mode: 'poll', jobId: json.jobId, replayed: !!json.replayed };
+  }
+
+  // Legacy SSE path — 200 + text/event-stream.
+  if (res.ok && contentType.includes('text/event-stream') && res.body) {
+    return { mode: 'stream', response: res };
+  }
+
+  // JSON error envelope (validation, auth, insufficient tokens, free-tier cap).
   if (contentType.includes('application/json')) {
     const data = await res.json();
     if (!data.success) {
-      // 402 — surface balance/required (for insufficient_tokens) and code/tier
-      // (for free_tier_cap_reached) so forms can render specific UX.
+      // 402 — surface balance/required (insufficient_tokens) and code/tier
+      // (free_tier_cap_reached) so forms can render specific UX.
       if (res.status === 402) {
         const message = data.message || data.error || `HTTP ${res.status}`;
         const err = new Error(message) as Error & {
@@ -64,15 +96,27 @@ export async function fetchGenerationSSE(
       }
       throw new Error(data.error || `HTTP ${res.status}`);
     }
-    return data as GenerationSSEResult;
+    // 200 + JSON + success:true (rare path the legacy code allowed; preserve).
+    return { mode: 'stream', response: res };
   }
 
-  // Must be an SSE stream
-  if (!res.ok || !res.body) {
-    throw new Error(`HTTP ${res.status}`);
+  // Anything else — unexpected.
+  throw new Error(
+    `Unexpected response: status=${res.status} content-type=${contentType}`
+  );
+}
+
+/**
+ * Consume an SSE stream from /api/generate and return the terminal result.
+ * Extracted from the legacy fetchGenerationSSE so callers receiving
+ * { mode: 'stream' } from fetchGeneration can drive it explicitly.
+ */
+export async function consumeSSEStream(response: Response): Promise<GenerationSSEResult> {
+  if (!response.ok || !response.body) {
+    throw new Error(`HTTP ${response.status}`);
   }
 
-  const reader = res.body.getReader();
+  const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let result: GenerationSSEResult | null = null;
@@ -120,4 +164,28 @@ export async function fetchGenerationSSE(
   }
 
   return result;
+}
+
+/**
+ * Backwards-compat wrapper. Combines fetchGeneration + consumeSSEStream into
+ * the original Promise<GenerationSSEResult> shape. Callers that haven't been
+ * updated to the new branching API can keep using this — but new code paths
+ * should call fetchGeneration directly so they can branch on `mode`.
+ *
+ * NOTE: this wrapper will throw if the producer returns the queue-path 202;
+ * existing callers should be updated to the new API before they hit a user
+ * with the queue flag enabled.
+ */
+export async function fetchGenerationSSE(
+  payload: Payload,
+  authToken: string | null
+): Promise<GenerationSSEResult> {
+  const result = await fetchGeneration(payload, authToken);
+  if (result.mode === 'poll') {
+    throw new Error(
+      'fetchGenerationSSE: server returned queue-path 202 but caller expected SSE. ' +
+        'Update caller to use fetchGeneration + consumeSSEStream/pollJobStatus.'
+    );
+  }
+  return consumeSSEStream(result.response);
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Sparkles, X, Check, Loader2, AlertCircle } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
@@ -14,6 +14,8 @@ import {
   type StyleCategory,
 } from '@/lib/styleRegistry';
 import { isAdminUser } from '@/lib/generationLimits';
+import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
+import { useGenerationPoll } from '@/hooks/useGenerationPoll';
 
 const EXAMPLE_PROMPTS = [
   'pixel art knight with sword',
@@ -97,6 +99,19 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
   const isAdmin = isAdminUser(userId);
 
+  // Queue-and-poll integration. The hook auto-resumes a poll from
+  // localStorage on mount if a fresh-enough activeJob entry exists.
+  const poll = useGenerationPoll();
+
+  // Captures click-time prompt/style so the poll-success effect can write
+  // history with the right context (handleGenerated needs prompt + style).
+  // Null on resume — we never have click context for a resumed job.
+  const inFlightRef = useRef<{ prompt: string; styleId: string } | null>(null);
+
+  // 1s click-debounce — guards against rapid double-clicks beyond the
+  // existing isGenerating boolean (which has a one-render race window).
+  const lastGenerateAtRef = useRef<number>(0);
+
   const [prompt, setPrompt] = useState('');
   const [selectedStyleId, setSelectedStyleId] = useState('plus-classic');
   const [customWidth, setCustomWidth] = useState(256);
@@ -129,13 +144,26 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim() || isGenerating) return;
 
+    // 1s click-debounce. Guards against rapid double-clicks beyond the
+    // isGenerating React-state check, which has a one-render race window.
+    const now = Date.now();
+    if (now - lastGenerateAtRef.current < 1_000) return;
+    lastGenerateAtRef.current = now;
+
     setGenerating(true);
     setGeneratingAction(null);
     setGenerationError(null);
+    poll.reset();
+
+    // Capture click-time context for the poll-success effect.
+    const capturedPrompt = prompt.trim();
+    const capturedStyleId = selectedStyleId;
+
+    let tookPollPath = false;
 
     try {
-      const body: Record<string, unknown> = {
-        prompt: prompt.trim(),
+      const body: Payload = {
+        prompt: capturedPrompt,
         promptStyle: selectedStyle.promptStyle,
         width: effectiveWidth,
         height: effectiveHeight,
@@ -149,9 +177,26 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         body.referenceImages = referenceImages;
       }
 
+      // Per-attempt UUID — server's queue-kickoff path requires it; legacy
+      // SSE path ignores it. Producer's idempotency layer dedupes if the
+      // same UUID re-arrives on a network retry.
+      const idempotencyKey = crypto.randomUUID();
+      body.idempotencyKey = idempotencyKey;
+
       const sessionToken = await getToken();
-      const { fetchGenerationSSE } = await import('@/lib/sseClient');
-      const data = await fetchGenerationSSE(body, sessionToken);
+      const result = await fetchGeneration(body, sessionToken);
+
+      if (result.mode === 'poll') {
+        // Queue path. The poll effect drives the rest of the lifecycle —
+        // do NOT reset isGenerating here; it stays true through polling.
+        tookPollPath = true;
+        inFlightRef.current = { prompt: capturedPrompt, styleId: capturedStyleId };
+        poll.startPolling(result.jobId, idempotencyKey, 'create');
+        return;
+      }
+
+      // Legacy SSE path — byte-identical to the pre-refactor flow.
+      const data = await consumeSSEStream(result.response);
 
       if (!data.success) {
         setGenerationError(String(data.error ?? 'Generation failed — try a different prompt.'));
@@ -162,10 +207,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       const dataUrl = data.imageUrl!;
 
       setGeneratedImage(dataUrl, dataUrl);
-      setGenerationStyle(selectedStyleId);
+      setGenerationStyle(capturedStyleId);
       // Refresh token balance from server (tokens were already debited server-side)
       await fetchBalance();
-      onGenerated(dataUrl, prompt.trim(), selectedStyleId);
+      onGenerated(dataUrl, capturedPrompt, capturedStyleId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       const errObj = err as Error & {
@@ -190,15 +235,55 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       }
       setGenerationError(`Connection failed — ${msg}`);
     } finally {
-      setGenerating(false);
-      setGeneratingAction(null);
+      // Poll path keeps isGenerating=true until the poll-effect fires terminal.
+      if (!tookPollPath) {
+        setGenerating(false);
+        setGeneratingAction(null);
+      }
     }
   }, [
     prompt, selectedStyle, selectedStyleId, effectiveWidth, effectiveHeight,
     removeBg, referenceImages, referencesEnabled, isGenerating, tokenCost, getToken,
     setGenerating, setGeneratingAction, setGenerationError, setGeneratedImage,
-    setGenerationStyle, setTokenBalance, fetchBalance, onGenerated,
+    setGenerationStyle, setTokenBalance, fetchBalance, onGenerated, poll,
   ]);
+
+  // Poll-effect: react to terminal states from the queue path. On resume
+  // (poll.isResume === true), inFlightRef is null so we hydrate the result
+  // image but skip handleGenerated/addToHistory (no click-time context).
+  useEffect(() => {
+    if (poll.status === 'polling') {
+      // Resume case — the hook fired startPolling on mount; mirror to the
+      // global isGenerating flag so the form shows "Brewing…".
+      setGenerating(true);
+      return;
+    }
+    if (poll.status === 'success' && poll.result) {
+      const dataUrl = `data:image/png;base64,${poll.result.resultBase64}`;
+      setGeneratedImage(dataUrl, dataUrl);
+      const ctx = inFlightRef.current;
+      if (ctx) {
+        setGenerationStyle(ctx.styleId);
+        void fetchBalance();
+        onGenerated(dataUrl, ctx.prompt, ctx.styleId);
+        inFlightRef.current = null;
+      }
+      setGenerating(false);
+      setGeneratingAction(null);
+      poll.reset();
+      return;
+    }
+    if (poll.status === 'error' || poll.status === 'abandoned') {
+      const message = poll.error?.message ?? 'Generation failed.';
+      const refundedNote = poll.error?.refunded ? ' (tokens refunded)' : '';
+      setGenerationError(`${message}${refundedNote}`);
+      setGenerating(false);
+      setGeneratingAction(null);
+      inFlightRef.current = null;
+      poll.reset();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poll.status, poll.result, poll.error]);
 
   return (
     <div className="space-y-6">

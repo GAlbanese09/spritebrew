@@ -343,7 +343,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         setTokenBalance(errObj.balance);
         return;
       }
-      setGenerationError(`Connection failed — ${msg}`);
+      setGenerationError(`Generation failed: ${msg} (your tokens are safe)`);
     } finally {
       // Poll path keeps generating state alive until the poll-effect terminates.
       if (!tookPollPath) {

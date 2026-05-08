@@ -233,7 +233,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         setTokenBalance(errObj.balance);
         return;
       }
-      setGenerationError(`Connection failed — ${msg}`);
+      setGenerationError(`Generation failed: ${msg} (your tokens are safe)`);
     } finally {
       // Poll path keeps isGenerating=true until the poll-effect fires terminal.
       if (!tookPollPath) {

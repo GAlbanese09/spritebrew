@@ -263,7 +263,7 @@ export async function POST(request: Request) {
   // of opening the SSE stream. The consumer Worker (sibling repo) handles
   // the long-running RD call out-of-band; browser polls /api/generation-status.
   //
-  // Day-1 rollout: env var stays 'false', admin auto-included via isAdminUser.
+  // Day-1+ rollout: env var stays 'false'; admin auto-included via isAdminUser, staged-rollout users via isQueueBetaUser.
   // When flag is OFF, behavior below is byte-identical to pre-refactor.
   if (isQueueKickoffEnabled(userId, process.env as Record<string, unknown>)) {
     // Client must supply idempotencyKey for this path.

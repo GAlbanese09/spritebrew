@@ -20,7 +20,7 @@ NODE_VERSION = "20"
 APP_ENV = "production"
 # Queue-kickoff feature flag (Confluence 87490562 §14). Day-1 stays "false";
 # admin auto-included via isAdminUser. Flip to "true" globally on Day-4.
-QUEUE_KICKOFF_ENABLED = "false"
+QUEUE_KICKOFF_ENABLED = "true"
 
 [[env.production.kv_namespaces]]
 id = "ed99497beaaa432f88000689ab78821c"
@@ -41,7 +41,7 @@ NODE_ENV = "production"
 NODE_VERSION = "20"
 APP_ENV = "dev"
 # Queue-kickoff feature flag — same gate as production. Admin auto-included.
-QUEUE_KICKOFF_ENABLED = "false"
+QUEUE_KICKOFF_ENABLED = "true"
 
 [[env.preview.kv_namespaces]]
 id = "18dd9502fdde4a2ea76f9b9eb9cc5e8b"

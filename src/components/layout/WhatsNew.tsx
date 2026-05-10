@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 
 /**
@@ -19,18 +19,21 @@ interface ChangelogEntry {
   emoji: string;
   title: string;
   description: string;
+  releaseLabel?: string;  // shown as a section header above this entry
 }
 
 const CHANGELOG: ChangelogEntry[] = [
   // ── 0.5.0 — Reliability (May 2026) ──
   {
+    releaseLabel: 'May 10, 2026 — Reliability',
     emoji: '🛡️',
     title: 'More reliable generations',
     description:
-      "We've made big improvements behind the scenes so generations finish smoothly even when they take a while. If anything ever goes wrong — on our side or our AI provider's side — your tokens are refunded automatically.",
+      "We've made big improvements behind the scenes so generations finish smoothly even when they take a while. If anything ever goes wrong, your tokens are refunded automatically.",
   },
   // ── 0.4.0 — Daily Brew & Pixel Polish (May 2026) ──
   {
+    releaseLabel: 'May 2026 — Daily Brew & Pixel Polish',
     emoji: '🔥',
     title: 'Daily Login Rewards',
     description:
@@ -74,6 +77,7 @@ const CHANGELOG: ChangelogEntry[] = [
   },
   // ── 0.3.0 — Token Economy ──
   {
+    releaseLabel: 'Earlier — Token Economy & Foundations',
     emoji: '🪙',
     title: 'Token Economy',
     description:
@@ -173,9 +177,6 @@ export default function WhatsNew() {
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 animate-[whatsNewFadeIn_0.2s_ease-out]"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) handleDismiss();
-      }}
     >
       <div
         className="relative w-full max-w-lg max-h-[70vh] flex flex-col rounded-xl border shadow-2xl animate-[whatsNewSlideUp_0.3s_ease-out]"
@@ -206,19 +207,30 @@ export default function WhatsNew() {
         {/* Changelog list — scrollable */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
           {CHANGELOG.map((entry, i) => (
-            <div key={i} className="flex items-start gap-3">
-              <div className="flex-shrink-0 text-xl leading-none pt-0.5">
-                {entry.emoji}
+            <Fragment key={i}>
+              {entry.releaseLabel && (
+                <div className="flex items-center gap-2 pt-3 pb-1 first:pt-0">
+                  <div className="h-px flex-1" style={{ backgroundColor: '#3a3430' }} />
+                  <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider whitespace-nowrap">
+                    {entry.releaseLabel}
+                  </span>
+                  <div className="h-px flex-1" style={{ backgroundColor: '#3a3430' }} />
+                </div>
+              )}
+              <div className="flex items-start gap-3">
+                <div className="flex-shrink-0 text-xl leading-none pt-0.5">
+                  {entry.emoji}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-xs font-mono font-semibold text-text-primary">
+                    {entry.title}
+                  </h3>
+                  <p className="text-[11px] font-mono text-text-muted leading-relaxed mt-0.5">
+                    {entry.description}
+                  </p>
+                </div>
               </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-xs font-mono font-semibold text-text-primary">
-                  {entry.title}
-                </h3>
-                <p className="text-[11px] font-mono text-text-muted leading-relaxed mt-0.5">
-                  {entry.description}
-                </p>
-              </div>
-            </div>
+            </Fragment>
           ))}
         </div>
 

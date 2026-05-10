@@ -21,6 +21,7 @@ import { useSpriteStore } from '@/stores/spriteStore';
 import { FEEDBACK_URL, BETA_TOOLTIP } from '@/lib/externalLinks';
 import EmailListPanel from '@/components/account/EmailListPanel';
 import FlameIcon from '@/components/rewards/FlameIcon';
+import { CURRENT_VERSION } from '@/components/layout/WhatsNew';
 
 const NAV_ITEMS = [
   { href: '/', label: 'Home', icon: Home, soon: false },
@@ -175,7 +176,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         {/* Footer */}
         <div className="px-5 py-3 border-t border-border-subtle space-y-1.5">
           <p className="text-[10px] text-text-muted font-mono uppercase tracking-widest">
-            SpriteBrew v0.3.0
+            SpriteBrew v{CURRENT_VERSION}
           </p>
           <div className="flex gap-2 text-[9px] font-mono">
             <a href="/privacy" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">

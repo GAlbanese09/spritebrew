@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.4.0';
+export const CURRENT_VERSION = '0.5.0';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -22,6 +22,13 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.5.0 — Reliability (May 2026) ──
+  {
+    emoji: '🛡️',
+    title: 'More reliable generations',
+    description:
+      "We've made big improvements behind the scenes so generations finish smoothly even when they take a while. If anything ever goes wrong — on our side or our AI provider's side — your tokens are refunded automatically.",
+  },
   // ── 0.4.0 — Daily Brew & Pixel Polish (May 2026) ──
   {
     emoji: '🔥',

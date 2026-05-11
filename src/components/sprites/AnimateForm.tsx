@@ -401,6 +401,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const canGenerate = characterDataUrl && !sizeWarning && (!isCustomAction || motionPrompt.trim()) && !insufficientTokens;
 
   return (
+    <>
     <div className="space-y-6">
       {/* Character upload */}
       <div>
@@ -694,41 +695,56 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         </div>
       )}
 
-      {/* Generate button */}
-      <div className="flex items-center justify-between">
-        <p className="text-[10px] font-mono text-text-muted">
-          {charWidth > 0 ? `${selectedResolution}x${selectedResolution} · ${frameCount} frames · ${tokenCost} tokens` : `Upload a character to begin (${selectedResolution}x${selectedResolution})`}
-          {userId && (
-            <span className={`ml-2 ${insufficientTokens ? 'text-red-400' : 'text-accent-amber'}`}>
-              &middot; Balance: {tokenBalance} 🪙
-            </span>
-          )}
-        </p>
-        <Button
-          size="lg"
-          onClick={handleGenerate}
-          disabled={!canGenerate || isGenerating}
-          className={!isGenerating && canGenerate ? 'animate-pulse' : ''}
-          title={insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
-        >
-          {isGenerating ? (
-            <>
-              <Loader2 size={16} className="animate-spin" />
-              Brewing...
-            </>
-          ) : insufficientTokens ? (
-            <>
-              <Play size={16} />
-              Need {tokensNeeded} more 🪙
-            </>
-          ) : (
-            <>
-              <Play size={16} />
-              Generate Animation ({tokenCost} 🪙)
-            </>
-          )}
-        </Button>
+      {/* Sticky-button bottom spacer — keeps the last form element clear of the fixed bar below */}
+      <div className="h-20" aria-hidden="true" />
+    </div>
+
+    {/* Sticky generate bar — viewport-fixed at bottom, sidebar-offset on desktop */}
+    <div
+      className="fixed bottom-0 left-0 right-0 lg:left-[var(--sidebar-width)] z-40 px-4 py-3 backdrop-blur-md border-t"
+      style={{
+        backgroundColor: 'rgba(20, 18, 16, 0.92)',
+        borderColor: '#3a3430',
+        paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))',
+      }}
+    >
+      <div className="max-w-5xl mx-auto">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
+          <p className="text-[10px] font-mono text-text-muted">
+            {charWidth > 0 ? `${selectedResolution}x${selectedResolution} · ${frameCount} frames · ${tokenCost} tokens` : `Upload a character to begin (${selectedResolution}x${selectedResolution})`}
+            {userId && (
+              <span className={`ml-2 ${insufficientTokens ? 'text-red-400' : 'text-accent-amber'}`}>
+                &middot; Balance: {tokenBalance} 🪙
+              </span>
+            )}
+          </p>
+          <Button
+            size="lg"
+            onClick={handleGenerate}
+            disabled={!canGenerate || isGenerating}
+            className={`w-full sm:w-auto whitespace-nowrap ${!isGenerating && canGenerate ? 'animate-pulse' : ''}`}
+            title={insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Brewing...
+              </>
+            ) : insufficientTokens ? (
+              <>
+                <Play size={16} />
+                Need {tokensNeeded} more 🪙
+              </>
+            ) : (
+              <>
+                <Play size={16} />
+                Generate Animation ({tokenCost} 🪙)
+              </>
+            )}
+          </Button>
+        </div>
       </div>
     </div>
+    </>
   );
 }

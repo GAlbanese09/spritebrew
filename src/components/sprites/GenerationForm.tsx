@@ -487,7 +487,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       }}
     >
       <div className="max-w-5xl mx-auto">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
           <p className="text-[10px] font-mono text-text-muted">
             {effectiveWidth}x{effectiveHeight}px &middot; {tokenCost} tokens
             {isAdmin && (
@@ -503,7 +503,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
             size="lg"
             onClick={handleGenerate}
             disabled={!prompt.trim() || isGenerating || insufficientTokens}
-            className={!isGenerating && prompt.trim() && !insufficientTokens ? 'animate-pulse' : ''}
+            className={`w-full sm:w-auto whitespace-nowrap ${!isGenerating && prompt.trim() && !insufficientTokens ? 'animate-pulse' : ''}`}
             title={insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
           >
             {isGenerating ? (

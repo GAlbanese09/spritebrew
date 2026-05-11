@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { Sparkles, X, Check, Loader2, AlertCircle } from 'lucide-react';
+import { Sparkles, X, Check, Loader2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
@@ -118,6 +118,21 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const [customHeight, setCustomHeight] = useState(256);
   const [removeBg, setRemoveBg] = useState(true);
   const [referenceImages, setReferenceImages] = useState<string[]>([]);
+  // Per-category collapse state — empty Set = all expanded (default).
+  // Not persisted; resets per page load to keep discoverability.
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<StyleCategory>>(new Set());
+
+  const toggleCategory = (category: StyleCategory) => {
+    setCollapsedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) {
+        next.delete(category);
+      } else {
+        next.add(category);
+      }
+      return next;
+    });
+  };
 
   const selectedStyle = useMemo(
     () => getStyleById(selectedStyleId) ?? GENERATION_STYLES[0],
@@ -329,44 +344,56 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
             ({GENERATION_STYLES.length} styles across {Object.keys(GROUPED_STYLES).length} categories)
           </span>
         </label>
-        <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
+        <div className="space-y-3">
           {(Object.entries(GROUPED_STYLES) as [StyleCategory, GenerationStyle[]][]).map(
-            ([category, styles]) => (
-              <div key={category}>
-                <p className="text-[10px] font-mono text-text-muted uppercase tracking-wider mb-1.5">
-                  {CATEGORY_LABELS[category]}
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                  {styles.map((style) => {
-                    const active = selectedStyleId === style.id;
-                    return (
-                      <button
-                        key={style.id}
-                        onClick={() => setSelectedStyleId(style.id)}
-                        className={`text-left rounded-lg border px-3 py-2 transition-all duration-150 cursor-pointer
-                          ${active
-                            ? 'border-accent-amber bg-accent-amber-glow'
-                            : 'border-border-default bg-bg-surface hover:border-border-strong hover:bg-bg-elevated'
-                          }`}
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <h3 className={`text-[11px] font-mono font-semibold truncate ${active ? 'text-accent-amber' : 'text-text-primary'}`}>
-                            {style.label}
-                          </h3>
-                          {active && <Check size={10} className="text-accent-amber flex-shrink-0" />}
-                          <span className={`ml-auto text-[8px] font-mono px-1.5 py-0.5 rounded border flex-shrink-0 ${TIER_COLORS[style.tier] ?? 'text-text-muted border-border-subtle'}`}>
-                            {getTierLabel(style.tier)}
-                          </span>
-                        </div>
-                        <p className="text-[9px] font-mono text-text-muted mt-0.5 truncate">
-                          {style.description}
-                        </p>
-                      </button>
-                    );
-                  })}
+            ([category, styles]) => {
+              const isCollapsed = collapsedCategories.has(category);
+              return (
+                <div key={category}>
+                  <button
+                    type="button"
+                    onClick={() => toggleCategory(category)}
+                    className="flex w-full items-center justify-between py-2 text-left text-text-muted hover:text-text-default transition-colors"
+                  >
+                    <span className="text-[10px] font-mono uppercase tracking-wider">
+                      {CATEGORY_LABELS[category]} ({styles.length})
+                    </span>
+                    {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                  </button>
+                  {!isCollapsed && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                      {styles.map((style) => {
+                        const active = selectedStyleId === style.id;
+                        return (
+                          <button
+                            key={style.id}
+                            onClick={() => setSelectedStyleId(style.id)}
+                            className={`text-left rounded-lg border px-3 py-2 transition-all duration-150 cursor-pointer
+                              ${active
+                                ? 'border-accent-amber bg-accent-amber-glow'
+                                : 'border-border-default bg-bg-surface hover:border-border-strong hover:bg-bg-elevated'
+                              }`}
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <h3 className={`text-[11px] font-mono font-semibold truncate ${active ? 'text-accent-amber' : 'text-text-primary'}`}>
+                                {style.label}
+                              </h3>
+                              {active && <Check size={10} className="text-accent-amber flex-shrink-0" />}
+                              <span className={`ml-auto text-[8px] font-mono px-1.5 py-0.5 rounded border flex-shrink-0 ${TIER_COLORS[style.tier] ?? 'text-text-muted border-border-subtle'}`}>
+                                {getTierLabel(style.tier)}
+                              </span>
+                            </div>
+                            <p className="text-[9px] font-mono text-text-muted mt-0.5 truncate">
+                              {style.description}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )
+              );
+            }
           )}
         </div>
         <p className="text-[9px] font-mono text-text-muted mt-2">

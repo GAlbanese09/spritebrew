@@ -369,10 +369,10 @@ export default function LandingPage() {
             </div>
             <ul className="space-y-2 text-xs text-[#9a918a]">
               {[
-                '1,500 tokens per month',
-                '+5 bonus tokens every day you generate',
+                'Monthly token allowance',
+                'Daily bonus tokens when you generate',
                 'Priority support',
-                '$9/month',
+                'Pricing TBD — join the waitlist',
               ].map((item) => (
                 <li key={item} className="flex items-start gap-2">
                   <span className="w-1 h-1 rounded-full bg-[#5c5550] mt-1.5 flex-shrink-0" />

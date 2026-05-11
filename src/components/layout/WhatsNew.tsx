@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.0';
+export const CURRENT_VERSION = '0.5.1';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,26 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.5.1 — UX Polish (May 10, 2026) ──
+  {
+    releaseLabel: 'MAY 10, 2026 — UX POLISH',
+    emoji: '🎯',
+    title: 'Always-visible Generate button',
+    description:
+      'The Generate button now stays pinned at the bottom of the screen while you scroll through styles or settings. No more scrolling back up after picking your style.',
+  },
+  {
+    emoji: '📁',
+    title: 'Collapsible style picker',
+    description:
+      'Each style category (Characters, Items, Tiles, UI, Animations) now collapses with a single click. Focus on the kind of sprite you want without wading through every option.',
+  },
+  {
+    emoji: '📱',
+    title: 'Mobile polish',
+    description:
+      'Better layouts, bigger tap targets, and a cleaner Generate bar that stacks gracefully on phones and tablets.',
+  },
   // ── 0.5.0 — Reliability (May 2026) ──
   {
     releaseLabel: 'May 10, 2026 — Reliability',

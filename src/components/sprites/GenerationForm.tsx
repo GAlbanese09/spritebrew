@@ -374,6 +374,16 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
                                 : 'border-border-default bg-bg-surface hover:border-border-strong hover:bg-bg-elevated'
                               }`}
                           >
+                            {style.examplePath && (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={style.examplePath}
+                                alt={`${style.label} example`}
+                                loading="lazy"
+                                className="w-full aspect-square mb-2 rounded-md object-contain bg-[#1a1614]"
+                                style={{ imageRendering: 'pixelated' }}
+                              />
+                            )}
                             <div className="flex items-center gap-1.5">
                               <h3 className={`text-[11px] font-mono font-semibold truncate ${active ? 'text-accent-amber' : 'text-text-primary'}`}>
                                 {style.label}

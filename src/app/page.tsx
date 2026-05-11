@@ -332,15 +332,15 @@ export default function LandingPage() {
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
-                Creator — 1,800 for $14.99 <span className="text-green-400">(+20%)</span>
+                Creator — 1,650 for $14.99 <span className="text-green-400">(+10%)</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
-                Studio — 4,500 for $29.99 <span className="text-green-400">(+50%)</span>
+                Studio — 3,600 for $29.99 <span className="text-green-400">(+20%)</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
-                Pro — 15,000 for $74.99 <span className="text-green-400">(+100%)</span>
+                Pro — 9,750 for $79.99 <span className="text-green-400">(+30%)</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />

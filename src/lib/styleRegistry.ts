@@ -105,31 +105,31 @@ export const GENERATION_STYLES: GenerationStyle[] = [
     id: 'plus-classic', label: 'Classic Pixel Art', description: 'Strongly outlined, simple shading, clear design',
     promptStyle: 'rd_plus__classic', tier: 'plus', category: 'characters',
     defaultWidth: 192, defaultHeight: 192, minSize: 32, maxSize: 192,
-    fixedSize: false, costPerGeneration: 0.06, tokenCost: 10, isAnimation: false, supportsRemoveBg: true,
+    fixedSize: false, costPerGeneration: 0.06, tokenCost: 14, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'plus-low-res', label: 'Low Resolution', description: 'High quality low-res pixel art (16-128px)',
     promptStyle: 'rd_plus__low_res', tier: 'plus', category: 'characters',
     defaultWidth: 64, defaultHeight: 64, minSize: 16, maxSize: 128,
-    fixedSize: false, costPerGeneration: 0.05, tokenCost: 10, isAnimation: false, supportsRemoveBg: true,
+    fixedSize: false, costPerGeneration: 0.05, tokenCost: 14, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'plus-skill-icon', label: 'Skill / Spell Icon', description: 'Icons for skills, abilities, or spells',
     promptStyle: 'rd_plus__skill_icon', tier: 'plus', category: 'ui',
     defaultWidth: 64, defaultHeight: 64, minSize: 16, maxSize: 128,
-    fixedSize: false, costPerGeneration: 0.05, tokenCost: 10, isAnimation: false, supportsRemoveBg: true,
+    fixedSize: false, costPerGeneration: 0.05, tokenCost: 14, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'plus-topdown-item', label: 'Top-Down Item', description: 'Items and objects from a top-down view',
     promptStyle: 'rd_plus__topdown_item', tier: 'plus', category: 'items',
     defaultWidth: 64, defaultHeight: 64, minSize: 16, maxSize: 128,
-    fixedSize: false, costPerGeneration: 0.05, tokenCost: 10, isAnimation: false, supportsRemoveBg: true,
+    fixedSize: false, costPerGeneration: 0.05, tokenCost: 14, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'plus-mc-item', label: 'Minecraft Item', description: 'Minecraft-styled items and game assets',
     promptStyle: 'rd_plus__mc_item', tier: 'plus', category: 'items',
     defaultWidth: 64, defaultHeight: 64, minSize: 16, maxSize: 128,
-    fixedSize: false, costPerGeneration: 0.05, tokenCost: 10, isAnimation: false, supportsRemoveBg: true,
+    fixedSize: false, costPerGeneration: 0.05, tokenCost: 14, isAnimation: false, supportsRemoveBg: true,
   },
 
   // ── RD FAST ($0.015-0.02/image, 64-384px) — 3 tokens ──
@@ -137,13 +137,13 @@ export const GENERATION_STYLES: GenerationStyle[] = [
     id: 'fast-retro', label: 'Retro Arcade', description: 'Fast retro arcade style pixel art',
     promptStyle: 'rd_fast__retro', tier: 'fast', category: 'characters',
     defaultWidth: 256, defaultHeight: 256, minSize: 64, maxSize: 384,
-    fixedSize: false, costPerGeneration: 0.02, tokenCost: 3, isAnimation: false, supportsRemoveBg: true,
+    fixedSize: false, costPerGeneration: 0.02, tokenCost: 5, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'fast-no-style', label: 'No Style (Fast)', description: 'Fast generation with no style influence',
     promptStyle: 'rd_fast__no_style', tier: 'fast', category: 'characters',
     defaultWidth: 256, defaultHeight: 256, minSize: 64, maxSize: 384,
-    fixedSize: false, costPerGeneration: 0.02, tokenCost: 3, isAnimation: false, supportsRemoveBg: true,
+    fixedSize: false, costPerGeneration: 0.02, tokenCost: 5, isAnimation: false, supportsRemoveBg: true,
   },
 
   // ── STANDARD ANIMATION ($0.07/image, fixed sizes) — 15 tokens ──
@@ -151,42 +151,42 @@ export const GENERATION_STYLES: GenerationStyle[] = [
     id: 'anim-4angle-walking', label: '4-Angle Walking', description: '4-direction walk cycle (16 frames)',
     promptStyle: 'animation__four_angle_walking', tier: 'animation', category: 'animations',
     defaultWidth: 48, defaultHeight: 48, minSize: 48, maxSize: 48,
-    fixedSize: true, costPerGeneration: 0.07, tokenCost: 15, isAnimation: true, supportsRemoveBg: false,
+    fixedSize: true, costPerGeneration: 0.07, tokenCost: 20, isAnimation: true, supportsRemoveBg: false,
     resolutionMode: { kind: 'locked', size: 48 },
   },
   {
     id: 'anim-walking-idle', label: 'Walking & Idle', description: 'Walking + idle animation combined',
     promptStyle: 'animation__walking_and_idle', tier: 'animation', category: 'animations',
     defaultWidth: 48, defaultHeight: 48, minSize: 48, maxSize: 48,
-    fixedSize: true, costPerGeneration: 0.07, tokenCost: 15, isAnimation: true, supportsRemoveBg: false,
+    fixedSize: true, costPerGeneration: 0.07, tokenCost: 20, isAnimation: true, supportsRemoveBg: false,
     resolutionMode: { kind: 'locked', size: 48 },
   },
   {
     id: 'anim-small-sprites', label: 'Small Sprites', description: 'Multi-action small character sprite sheet',
     promptStyle: 'animation__small_sprites', tier: 'animation', category: 'animations',
     defaultWidth: 32, defaultHeight: 32, minSize: 32, maxSize: 32,
-    fixedSize: true, costPerGeneration: 0.07, tokenCost: 15, isAnimation: true, supportsRemoveBg: false,
+    fixedSize: true, costPerGeneration: 0.07, tokenCost: 20, isAnimation: true, supportsRemoveBg: false,
     resolutionMode: { kind: 'locked', size: 32 },
   },
   {
     id: 'anim-vfx', label: 'VFX Effects', description: 'Looping visual effects (fire, explosions, magic)',
     promptStyle: 'animation__vfx', tier: 'animation', category: 'animations',
     defaultWidth: 64, defaultHeight: 64, minSize: 24, maxSize: 96,
-    fixedSize: false, costPerGeneration: 0.07, tokenCost: 15, isAnimation: true, supportsRemoveBg: false,
+    fixedSize: false, costPerGeneration: 0.07, tokenCost: 20, isAnimation: true, supportsRemoveBg: false,
     resolutionMode: { kind: 'variable_special', min: 24, max: 96, default: 64, presets: [24, 48, 64, 96] },
   },
   {
     id: 'anim-any', label: 'Custom Animation', description: 'Open-ended animation — AI decides the layout',
     promptStyle: 'animation__any_animation', tier: 'animation', category: 'animations',
     defaultWidth: 64, defaultHeight: 64, minSize: 64, maxSize: 64,
-    fixedSize: true, costPerGeneration: 0.07, tokenCost: 15, isAnimation: true, supportsRemoveBg: false,
+    fixedSize: true, costPerGeneration: 0.07, tokenCost: 20, isAnimation: true, supportsRemoveBg: false,
     resolutionMode: { kind: 'locked', size: 64 },
   },
   {
     id: 'anim-8dir', label: '8-Direction Rotation', description: 'Character from 8 rotational angles',
     promptStyle: 'animation__8_dir_rotation', tier: 'animation', category: 'animations',
     defaultWidth: 80, defaultHeight: 80, minSize: 80, maxSize: 80,
-    fixedSize: true, costPerGeneration: 0.07, tokenCost: 15, isAnimation: true, supportsRemoveBg: false,
+    fixedSize: true, costPerGeneration: 0.07, tokenCost: 20, isAnimation: true, supportsRemoveBg: false,
     resolutionMode: { kind: 'locked', size: 80 },
   },
 ];
@@ -257,11 +257,11 @@ export function getTokenCost(promptStyle: string): number {
 
   // Advanced animation styles (Animate tab) — not in the registry
   if (EXPENSIVE_ANIM_STYLES.has(promptStyle)) return 50;
-  if (promptStyle.startsWith('rd_advanced_animation__')) return 15;
-  if (promptStyle.startsWith('animation__')) return 15;
+  if (promptStyle.startsWith('rd_advanced_animation__')) return 20;
+  if (promptStyle.startsWith('animation__')) return 20;
 
   // Unknown style — default to Plus tier
-  return 10;
+  return 14;
 }
 
 /**

@@ -1,34 +1,36 @@
 # 🧪 SpriteBrew
 
-**AI-powered pixel art sprite sheet generator.** Upload or generate characters → animate → slice → preview → export game-ready sheets for Unity, Godot, GameMaker, RPG Maker.
+**AI-powered pixel art sprite sheet generator.** Generate characters from text → animate → slice → preview → export game-ready sheets for Unity, Godot, GameMaker, RPG Maker.
 
-> **Status:** Pre-launch · Active development · [Join the waitlist](https://spritebrew.com)
+> **Status:** Live in production · Active development · Real customers brewing daily
 
-🌐 **[spritebrew.com](https://spritebrew.com)** — Try it now (free account required for AI generation)
-
-<!-- TODO: Add hero screenshot of the landing page with the animated wizard -->
+🌐 **[spritebrew.com](https://spritebrew.com)** — Try it now (free account = 5 generation tokens to start)
 
 ---
 
 ## What is SpriteBrew?
 
-SpriteBrew is a web-based tool for game developers and pixel artists that combines traditional sprite sheet workflows with AI-powered generation. Create new characters from text descriptions, animate existing pixel art, preview animations with keyboard controls, and export to every major game engine — all in one place.
+SpriteBrew is a web-based tool for indie game developers that combines traditional sprite sheet workflows with AI-powered generation. Create new characters from text descriptions across 21 visual styles, animate existing pixel art, preview animations with full keyboard controls, and export to every major game engine — all in one place.
 
-**Free tools (no account needed):** Upload & Slice, Animation Preview, Multi-Engine Export, Pixel Editor, Pixel-Perfect Resizer
+**Free tools (no account needed):** Upload & Slice, Animation Preview, Multi-Engine Export, Pixel Editor, Pixel-Perfect Resizer.
 
-**AI features (free account, 5 generations/day):** Text-to-Sprite Generation, Animate My Character
+**AI features (free account, token-based):** Text-to-Sprite Generation across 21 styles, Animate My Character. Free signup bonus + daily login rewards. Token packs start at $4.99 for users who want more.
 
 ---
 
 ## Features
 
 ### 🎨 AI Sprite Generation
-Describe a character in plain text and get a complete animated sprite sheet. Choose from multiple animation styles including 4-angle walking, walking & idle, small sprites, and VFX. Powered by Retro Diffusion's pixel art models.
+Describe a character in plain text and pick from 21 visual styles across 5 categories: characters (Pro Fantasy, Sci-fi, Horror, Painterly, Simple, Default, Top Down, Platformer), tiles (Isometric, Hexagonal, Spritesheet, Dungeon Map), UI elements (Typography, FPS Weapon, Skill / Spell Icon, UI Panel, Inventory Items), and animation styles (4-Angle Walking, Walking & Idle, Small Sprites, VFX Effects, Custom Animation, 8-Direction Rotation). Each style has its own tier (Fast / Plus / Pro / Animation) with token cost scaled to model complexity. Powered by Retro Diffusion's pixel art models via direct API.
 
-<!-- TODO: Add animated GIF of the generation flow -->
+### 🖼️ Per-Style Example Lightbox
+Tap the ⤢ icon on any style card to open a carousel showing what each style actually produces — 2-5 curated examples per style. Pick what you actually want, not what you think a style means by name. "Use this style →" in the lightbox toolbar selects + closes in one click.
+
+### 🌅 Persistent Background Toggle
+The "Remove background" control sits on the sticky generate bar — always visible during the entire generation flow. Defaults intelligently per style category (on for characters, off for tiles). Toggle off to keep environmental detail in your generations.
 
 ### 🏃 Animate My Character
-Upload your existing pixel art character and generate animation frames from it. Walk cycles, idle loops, attacks, jumps, crouches, and destruction animations — the AI preserves your character's appearance while creating smooth motion. Smart animation padding ensures weapons and motion aren't clipped.
+Upload your existing pixel art character and generate animation frames from it. Walk cycles, idle loops, attacks, jumps, crouches, subtle motion, and custom actions — the AI preserves your character's appearance while creating smooth motion. Smart animation padding ensures weapons and motion aren't clipped.
 
 ### 🧙 Auto-Prep Character Pipeline
 Drop any character image and SpriteBrew handles the rest: contour-based sprite detection, smart cropping, background removal with adjustable tolerance, and pixel-perfect resize to 64×64. Before/after preview with one-click approval. Edit the prepped image in the built-in pixel editor if auto-detection missed something.
@@ -54,11 +56,14 @@ Click any frame to open a zoomed pixel editor. Fix AI artifacts, touch up detail
 ### 📸 Generation Gallery
 Browse all past generations with filtering (Created vs Animated). Download PNGs, send to slicer, or delete. Per-user history — each account sees only their own generations.
 
-### 🔐 Authentication
-Sign in with GitHub or email. Free tools work without an account. AI generation requires a free login (5 generations/day). Powered by Clerk with production SSO.
+### 🪙 Token Economy
+Free users get 5 tokens at signup, +3 tokens every daily login, and a +6 bonus on every 7th consecutive day. Subscribe to the newsletter for +5 more. Token packs start at $4.99 for users who want to brew more. Generation costs: Fast 3 / Plus 10 / Pro 40 / Anim-short 15 / Anim-long 50 tokens.
 
 ### 📐 Pixel-Perfect Image Resizer
 Built-in nearest-neighbor resizing for preparing pixel art for animation. Upload a high-res character, resize to 64×64 with crisp pixel-perfect scaling — no blurry bilinear interpolation.
+
+### 🔐 Authentication
+Sign in with Google or email via Clerk. Free tools work without an account. AI generation requires a free login. Production SSO, bot-signup protection enabled.
 
 ---
 
@@ -71,26 +76,32 @@ Built-in nearest-neighbor resizing for preparing pixel art for animation. Upload
 | State | Zustand |
 | Animation | PixiJS 8 |
 | Auth | Clerk (`@clerk/react`) |
-| AI Backend | Retro Diffusion (direct API + Replicate hosting) |
+| AI Backend | Retro Diffusion direct API |
+| Async Queue | Cloudflare Queues (producer + consumer Worker) |
 | Storage | Cloudflare KV |
+| Payments | Stripe (live) |
+| Transactional Email | Purelymail SMTP |
+| Audience Email | Resend |
+| Image Carousel | yet-another-react-lightbox |
 | Export | JSZip |
-| Hosting | Cloudflare Pages |
+| Hosting | Cloudflare Pages (Workers Paid plan) |
 | License | AGPL-3.0 |
 
 ---
 
 ## Architecture Highlights
 
-- **SSE streaming** with 15-second heartbeats to work around Cloudflare Pages' 120-second proxy timeout during long AI generations
-- **Base64 image pipeline** — no URL expiration issues, images cached per-user in generation gallery
-- **Per-user daily limits** via localStorage with admin bypass for development
-- **Waitlist system** backed by Cloudflare KV for Pro tier signups
-- **Contour-based sprite detection** using connected component labeling for non-grid sprite sheets
-- **Calibration-driven development** — when AI APIs are undocumented, we write targeted calibration scripts to get ground truth
+- **Queue-and-poll architecture** for long-running AI generations. Producer enqueues to Cloudflare Queues, consumer Worker calls Retro Diffusion out-of-band, browser polls `/api/generation-status/{jobId}` every ~2-3 seconds. Sidesteps Cloudflare's 120-second proxy timeout entirely. Tokens auto-refund on generation failure.
+- **Token economy backed by Cloudflare KV** with server-side debiting and idempotency-keyed refunds.
+- **Server-side free-tier caps** (10 Pro / 30 Fast lifetime per non-paying account) — paid accounts uncapped.
+- **Stripe webhooks for payment processing** with signature verification and replay protection.
+- **Contour-based sprite detection** using connected component labeling for non-grid sprite sheets.
+- **Recon-first development methodology** — when wiring up a new API, library, or feature, read existing code paths and verify assumptions before implementation. Caught at least one architectural misconception per major feature so far.
 
 ---
 
 ## Getting Started (Development)
+
 ```bash
 # Clone the repo
 git clone https://github.com/GAlbanese09/spritebrew.git
@@ -104,12 +115,21 @@ cp .env.example .env.local
 ```
 
 Add your API keys to `.env.local`:
+
 ```
-REPLICATE_API_TOKEN=your_replicate_token
-RETRO_DIFFUSION_API_KEY=your_retrodiffusion_key
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
-CLERK_SECRET_KEY=your_clerk_secret_key
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+CLERK_SECRET_KEY=sk_test_...
+CLERK_WEBHOOK_SECRET=whsec_...
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_...
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+RETRO_DIFFUSION_API_KEY=rdp_...
+RESEND_API_KEY=re_...
+RESEND_AUDIENCE_ID=...
+APP_ENV=dev
+QUEUE_KICKOFF_ENABLED=true
 ```
+
 ```bash
 # Run development server
 npm run dev
@@ -117,31 +137,43 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) to see the app.
 
-**Note:** The waitlist feature requires a Cloudflare KV binding (`SPRITEBREW_KV`) to work in production. Local development works without it (falls back to in-memory storage).
+**Note on local dev:** The full app stack (queue-and-poll, Stripe webhooks, KV bindings) requires a Cloudflare Pages preview deployment to fully exercise. Local `npm run dev` is best for UI iteration; for end-to-end testing, push to a dev branch and let Cloudflare deploy a preview.
+
+The consumer Worker that processes the queue lives in a sibling repo: [spritebrew-rd-consumer](https://github.com/GAlbanese09/spritebrew-rd-consumer).
 
 ---
 
 ## The Story
 
-SpriteBrew exists because a friend is building a pixel art game and needed sprite sheets. Making them by hand is brutally slow — every frame, every direction, every animation state, hand-drawn. There had to be a better way.
+SpriteBrew exists because a friend was building a pixel art game and needed sprite sheets. Making them by hand is brutally slow — every frame, every direction, every animation state, hand-drawn. There had to be a better way.
 
-Built by [George Albanese](https://github.com/GAlbanese09) — an endpoint automation engineer by day, solo indie developer by night. Built with Claude, session by session, from empty repo to production tool.
+What started as a weekend project to help one friend turned into a production tool used by indie game developers worldwide. Pricing kept honest at token-based packs starting at $4.99 (no subscriptions). Real customers, real generations, real games getting made.
+
+Built by [George Albanese](https://github.com/GAlbanese09) — an endpoint automation engineer by day, solo indie developer by night. Built with Claude as architect, research partner, and rubber duck through every session.
 
 ---
 
 ## Roadmap
 
-- [x] Phase 1: Web shell, sprite slicer, export engine (6 formats)
-- [x] Phase 2: AI integration (Retro Diffusion)
-- [x] Landing page and waitlist
-- [x] Clerk production auth
-- [ ] Visual style picker with live previews
-- [ ] Full Retro Diffusion direct API migration (unlocks 40+ styles)
-- [ ] Credit system with Stripe integration
+**Done:**
+- [x] Phase 1: Web shell, sprite slicer, multi-engine export (6 formats)
+- [x] Phase 2: AI integration via Retro Diffusion direct API (21 styles across 5 categories)
+- [x] Phase 3: Production launch — Clerk auth, Stripe payments, token economy
+- [x] Queue-and-poll architecture (replaces SSE streaming)
+- [x] Per-style example lightbox previews
+- [x] Persistent background toggle on sticky bar
+
+**In progress / on the roadmap:**
+- [ ] Animation style example previews (animated WebP)
+- [ ] Client-side download upscaler (1× / 2× / 4× nearest-neighbor)
+- [ ] DIY status page surfacing SpriteBrew + Retro Diffusion upstream health
+- [ ] KV-backed feature kill switch (sub-60-second rollback path)
+- [ ] Privacy Policy / Terms of Service / Refund Policy
+- [ ] Public sprite gallery on landing page
+- [ ] Subscription plans (Pixel Pass)
 - [ ] OpenNext migration (replace deprecated `@cloudflare/next-on-pages`)
-- [ ] Self-hosted AI pipeline (ComfyUI on RunPod)
-- [ ] Isometric sprite support
-- [ ] Tauri desktop app (Phase 4)
+- [ ] Isometric sprite tooling beyond the existing isometric style
+- [ ] Tauri desktop app
 
 ---
 
@@ -149,10 +181,13 @@ Built by [George Albanese](https://github.com/GAlbanese09) — an endpoint autom
 
 - **[Retro Diffusion](https://retrodiffusion.ai)** — the AI models that make SpriteBrew's pixel art generation possible. Built by pixel artists, for pixel artists.
 - **[Clerk](https://clerk.com)** — authentication without the pain
-- **[Cloudflare](https://cloudflare.com)** — Pages, KV, and the infrastructure that keeps this running on a hobby budget
+- **[Stripe](https://stripe.com)** — payments and customer management
+- **[Cloudflare](https://cloudflare.com)** — Pages, Queues, KV, and the infrastructure that keeps this running on a hobby budget
 - **[PixiJS](https://pixijs.com)** — the rendering engine behind the animation preview
+- **[Purelymail](https://purelymail.com)** — transactional email at indie-budget pricing
+- **[Resend](https://resend.com)** — audience and newsletter delivery
 - **Claude (Anthropic)** — architect, research partner, prompt writer, rubber duck
-- **George's friend** — the reason this exists in the first place [https://github.com/mohammadsalim]
+- **George's friend [@mohammadsalim](https://github.com/mohammadsalim)** — the reason this exists in the first place
 
 ---
 
@@ -164,10 +199,10 @@ Built by [George Albanese](https://github.com/GAlbanese09) — an endpoint autom
 
 ## Contributing
 
-SpriteBrew is in early development and pre-launch. If you're interested in contributing, please open an issue first to discuss what you'd like to work on. A Contributor License Agreement (CLA) will be required before merging PRs.
+SpriteBrew is live in production and actively developed. If you're interested in contributing, please open an issue first to discuss what you'd like to work on. A Contributor License Agreement (CLA) will be required before merging PRs.
 
-Bug reports, feature suggestions, and feedback are welcome via [GitHub Issues](https://github.com/GAlbanese09/spritebrew/issues).
+Bug reports, feature suggestions, and feedback are welcome via [GitHub Issues](https://github.com/GAlbanese09/spritebrew/issues) or [the in-app feedback form](https://tally.so/r/Y5oGp6).
 
 ---
 
-Built with ☕ and Claude · [spritebrew.com](https://spritebrew.com)
+Built with ☕ and Claude · [spritebrew.com](https://spritebrew.com) · [@spritebrew](https://x.com/spritebrew)

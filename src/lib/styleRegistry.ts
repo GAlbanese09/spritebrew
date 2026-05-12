@@ -23,9 +23,12 @@ export interface GenerationStyle {
   id: string;
   label: string;
   description: string;
-  /** Public path to a static example image. Undefined for styles without
-   *  curated examples (e.g., animations get animated previews in a later phase). */
-  examplePath?: string;
+  /**
+   * Public paths to static example images for this style. Index 0 is the hero
+   * thumbnail shown in the style card; full array is shown in the lightbox.
+   * Undefined for styles without curated examples (e.g., animation styles).
+   */
+  examplePaths?: string[];
   promptStyle: string;
   tier: StyleTier;
   category: StyleCategory;
@@ -48,7 +51,7 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   // ── RD PRO ($0.22/image, 96-256px) — 40 tokens ──
   {
     id: 'pro-default', label: 'Character (Pro)', description: 'Clean modern pixel art with detailed prompting',
-    examplePath: '/style-examples/pro-default.png',
+    examplePaths: ['/style-examples/pro-default-1.png', '/style-examples/pro-default-2.png', '/style-examples/pro-default-3.png', '/style-examples/pro-default-4.png', '/style-examples/pro-default-5.png'],
     promptStyle: 'rd_pro__default', tier: 'pro', category: 'characters',
     defaultWidth: 256, defaultHeight: 256, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: true,
@@ -56,7 +59,7 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   },
   {
     id: 'pro-fantasy', label: 'Fantasy', description: 'Fantasy-themed characters and scenes',
-    examplePath: '/style-examples/pro-fantasy.png',
+    examplePaths: ['/style-examples/pro-fantasy-1.png', '/style-examples/pro-fantasy-2.png', '/style-examples/pro-fantasy-3.png', '/style-examples/pro-fantasy-4.png', '/style-examples/pro-fantasy-5.png'],
     promptStyle: 'rd_pro__fantasy', tier: 'pro', category: 'characters',
     defaultWidth: 256, defaultHeight: 256, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: true,
@@ -64,7 +67,7 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   },
   {
     id: 'pro-platformer', label: 'Platformer', description: 'Side-scrolling platformer characters',
-    examplePath: '/style-examples/pro-platformer.png',
+    examplePaths: ['/style-examples/pro-platformer-1.png', '/style-examples/pro-platformer-2.png', '/style-examples/pro-platformer-3.png'],
     promptStyle: 'rd_pro__platformer', tier: 'pro', category: 'characters',
     defaultWidth: 256, defaultHeight: 256, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: true,
@@ -72,7 +75,7 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   },
   {
     id: 'pro-spritesheet', label: 'Sprite Collection', description: 'Multiple assets in the same style on one sheet',
-    examplePath: '/style-examples/pro-spritesheet.png',
+    examplePaths: ['/style-examples/pro-spritesheet-1.png', '/style-examples/pro-spritesheet-2.png', '/style-examples/pro-spritesheet-3.png', '/style-examples/pro-spritesheet-4.png', '/style-examples/pro-spritesheet-5.png'],
     promptStyle: 'rd_pro__spritesheet', tier: 'pro', category: 'characters',
     defaultWidth: 256, defaultHeight: 256, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: false,
@@ -80,7 +83,7 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   },
   {
     id: 'pro-inventory', label: 'Inventory Items', description: 'RPG-style inventory item grids',
-    examplePath: '/style-examples/pro-inventory.png',
+    examplePaths: ['/style-examples/pro-inventory-1.png', '/style-examples/pro-inventory-2.png', '/style-examples/pro-inventory-3.png', '/style-examples/pro-inventory-4.png', '/style-examples/pro-inventory-5.png'],
     promptStyle: 'rd_pro__inventory_items', tier: 'pro', category: 'items',
     defaultWidth: 256, defaultHeight: 256, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: false,
@@ -88,7 +91,7 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   },
   {
     id: 'pro-fps-weapon', label: 'FPS Weapon', description: 'First-person perspective weapons and items',
-    examplePath: '/style-examples/pro-fps-weapon.png',
+    examplePaths: ['/style-examples/pro-fps-weapon-1.png', '/style-examples/pro-fps-weapon-2.png', '/style-examples/pro-fps-weapon-3.png', '/style-examples/pro-fps-weapon-4.png', '/style-examples/pro-fps-weapon-5.png'],
     promptStyle: 'rd_pro__fps_weapon', tier: 'pro', category: 'items',
     defaultWidth: 256, defaultHeight: 256, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: true,
@@ -96,7 +99,7 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   },
   {
     id: 'pro-hex-tiles', label: 'Hexagonal Tiles', description: 'Hexagonal tiles for game maps',
-    examplePath: '/style-examples/pro-hex-tiles.png',
+    examplePaths: ['/style-examples/pro-hex-tiles-1.png', '/style-examples/pro-hex-tiles-2.png', '/style-examples/pro-hex-tiles-3.png', '/style-examples/pro-hex-tiles-4.png', '/style-examples/pro-hex-tiles-5.png'],
     promptStyle: 'rd_pro__hexagonal_tiles', tier: 'pro', category: 'tiles',
     defaultWidth: 256, defaultHeight: 256, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: false,
@@ -104,7 +107,7 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   },
   {
     id: 'pro-typography', label: 'Typography', description: 'Pixel art logos, buttons, and text elements',
-    examplePath: '/style-examples/pro-typography.png',
+    examplePaths: ['/style-examples/pro-typography-1.png', '/style-examples/pro-typography-2.png', '/style-examples/pro-typography-3.png'],
     promptStyle: 'rd_pro__typography', tier: 'pro', category: 'ui',
     defaultWidth: 256, defaultHeight: 128, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: true,
@@ -114,35 +117,35 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   // ── RD PLUS ($0.025-0.06/image, 16-192px) — 10 tokens ──
   {
     id: 'plus-classic', label: 'Classic Pixel Art', description: 'Strongly outlined, simple shading, clear design',
-    examplePath: '/style-examples/plus-classic.png',
+    examplePaths: ['/style-examples/plus-classic-1.png', '/style-examples/plus-classic-2.png', '/style-examples/plus-classic-3.png', '/style-examples/plus-classic-4.png', '/style-examples/plus-classic-5.png'],
     promptStyle: 'rd_plus__classic', tier: 'plus', category: 'characters',
     defaultWidth: 192, defaultHeight: 192, minSize: 32, maxSize: 192,
     fixedSize: false, costPerGeneration: 0.06, tokenCost: 16, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'plus-low-res', label: 'Low Resolution', description: 'High quality low-res pixel art (16-128px)',
-    examplePath: '/style-examples/plus-low-res.png',
+    examplePaths: ['/style-examples/plus-low-res-1.png', '/style-examples/plus-low-res-2.png', '/style-examples/plus-low-res-3.png', '/style-examples/plus-low-res-4.png', '/style-examples/plus-low-res-5.png'],
     promptStyle: 'rd_plus__low_res', tier: 'plus', category: 'characters',
     defaultWidth: 64, defaultHeight: 64, minSize: 16, maxSize: 128,
     fixedSize: false, costPerGeneration: 0.05, tokenCost: 16, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'plus-skill-icon', label: 'Skill / Spell Icon', description: 'Icons for skills, abilities, or spells',
-    examplePath: '/style-examples/plus-skill-icon.png',
+    examplePaths: ['/style-examples/plus-skill-icon-1.png', '/style-examples/plus-skill-icon-2.png'],
     promptStyle: 'rd_plus__skill_icon', tier: 'plus', category: 'ui',
     defaultWidth: 64, defaultHeight: 64, minSize: 16, maxSize: 128,
     fixedSize: false, costPerGeneration: 0.05, tokenCost: 16, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'plus-topdown-item', label: 'Top-Down Item', description: 'Items and objects from a top-down view',
-    examplePath: '/style-examples/plus-topdown-item.png',
+    examplePaths: ['/style-examples/plus-topdown-item-1.png', '/style-examples/plus-topdown-item-2.png', '/style-examples/plus-topdown-item-3.png', '/style-examples/plus-topdown-item-4.png', '/style-examples/plus-topdown-item-5.png'],
     promptStyle: 'rd_plus__topdown_item', tier: 'plus', category: 'items',
     defaultWidth: 64, defaultHeight: 64, minSize: 16, maxSize: 128,
     fixedSize: false, costPerGeneration: 0.05, tokenCost: 16, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'plus-mc-item', label: 'Minecraft Item', description: 'Minecraft-styled items and game assets',
-    examplePath: '/style-examples/plus-mc-item.png',
+    examplePaths: ['/style-examples/plus-mc-item-1.png', '/style-examples/plus-mc-item-2.png', '/style-examples/plus-mc-item-3.png', '/style-examples/plus-mc-item-4.png', '/style-examples/plus-mc-item-5.png'],
     promptStyle: 'rd_plus__mc_item', tier: 'plus', category: 'items',
     defaultWidth: 64, defaultHeight: 64, minSize: 16, maxSize: 128,
     fixedSize: false, costPerGeneration: 0.05, tokenCost: 16, isAnimation: false, supportsRemoveBg: true,
@@ -151,14 +154,14 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   // ── RD FAST ($0.015-0.02/image, 64-384px) — 3 tokens ──
   {
     id: 'fast-retro', label: 'Retro Arcade', description: 'Fast retro arcade style pixel art',
-    examplePath: '/style-examples/fast-retro.png',
+    examplePaths: ['/style-examples/fast-retro-1.png', '/style-examples/fast-retro-2.png', '/style-examples/fast-retro-3.png', '/style-examples/fast-retro-4.png', '/style-examples/fast-retro-5.png'],
     promptStyle: 'rd_fast__retro', tier: 'fast', category: 'characters',
     defaultWidth: 256, defaultHeight: 256, minSize: 64, maxSize: 384,
     fixedSize: false, costPerGeneration: 0.02, tokenCost: 5, isAnimation: false, supportsRemoveBg: true,
   },
   {
     id: 'fast-no-style', label: 'No Style (Fast)', description: 'Fast generation with no style influence',
-    examplePath: '/style-examples/fast-no-style.png',
+    examplePaths: ['/style-examples/fast-no-style-1.png', '/style-examples/fast-no-style-2.png', '/style-examples/fast-no-style-3.png', '/style-examples/fast-no-style-4.png', '/style-examples/fast-no-style-5.png'],
     promptStyle: 'rd_fast__no_style', tier: 'fast', category: 'characters',
     defaultWidth: 256, defaultHeight: 256, minSize: 64, maxSize: 384,
     fixedSize: false, costPerGeneration: 0.02, tokenCost: 5, isAnimation: false, supportsRemoveBg: true,

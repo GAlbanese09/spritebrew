@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { Sparkles, X, Check, Loader2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Sparkles, X, Check, Loader2, AlertCircle, ChevronDown, ChevronUp, Maximize2 } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
@@ -16,6 +16,7 @@ import {
 import { isAdminUser } from '@/lib/generationLimits';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
+import { StyleExamplesLightbox } from './StyleExamplesLightbox';
 
 const EXAMPLE_PROMPTS = [
   'pixel art knight with sword',
@@ -121,6 +122,9 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   // Per-category collapse state — empty Set = all expanded (default).
   // Not persisted; resets per page load to keep discoverability.
   const [collapsedCategories, setCollapsedCategories] = useState<Set<StyleCategory>>(new Set());
+
+  // Style whose examples are open in the lightbox carousel. null = closed.
+  const [lightboxStyle, setLightboxStyle] = useState<GenerationStyle | null>(null);
 
   const toggleCategory = (category: StyleCategory) => {
     setCollapsedCategories((prev) => {
@@ -365,38 +369,49 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
                       {styles.map((style) => {
                         const active = selectedStyleId === style.id;
                         return (
-                          <button
-                            key={style.id}
-                            onClick={() => setSelectedStyleId(style.id)}
-                            className={`text-left rounded-lg border px-3 py-2 transition-all duration-150 cursor-pointer
-                              ${active
-                                ? 'border-accent-amber bg-accent-amber-glow'
-                                : 'border-border-default bg-bg-surface hover:border-border-strong hover:bg-bg-elevated'
-                              }`}
-                          >
-                            {style.examplePath && (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={style.examplePath}
-                                alt={`${style.label} example`}
-                                loading="lazy"
-                                className="w-full aspect-square mb-2 rounded-md object-contain bg-[#1a1614]"
-                                style={{ imageRendering: 'pixelated' }}
-                              />
+                          <div key={style.id} className="relative group/example">
+                            <button
+                              onClick={() => setSelectedStyleId(style.id)}
+                              className={`w-full h-full block text-left rounded-lg border px-3 py-2 transition-all duration-150 cursor-pointer
+                                ${active
+                                  ? 'border-accent-amber bg-accent-amber-glow'
+                                  : 'border-border-default bg-bg-surface hover:border-border-strong hover:bg-bg-elevated'
+                                }`}
+                            >
+                              {style.examplePaths && style.examplePaths.length > 0 && (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={style.examplePaths[0]}
+                                  alt={`${style.label} example`}
+                                  loading="lazy"
+                                  className="w-full aspect-square mb-2 rounded-md object-contain bg-[#1a1614]"
+                                  style={{ imageRendering: 'pixelated' }}
+                                />
+                              )}
+                              <div className="flex items-center gap-1.5">
+                                <h3 className={`text-[11px] font-mono font-semibold truncate ${active ? 'text-accent-amber' : 'text-text-primary'}`}>
+                                  {style.label}
+                                </h3>
+                                {active && <Check size={10} className="text-accent-amber flex-shrink-0" />}
+                                <span className={`ml-auto text-[8px] font-mono px-1.5 py-0.5 rounded border flex-shrink-0 ${TIER_COLORS[style.tier] ?? 'text-text-muted border-border-subtle'}`}>
+                                  {getTierLabel(style.tier)}
+                                </span>
+                              </div>
+                              <p className="text-[9px] font-mono text-text-muted mt-0.5 truncate">
+                                {style.description}
+                              </p>
+                            </button>
+                            {style.examplePaths && style.examplePaths.length > 0 && (
+                              <button
+                                type="button"
+                                aria-label={`View ${style.label} examples`}
+                                onClick={() => setLightboxStyle(style)}
+                                className="absolute top-1.5 right-1.5 p-1.5 rounded-md bg-black/60 hover:bg-black/80 text-amber-400 backdrop-blur-sm transition-opacity opacity-70 group-hover/example:opacity-100 focus-visible:opacity-100"
+                              >
+                                <Maximize2 size={14} strokeWidth={2.5} />
+                              </button>
                             )}
-                            <div className="flex items-center gap-1.5">
-                              <h3 className={`text-[11px] font-mono font-semibold truncate ${active ? 'text-accent-amber' : 'text-text-primary'}`}>
-                                {style.label}
-                              </h3>
-                              {active && <Check size={10} className="text-accent-amber flex-shrink-0" />}
-                              <span className={`ml-auto text-[8px] font-mono px-1.5 py-0.5 rounded border flex-shrink-0 ${TIER_COLORS[style.tier] ?? 'text-text-muted border-border-subtle'}`}>
-                                {getTierLabel(style.tier)}
-                              </span>
-                            </div>
-                            <p className="text-[9px] font-mono text-text-muted mt-0.5 truncate">
-                              {style.description}
-                            </p>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
@@ -563,6 +578,18 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         </div>
       </div>
     </div>
+
+    {/* Style-examples lightbox carousel — opened by the ⤢ overlay on style cards. */}
+    <StyleExamplesLightbox
+      style={lightboxStyle}
+      onClose={() => setLightboxStyle(null)}
+      onUseStyle={() => {
+        if (lightboxStyle) {
+          setSelectedStyleId(lightboxStyle.id);
+        }
+        setLightboxStyle(null);
+      }}
+    />
     </>
   );
 }

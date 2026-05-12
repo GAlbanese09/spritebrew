@@ -576,8 +576,8 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
               )}
             </div>
             {upscaleFactor === 2 && !selectedStyle.isAnimation && (
-              <p className="text-[10px] text-amber-300/70 whitespace-nowrap">
-                ⚠️ Polished output may need manual frame-size in slicer
+              <p className="text-[10px] text-amber-300/70">
+                ⚠️ Polished output: best for downloads/previews. Editing tools (slicer, demo area zoom) tuned for native size.
               </p>
             )}
           </div>

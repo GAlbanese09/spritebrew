@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.1';
+export const CURRENT_VERSION = '0.5.2';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,26 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.5.2 — Style Preview Upgrade (May 12, 2026) ──
+  {
+    releaseLabel: 'MAY 12, 2026 — STYLE PREVIEW UPGRADE',
+    emoji: '🎨',
+    title: 'See examples for every style',
+    description:
+      'Tap the ⤢ icon on any style card to open a carousel showing what each style actually produces. 15 of 21 styles now have curated examples — animation previews coming in a future release.',
+  },
+  {
+    emoji: '🌅',
+    title: 'Background toggle on the generate bar',
+    description:
+      "The 'Remove background' control is now always visible on the sticky generate bar — no more hunting through the form. Default is on for character styles, off for tiles. Toggle off to keep environmental detail in your generation.",
+  },
+  {
+    emoji: '📐',
+    title: 'Larger downloads coming soon',
+    description:
+      "All generations output at 256×256 native pixel grid — the right size for sprite sheets and pixel-perfect game engines. Some example images may display at larger sizes; a 'Download at 2× / 4×' option for upscaled PNG output is coming in a future release.",
+  },
   // ── 0.5.1 — UX Polish (May 10, 2026) ──
   {
     releaseLabel: 'MAY 10, 2026 — UX POLISH',

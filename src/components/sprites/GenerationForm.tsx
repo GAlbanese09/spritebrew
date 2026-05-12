@@ -480,19 +480,6 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         )}
       </div>
 
-      {/* Remove Background toggle */}
-      {selectedStyle.supportsRemoveBg && (
-        <label className="flex items-center gap-2 text-xs font-mono text-text-secondary cursor-pointer">
-          <input
-            type="checkbox"
-            checked={removeBg}
-            onChange={(e) => setRemoveBg(e.target.checked)}
-            className="accent-[var(--accent-amber)] cursor-pointer"
-          />
-          Remove background (transparent output)
-        </label>
-      )}
-
       {/* Error */}
       {generationError && (
         <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3">
@@ -526,7 +513,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       )}
 
       {/* Sticky-button bottom spacer — keeps the last form element clear of the fixed bar below */}
-      <div className="h-20" aria-hidden="true" />
+      <div className="h-28" aria-hidden="true" />
     </div>
 
     {/* Sticky generate bar — viewport-fixed at bottom, sidebar-offset on desktop */}
@@ -551,6 +538,17 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
               </span>
             )}
           </p>
+          {selectedStyle.supportsRemoveBg && (
+            <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer select-none whitespace-nowrap">
+              <input
+                type="checkbox"
+                checked={removeBg}
+                onChange={(e) => setRemoveBg(e.target.checked)}
+                className="accent-[var(--accent-amber)] cursor-pointer"
+              />
+              <span>Remove background</span>
+            </label>
+          )}
           <Button
             size="lg"
             onClick={handleGenerate}

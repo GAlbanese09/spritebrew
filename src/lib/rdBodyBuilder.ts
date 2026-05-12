@@ -56,7 +56,6 @@ export interface RdCreateBody {
   remove_bg?: boolean;
   return_spritesheet?: boolean;
   reference_images?: string[];
-  upscale_output_factor?: number;
 }
 
 export interface RdAnimateBody {
@@ -102,9 +101,6 @@ export function buildRdCreateBody(body: GenerateBody): RdCreateBody {
   };
 
   if (body.removeBg) out.remove_bg = true;
-  if (body.upscaleFactor !== undefined) {
-    out.upscale_output_factor = body.upscaleFactor;
-  }
   if (isAnimation) out.return_spritesheet = true;
 
   if (body.referenceImages && body.referenceImages.length > 0) {

@@ -118,10 +118,6 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const [customWidth, setCustomWidth] = useState(256);
   const [customHeight, setCustomHeight] = useState(256);
   const [removeBg, setRemoveBg] = useState(true);
-  // 1 = native pixel grid (Sprite-ready, optimal for slicing).
-  // 2 = upscaled output (Polished). No auto-recompute on style change —
-  // user's pick persists across styles, unlike removeBg.
-  const [upscaleFactor, setUpscaleFactor] = useState(1);
   const [referenceImages, setReferenceImages] = useState<string[]>([]);
   // Per-category collapse state — empty Set = all expanded (default).
   // Not persisted; resets per page load to keep discoverability.
@@ -196,12 +192,6 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         body.removeBg = true;
       }
 
-      // Always send for non-animation styles so RD's default never applies
-      // (determinism — OFF explicitly sends 1, not undefined).
-      if (!selectedStyle.isAnimation) {
-        body.upscaleFactor = upscaleFactor;
-      }
-
       if (referenceImages.length > 0 && referencesEnabled) {
         body.referenceImages = referenceImages;
       }
@@ -272,7 +262,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     }
   }, [
     prompt, selectedStyle, selectedStyleId, effectiveWidth, effectiveHeight,
-    removeBg, upscaleFactor, referenceImages, referencesEnabled, isGenerating, tokenCost, getToken,
+    removeBg, referenceImages, referencesEnabled, isGenerating, tokenCost, getToken,
     setGenerating, setGeneratingAction, setGenerationError, setGeneratedImage,
     setGenerationStyle, setTokenBalance, fetchBalance, onGenerated, poll,
   ]);
@@ -563,23 +553,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
                   <span>Remove background</span>
                 </label>
               )}
-              {!selectedStyle.isAnimation && (
-                <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer select-none whitespace-nowrap">
-                  <input
-                    type="checkbox"
-                    checked={upscaleFactor === 2}
-                    onChange={(e) => setUpscaleFactor(e.target.checked ? 2 : 1)}
-                    className="accent-[var(--accent-amber)] cursor-pointer"
-                  />
-                  <span>Polished output (2×)</span>
-                </label>
-              )}
             </div>
-            {upscaleFactor === 2 && !selectedStyle.isAnimation && (
-              <p className="text-[10px] text-amber-300/70">
-                ⚠️ Polished output: best for downloads/previews. Editing tools (slicer, demo area zoom) tuned for native size.
-              </p>
-            )}
           </div>
           <Button
             size="lg"

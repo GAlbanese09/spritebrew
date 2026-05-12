@@ -91,11 +91,6 @@ export interface GenerateBody {
   width?: number;
   height?: number;
   removeBg?: boolean;
-  /** RD's `upscale_output_factor` — 1 = native pixel grid (Sprite-ready),
-   *  2 = upscaled output (Polished). Only set for non-animation styles by
-   *  the form; queue path's body translator carries it through to RD as
-   *  `upscale_output_factor`. */
-  upscaleFactor?: number;
   /** Optional base64-encoded reference images (no `data:` prefix). Max 9.
    *  Only honoured for rd_pro__* styles per RD's API. */
   referenceImages?: string[];
@@ -491,9 +486,6 @@ async function runCreate(body: GenerateBody): Promise<Record<string, unknown>> {
   };
 
   if (body.removeBg) payload.remove_bg = true;
-  if (body.upscaleFactor !== undefined) {
-    payload.upscale_output_factor = body.upscaleFactor;
-  }
   if (isAnimation) payload.return_spritesheet = true;
 
   // Forward reference images only when present — keeps non-reference calls

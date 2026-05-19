@@ -326,10 +326,15 @@ export default function PixelEditor({
     [setBrushSize]
   );
 
-  useHotkeys('[', () => cycleBrushSize(-1));
-  useHotkeys(']', () => cycleBrushSize(+1));
-  useHotkeys('-', () => cycleBrushSize(-1));
-  useHotkeys('=', () => cycleBrushSize(+1));
+  // useKey: true - react-hotkeys-hook v5 matches the physical key code by
+  // default, so symbol keys ([ ] - =) never match. useKey switches to the
+  // produced character. The increase hook listens for both '=' and '+'
+  // (Shift+=). splitKey is overridden to '_' because '+' is the default
+  // combination separator and would otherwise mis-parse.
+  useHotkeys('[', () => cycleBrushSize(-1), { useKey: true });
+  useHotkeys(']', () => cycleBrushSize(+1), { useKey: true });
+  useHotkeys('-', () => cycleBrushSize(-1), { useKey: true });
+  useHotkeys(['=', '+'], () => cycleBrushSize(+1), { useKey: true, splitKey: '_' });
   useHotkeys('mod+z', (e) => { e.preventDefault(); undo(); });
   useHotkeys('mod+shift+z', (e) => { e.preventDefault(); redo(); });
 
@@ -364,7 +369,7 @@ export default function PixelEditor({
             {/* Body */}
             <div className="flex flex-1 overflow-hidden">
               {/* Toolbar */}
-              <div className="flex flex-col gap-2 p-3 border-r border-border-default bg-bg-secondary">
+              <div className="flex flex-col gap-2 p-3 border-r border-border-default bg-bg-secondary min-h-0 overflow-y-auto">
                 {toolButtons.map(({ id, icon: Icon, label }) => (
                   <button
                     key={id}

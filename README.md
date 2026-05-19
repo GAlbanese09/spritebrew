@@ -179,7 +179,7 @@ Built by [George Albanese](https://github.com/GAlbanese09) — an endpoint autom
 
 ## Acknowledgments
 
-- **[Retro Diffusion](https://retrodiffusion.ai)** — the AI models that make SpriteBrew's pixel art generation possible. Built by pixel artists, for pixel artists.
+- **[Retro Diffusion](https://retrodiffusion.ai)** — pixel art image generation models that power SpriteBrew's generation pipeline.
 - **[Clerk](https://clerk.com)** — authentication without the pain
 - **[Stripe](https://stripe.com)** — payments and customer management
 - **[Cloudflare](https://cloudflare.com)** — Pages, Queues, KV, and the infrastructure that keeps this running on a hobby budget

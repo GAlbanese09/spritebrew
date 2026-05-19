@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.2';
+export const CURRENT_VERSION = '0.5.3';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,26 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.5.3 — Editor Foundation (May 13, 2026) ──
+  {
+    releaseLabel: 'MAY 13, 2026 — EDITOR FOUNDATION',
+    emoji: '💾',
+    title: 'Your edits are safe now',
+    description:
+      'Clicking outside the editor or pressing Esc with unsaved work now asks before discarding. Auto-save coming next.',
+  },
+  {
+    emoji: '🖌️',
+    title: 'Brush sizes',
+    description:
+      'Pencil and eraser now support sizes 1, 2, 4, 8, and 16 pixels. Use [ and ] keys to cycle.',
+  },
+  {
+    emoji: '⚡',
+    title: 'Editor under the hood',
+    description:
+      'Big architectural upgrade — the editor is now built on a foundation that will support animation preview, palette swap, and onion skinning in upcoming releases.',
+  },
   // ── 0.5.2 — Style Preview Upgrade (May 12, 2026) ──
   {
     releaseLabel: 'MAY 12, 2026 — STYLE PREVIEW UPGRADE',

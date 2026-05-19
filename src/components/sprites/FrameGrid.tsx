@@ -90,11 +90,11 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
           const dataUrl = frameDataUrls.get(frame.id);
 
           return (
-            <div key={frame.id} className="relative">
+            <div key={frame.id} className="group relative">
               <button
                 onClick={(e) => handleFrameClick(frame.id, idx, e)}
                 className={`
-                  group flex flex-col items-center rounded p-1 transition-all duration-100 cursor-pointer w-full
+                  flex flex-col items-center rounded p-1 transition-all duration-100 cursor-pointer w-full
                   ${
                     selected
                       ? 'ring-2 ring-accent-amber bg-accent-amber-glow'
@@ -124,24 +124,6 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
                       style={{ imageRendering: 'pixelated' }}
                     />
                   )}
-
-                  {/* Edit button — visible on hover */}
-                  <div
-                    className="absolute top-0.5 right-0.5 hidden group-hover:flex"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingFrameId(frame.id);
-                      }}
-                      className="w-5 h-5 flex items-center justify-center rounded bg-bg-primary/80 border border-border-default
-                        text-text-muted hover:text-accent-amber hover:bg-bg-primary cursor-pointer"
-                      title="Edit pixel"
-                    >
-                      <Pencil size={10} />
-                    </button>
-                  </div>
                 </div>
                 <span
                   className={`mt-1 text-[10px] font-mono ${
@@ -150,6 +132,23 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
                 >
                   {idx}
                 </span>
+              </button>
+
+              {/* Edit-pixel — sibling to selector button (avoids nested
+                  <button> hydration error). Positioned to land in the same
+                  pixel spot as the original overlay: button p-1 = 4px +
+                  checkerboard's original top-0.5/right-0.5 = 2px → 6px = 1.5. */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingFrameId(frame.id);
+                }}
+                className="absolute top-1.5 right-1.5 w-5 h-5 hidden group-hover:flex items-center justify-center rounded
+                  bg-bg-primary/80 border border-border-default
+                  text-text-muted hover:text-accent-amber hover:bg-bg-primary cursor-pointer"
+                title="Edit pixel"
+              >
+                <Pencil size={10} />
               </button>
             </div>
           );

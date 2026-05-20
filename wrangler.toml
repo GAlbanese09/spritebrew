@@ -30,6 +30,10 @@ binding = "SPRITEBREW_KV"
 binding = "RD_QUEUE"
 queue = "spritebrew-rd-jobs"
 
+[[env.production.r2_buckets]]
+binding = "GALLERY_BUCKET"
+bucket_name = "spritebrew-gallery"
+
 # === Preview (dev branch) ===
 [env.preview]
 compatibility_flags = [ "nodejs_compat" ]
@@ -50,3 +54,7 @@ binding = "SPRITEBREW_KV"
 [[env.preview.queues.producers]]
 binding = "RD_QUEUE"
 queue = "spritebrew-rd-jobs-dev"
+
+[[env.preview.r2_buckets]]
+binding = "GALLERY_BUCKET"
+bucket_name = "spritebrew-gallery-dev"

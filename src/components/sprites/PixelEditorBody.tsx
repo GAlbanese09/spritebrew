@@ -486,25 +486,6 @@ export default function PixelEditorBody({
             />
           </div>
 
-          {/* 1× preview */}
-          <div className="flex items-center gap-3">
-            <span className="text-[10px] font-mono text-text-muted">1x preview:</span>
-            <div
-              className="border border-border-default rounded"
-              style={{
-                backgroundImage:
-                  'linear-gradient(45deg, #2a2725 25%, transparent 25%), linear-gradient(-45deg, #2a2725 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2725 75%), linear-gradient(-45deg, transparent 75%, #2a2725 75%)',
-                backgroundSize: '4px 4px',
-                backgroundPosition: '0 0, 0 2px, 2px -2px, -2px 0',
-              }}
-            >
-              <canvas
-                ref={previewCanvasRef}
-                style={{ imageRendering: 'pixelated', display: 'block' }}
-              />
-            </div>
-          </div>
-
           {/* Brush-size toast */}
           {brushToast && (
             <div
@@ -520,24 +501,21 @@ export default function PixelEditorBody({
 
       {/* Sidepanel (right): color + palette + future preview */}
       <aside className="[grid-area:sidepanel] border-l border-border-default bg-bg-secondary overflow-y-auto [scrollbar-gutter:stable] p-3 flex flex-col gap-4">
-        {/* Current color */}
+        {/* Current color — single styled input acts as both swatch and picker. */}
         <div className="flex flex-col gap-2">
           <div className="text-[9px] font-mono text-text-muted uppercase tracking-wider">
             Color
           </div>
-          <div className="flex items-center gap-3">
-            <div
-              className="w-10 h-10 rounded border border-border-default cursor-pointer flex-shrink-0"
-              style={{ backgroundColor: color }}
-              title="Current color"
-            />
+          <div className="flex items-center gap-2">
             <input
               type="color"
               value={color}
               onChange={(e) => setColor(e.target.value)}
-              className="flex-1 h-10 rounded cursor-pointer border-0"
-              aria-label="Pick color"
+              className="w-10 h-10 rounded border border-border-default cursor-pointer appearance-none [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-sm"
+              aria-label="Foreground color"
+              title="Click to pick a foreground color"
             />
+            <span className="text-xs font-mono text-text-muted">Click to pick</span>
           </div>
         </div>
 
@@ -546,21 +524,50 @@ export default function PixelEditorBody({
           <div className="text-[9px] font-mono text-text-muted uppercase tracking-wider">
             Palette
           </div>
-          <div className="grid grid-cols-2 gap-1">
-            {palette.map((c) => (
-              <button
-                key={c}
-                onClick={() => {
-                  setColor(c);
-                  setTool('pencil');
-                }}
-                className={`w-3 h-3 rounded-sm border cursor-pointer ${
-                  color === c ? 'border-accent-amber ring-1 ring-accent-amber' : 'border-border-subtle'
-                }`}
-                style={{ backgroundColor: c }}
-                title={c}
-              />
-            ))}
+          {palette.length === 0 ? (
+            <p className="text-[11px] font-mono text-text-muted italic leading-relaxed">
+              Use the color picker above — colors from your source image will appear here when you upload one.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-1">
+              {palette.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => {
+                    setColor(c);
+                    setTool('pencil');
+                  }}
+                  className={`w-3 h-3 rounded-sm border cursor-pointer ${
+                    color === c ? 'border-accent-amber ring-1 ring-accent-amber' : 'border-border-subtle'
+                  }`}
+                  style={{ backgroundColor: c }}
+                  title={c}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 1× preview — sidepanel placement (Phase 1.5: was below the canvas
+            grid, now lives alongside the palette so it's visible without
+            scrolling past the canvas). */}
+        <div className="flex flex-col gap-2">
+          <div className="text-[9px] font-mono text-text-muted uppercase tracking-wider">
+            1× preview
+          </div>
+          <div
+            className="border border-border-default rounded inline-block self-start"
+            style={{
+              backgroundImage:
+                'linear-gradient(45deg, #2a2725 25%, transparent 25%), linear-gradient(-45deg, #2a2725 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2725 75%), linear-gradient(-45deg, transparent 75%, #2a2725 75%)',
+              backgroundSize: '4px 4px',
+              backgroundPosition: '0 0, 0 2px, 2px -2px, -2px 0',
+            }}
+          >
+            <canvas
+              ref={previewCanvasRef}
+              style={{ imageRendering: 'pixelated', display: 'block' }}
+            />
           </div>
         </div>
 

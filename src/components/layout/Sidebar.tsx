@@ -12,6 +12,7 @@ import {
   Images,
   Coins,
   MessageCircle,
+  Pencil,
   X,
   LogIn,
 } from 'lucide-react';
@@ -29,6 +30,7 @@ const NAV_ITEMS = [
   { href: '/preview', label: 'Preview', icon: PlayCircle, soon: false },
   { href: '/export', label: 'Export', icon: Download, soon: false },
   { href: '/gallery', label: 'Gallery', icon: Images, soon: false },
+  { href: '/editor', label: 'Edit', icon: Pencil, soon: false },
   { href: '/generate', label: 'Generate', icon: Sparkles, soon: false },
   { href: '/buy-tokens', label: 'Buy Tokens', icon: Coins, soon: false },
 ];

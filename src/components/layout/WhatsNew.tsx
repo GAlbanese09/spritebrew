@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.4';
+export const CURRENT_VERSION = '0.5.5';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,20 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.5.5 — Editor Has a Home (May 21, 2026) ──
+  {
+    releaseLabel: 'MAY 21, 2026 — EDITOR HAS A HOME',
+    emoji: '🎨',
+    title: 'Pixel Editor now has its own tab',
+    description:
+      'Find it as "Edit" in the sidebar. Start a blank canvas at any size or upload an image to edit pixel by pixel. No more digging through Generate → Animate → upload to find the editor.',
+  },
+  {
+    emoji: '🧩',
+    title: 'Editor toolbar layout fixed',
+    description:
+      'The color palette no longer clips at the right edge. Cleaner editor surface across the board.',
+  },
   // ── 0.5.4 — Slicer Quick Export (May 20, 2026) ──
   {
     releaseLabel: 'MAY 20, 2026 — SLICER QUICK EXPORT',

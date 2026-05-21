@@ -369,7 +369,7 @@ export default function PixelEditor({
             {/* Body */}
             <div className="flex flex-1 overflow-hidden">
               {/* Toolbar */}
-              <div className="flex flex-col gap-2 p-3 border-r border-border-default bg-bg-secondary min-h-0 overflow-y-auto">
+              <div className="flex flex-col gap-2 p-3 border-r border-border-default bg-bg-secondary min-h-0 min-w-[5rem] overflow-y-auto">
                 {toolButtons.map(({ id, icon: Icon, label }) => (
                   <button
                     key={id}
@@ -391,7 +391,7 @@ export default function PixelEditor({
                 <div className="text-[9px] font-mono text-text-muted uppercase tracking-wider text-center">
                   Brush
                 </div>
-                <div className="grid grid-cols-2 gap-1">
+                <div className="grid grid-cols-3 gap-1">
                   {VALID_BRUSH_SIZES.map((size) => (
                     <button
                       key={size}

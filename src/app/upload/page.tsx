@@ -463,7 +463,7 @@ export default function UploadPage() {
       {spriteSheet && (
         <div className="flex flex-wrap justify-end items-center gap-3">
           <Button
-            variant="ghost"
+            variant="secondary"
             size="lg"
             disabled={!canContinue || downloadingZip}
             onClick={handleDownloadAllFrames}

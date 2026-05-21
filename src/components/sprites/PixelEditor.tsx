@@ -452,7 +452,7 @@ export default function PixelEditor({
                         setColor(c);
                         setTool('pencil');
                       }}
-                      className={`w-4 h-4 rounded-sm border cursor-pointer ${
+                      className={`w-3 h-3 rounded-sm border cursor-pointer ${
                         color === c ? 'border-accent-amber ring-1 ring-accent-amber' : 'border-border-subtle'
                       }`}
                       style={{ backgroundColor: c }}

@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.3';
+export const CURRENT_VERSION = '0.5.4';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,9 +23,17 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
-  // ── 0.5.3 — Editor Foundation (May 13, 2026) ──
+  // ── 0.5.4 — Slicer Quick Export (May 20, 2026) ──
   {
-    releaseLabel: 'MAY 13, 2026 — EDITOR FOUNDATION',
+    releaseLabel: 'MAY 20, 2026 — SLICER QUICK EXPORT',
+    emoji: '📦',
+    title: 'Quick download all sliced frames',
+    description:
+      'After slicing your sprite sheet on the Upload & Slice page, you can now download every frame as a separate transparent PNG with a single click. Look for "Download all frames (PNG ZIP)" right next to "Continue to Preview."',
+  },
+  // ── 0.5.3 — Editor Foundation (May 19, 2026) ──
+  {
+    releaseLabel: 'MAY 19, 2026 — EDITOR FOUNDATION',
     emoji: '💾',
     title: 'Your edits are safe now',
     description:

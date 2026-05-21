@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Grid3X3, Scan, Sparkles } from 'lucide-react';
+import { ArrowRight, Download, Grid3X3, Loader2, Scan, Sparkles } from 'lucide-react';
 import UploadZone from '@/components/sprites/UploadZone';
 import SlicerConfig, { type SliceConfig } from '@/components/sprites/SlicerConfig';
 import FrameGrid from '@/components/sprites/FrameGrid';
@@ -20,6 +20,7 @@ import {
   frameToDataURL,
 } from '@/lib/spriteUtils';
 import type { SpriteFrame, SpriteSheet } from '@/lib/types';
+import { exportRawFrames } from '@/lib/exportEngine';
 
 type SliceMode = 'grid' | 'auto';
 
@@ -55,6 +56,9 @@ export default function UploadPage() {
   const [sliceMode, setSliceMode] = useState<SliceMode>('grid');
   // Background removal banner: true = dismissed (user clicked Keep or Apply)
   const [bgBannerDismissed, setBgBannerDismissed] = useState(false);
+  // True while a bulk-PNG ZIP is being assembled — disables the button + shows
+  // a spinner. ZIP can take a few seconds on larger sheets.
+  const [downloadingZip, setDownloadingZip] = useState(false);
 
   // Auto-load generated image from store on mount. We copy the data URL
   // into local state but do NOT clear it from the Zustand store — this lets
@@ -299,6 +303,29 @@ export default function UploadPage() {
     [animations]
   );
 
+  /** Shortcut export: invokes the same exportRawFrames path the /preview
+   *  Export page uses, with no manifest and no resize. Transparency from
+   *  the bg-removal banner carries through end-to-end (PNG preserves alpha). */
+  const handleDownloadAllFrames = useCallback(async () => {
+    if (!spriteSheet || !canContinue || downloadingZip) return;
+    setDownloadingZip(true);
+    try {
+      await exportRawFrames({
+        animations,
+        frameDataUrls,
+        frameWidth: spriteSheet.frameWidth,
+        frameHeight: spriteSheet.frameHeight,
+        padding: 0,
+        powerOfTwo: false,
+        includeMetadata: false,
+        sheetName: spriteSheet.name,
+        includeManifest: false,
+      });
+    } finally {
+      setDownloadingZip(false);
+    }
+  }, [animations, frameDataUrls, spriteSheet, canContinue, downloadingZip]);
+
   return (
     <div className="max-w-5xl mx-auto space-y-8">
       {/* Header */}
@@ -432,9 +459,28 @@ export default function UploadPage() {
         </div>
       )}
 
-      {/* Continue button */}
+      {/* Continue / shortcut export buttons */}
       {spriteSheet && (
-        <div className="flex justify-end">
+        <div className="flex flex-wrap justify-end items-center gap-3">
+          <Button
+            variant="ghost"
+            size="lg"
+            disabled={!canContinue || downloadingZip}
+            onClick={handleDownloadAllFrames}
+            aria-label="Download all sliced frames as a ZIP of transparent PNG files"
+          >
+            {downloadingZip ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Preparing download...
+              </>
+            ) : (
+              <>
+                <Download size={16} />
+                Download all frames (PNG ZIP)
+              </>
+            )}
+          </Button>
           <Button
             size="lg"
             disabled={!canContinue}

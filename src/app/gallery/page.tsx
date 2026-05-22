@@ -5,12 +5,26 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Download, Scissors, Trash2, Images, Sparkles, Play, Loader2 } from 'lucide-react';
 import { useAuth } from '@clerk/react';
+import JSZip from 'jszip';
 import { type GalleryEntryV1, deriveSlicerHints } from '@/lib/galleryTypes';
+import { loadHistory, type GenerationHistoryEntry } from '@/lib/generationHistory';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 
 type FilterMode = 'all' | 'create' | 'animate';
+
+// Phase 2 (server-side gallery writes) shipped May 20, 2026 ~14:00 UTC.
+// Conservative cutoff at 12:00 UTC catches all entries that definitively pre-date
+// server-side persistence. A few hours of overlap means some Day-9 morning entries
+// may show as both "legacy" (in the banner) and "server" (in the synced grid) —
+// harmless; the customer just gets a backup copy.
+const PHASE_2_SHIP_TS = new Date('2026-05-20T12:00:00Z').getTime();
+
+// Banner self-removes after this date. Code stays for Phase 5+ cleanup commit.
+const LEGACY_BANNER_SUNSET_TS = new Date('2026-06-05T00:00:00Z').getTime();
+
+const LEGACY_BANNER_DISMISSED_KEY = 'spritebrew_legacy_banner_dismissed';
 
 function relativeTime(timestamp: number): string {
   const diff = Date.now() - timestamp;
@@ -37,6 +51,9 @@ export default function GalleryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterMode>('all');
+  const [legacyEntries, setLegacyEntries] = useState<GenerationHistoryEntry[]>([]);
+  const [legacyBannerDismissed, setLegacyBannerDismissed] = useState(false);
+  const [legacyBackupBusy, setLegacyBackupBusy] = useState(false);
 
   // Ref tracks blob URLs for cleanup. We avoid revoking on unmount (Slicer handoff
   // needs them to survive); we revoke on individual delete, clear-all, and when
@@ -122,6 +139,115 @@ export default function GalleryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
+  // Detect pre-Phase-2 localStorage entries for the backup banner.
+  // Self-contained: doesn't touch the server gallery fetch or its state.
+  useEffect(() => {
+    // Sunset short-circuit
+    if (Date.now() >= LEGACY_BANNER_SUNSET_TS) return;
+
+    // Dismissed-state read
+    if (typeof window !== 'undefined') {
+      const dismissed = window.localStorage.getItem(LEGACY_BANNER_DISMISSED_KEY);
+      if (dismissed === '1') {
+        setLegacyBannerDismissed(true);
+        return;
+      }
+    }
+
+    if (!userId) return;
+
+    // Read all localStorage entries, filter to pre-Phase-2 AND downloadable
+    try {
+      const all = loadHistory(userId);
+      const legacy = all.filter(
+        (e) => e.timestamp < PHASE_2_SHIP_TS && !!e.fullImageDataUrl
+      );
+      setLegacyEntries(legacy);
+    } catch {
+      // localStorage parse failure — silently ignore, banner won't render
+    }
+  }, [userId]);
+
+  const handleLegacyBackup = useCallback(async () => {
+    if (legacyEntries.length === 0 || legacyBackupBusy) return;
+    setLegacyBackupBusy(true);
+
+    try {
+      const zip = new JSZip();
+      legacyEntries.forEach((entry, idx) => {
+        const dataUrl = entry.fullImageDataUrl;
+        if (!dataUrl) return;
+        // Strip the data URL prefix to get the base64 payload
+        const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
+        const filename = `spritebrew_${entry.mode}_${idx + 1}_${entry.id}.png`;
+        zip.file(filename, base64, { base64: true });
+      });
+
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `spritebrew_legacy_backup_${Date.now()}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      // Auto-dismiss on successful download — they got what they came for
+      window.localStorage.setItem(LEGACY_BANNER_DISMISSED_KEY, '1');
+      setLegacyBannerDismissed(true);
+    } catch (err) {
+      console.error('Legacy backup failed:', err);
+    } finally {
+      setLegacyBackupBusy(false);
+    }
+  }, [legacyEntries, legacyBackupBusy]);
+
+  const handleLegacyDismiss = useCallback(() => {
+    window.localStorage.setItem(LEGACY_BANNER_DISMISSED_KEY, '1');
+    setLegacyBannerDismissed(true);
+  }, []);
+
+  const showLegacyBanner =
+    !legacyBannerDismissed &&
+    legacyEntries.length > 0 &&
+    Date.now() < LEGACY_BANNER_SUNSET_TS;
+
+  const legacyBanner = showLegacyBanner ? (
+    <div className="mb-6 p-4 bg-bg-elevated border border-accent-amber/40 rounded-lg flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="flex-1 text-sm">
+        <p className="text-text-primary font-medium">
+          We found {legacyEntries.length} older generation{legacyEntries.length === 1 ? '' : 's'} in your browser
+        </p>
+        <p className="text-text-secondary mt-1">
+          These were saved locally before gallery sync went live, and aren&apos;t in your synced gallery above. Download a backup zip to keep them. This banner disappears June 5.
+        </p>
+      </div>
+      <div className="flex gap-2 shrink-0">
+        <Button
+          onClick={handleLegacyBackup}
+          disabled={legacyBackupBusy}
+          variant="primary"
+          size="sm"
+        >
+          {legacyBackupBusy ? (
+            <><Loader2 size={14} className="mr-2 animate-spin" /> Preparing…</>
+          ) : (
+            <><Download size={14} className="mr-2" /> Download backup</>
+          )}
+        </Button>
+        <Button
+          onClick={handleLegacyDismiss}
+          variant="ghost"
+          size="sm"
+          className="text-text-secondary hover:text-text-primary"
+        >
+          Dismiss
+        </Button>
+      </div>
+    </div>
+  ) : null;
+
   const handleDownload = useCallback((entry: GalleryEntryV1) => {
     const url = imageUrls[entry.jobId];
     if (!url) return;
@@ -170,25 +296,58 @@ export default function GalleryPage() {
   }, [getToken]);
 
   const handleClearAll = useCallback(async () => {
-    if (!confirm('Delete ALL generations in your gallery? This cannot be undone.')) return;
+    // Determine scope from current filter
+    const scopeLabel = filter === 'all' ? 'ALL generations'
+      : filter === 'create' ? 'all Created generations'
+      : 'all Animated generations';
 
-    // Optimistic update
-    Object.values(urlsRef.current).forEach(URL.revokeObjectURL);
-    urlsRef.current = {};
-    setEntries([]);
-    setImageUrls({});
+    const targetEntries = filter === 'all' ? entries : entries.filter(e => e.mode === filter);
+    if (targetEntries.length === 0) return; // shouldn't happen — button is disabled — but defensive
 
+    if (!confirm(`Delete ${targetEntries.length} ${scopeLabel}? This cannot be undone.`)) return;
+
+    // Optimistic update — revoke blob URLs for targeted entries only
+    const targetIds = new Set(targetEntries.map(e => e.jobId));
+    targetEntries.forEach(e => {
+      const url = urlsRef.current[e.jobId];
+      if (url) URL.revokeObjectURL(url);
+      delete urlsRef.current[e.jobId];
+    });
+    setEntries(prev => prev.filter(e => !targetIds.has(e.jobId)));
+    setImageUrls(prev => {
+      const next = { ...prev };
+      targetIds.forEach(id => delete next[id]);
+      return next;
+    });
+
+    // Server delete — different route per scope
     try {
       const token = await getToken();
       if (!token) return;
-      await fetch('/api/gallery', {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      });
+
+      if (filter === 'all') {
+        // Nuclear route — single call wipes everything for this user
+        await fetch('/api/gallery', {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } else {
+        // Filtered scope — parallel per-entry deletes
+        await Promise.all(
+          targetEntries.map(e =>
+            fetch(`/api/gallery/${e.jobId}`, {
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${token}` },
+            }).catch(err => {
+              console.error(`Gallery delete failed for ${e.jobId}:`, err);
+            })
+          )
+        );
+      }
     } catch (err) {
       console.error('Gallery clear-all failed:', err);
     }
-  }, [getToken]);
+  }, [filter, entries, getToken]);
 
   const filteredEntries = useMemo(() => {
     if (filter === 'all') return entries;
@@ -218,19 +377,22 @@ export default function GalleryPage() {
   // Render: empty
   if (entries.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 px-4 text-center">
-        <Images size={48} className="text-text-muted" />
-        <div className="space-y-2">
-          <h2 className="text-xl font-semibold text-text-primary">No generations yet</h2>
-          <p className="text-sm text-text-secondary max-w-md">
-            Head to Generate to create your first sprite. Your gallery syncs across devices — sign in anywhere and your work is here.
-          </p>
+      <div className="px-4 sm:px-6 py-6 max-w-7xl mx-auto">
+        {legacyBanner}
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 px-4 text-center">
+          <Images size={48} className="text-text-muted" />
+          <div className="space-y-2">
+            <h2 className="text-xl font-semibold text-text-primary">No generations yet</h2>
+            <p className="text-sm text-text-secondary max-w-md">
+              Head to Generate to create your first sprite. Your gallery syncs across devices — sign in anywhere and your work is here.
+            </p>
+          </div>
+          <Link href="/generate">
+            <Button>
+              <Sparkles size={16} className="mr-2" /> Go to Generate
+            </Button>
+          </Link>
         </div>
-        <Link href="/generate">
-          <Button>
-            <Sparkles size={16} className="mr-2" /> Go to Generate
-          </Button>
-        </Link>
       </div>
     );
   }
@@ -245,10 +407,28 @@ export default function GalleryPage() {
             {entries.length} generation{entries.length === 1 ? '' : 's'} · synced to your account
           </p>
         </div>
-        <Button variant="ghost" onClick={handleClearAll} className="text-text-secondary hover:text-text-primary">
-          <Trash2 size={14} className="mr-2" /> Clear all
-        </Button>
+        {(() => {
+          const filteredCount = filter === 'all'
+            ? entries.length
+            : entries.filter(e => e.mode === filter).length;
+          const label = filter === 'all' ? 'Clear all'
+            : filter === 'create' ? 'Clear Created'
+            : 'Clear Animated';
+          return (
+            <Button
+              variant="ghost"
+              onClick={handleClearAll}
+              disabled={filteredCount === 0}
+              className="text-text-secondary hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Trash2 size={14} className="mr-2" /> {label}
+            </Button>
+          );
+        })()}
       </div>
+
+      {/* Legacy localStorage backup banner — sunsets June 5, 2026 */}
+      {legacyBanner}
 
       {/* Filter tabs */}
       <div className="flex gap-2 mb-6">

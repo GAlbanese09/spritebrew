@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.5';
+export const CURRENT_VERSION = '0.5.6';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.5.6 — Gallery Goes Server-Side (May 22, 2026) ──
+  {
+    releaseLabel: 'MAY 22, 2026 — GALLERY GOES SERVER-SIDE',
+    emoji: '🌐',
+    title: 'Your gallery now syncs across devices',
+    description:
+      'Sign in on any browser or device and your generations are there. No more losing work when you clear your browser cache.',
+  },
   // ── 0.5.5 — Editor Has a Home (May 21, 2026) ──
   {
     releaseLabel: 'MAY 21, 2026 — EDITOR HAS A HOME',

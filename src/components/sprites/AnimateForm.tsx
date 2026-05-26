@@ -385,9 +385,27 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       return;
     }
     if (poll.status === 'error' || poll.status === 'abandoned') {
-      const message = poll.error?.message ?? 'Animation failed.';
-      const refundedNote = poll.error?.refunded ? ' (tokens refunded)' : '';
-      setGenerationError(`${message}${refundedNote}`);
+      const rawMessage = poll.error?.message ?? 'Animation failed.';
+      const refundedNote = poll.error?.refunded ? ' Your tokens have been refunded.' : '';
+
+      // Friendly error wrapping: convert technical upstream errors to
+      // customer-facing copy. Keep raw error in console for diagnostics.
+      const isUpstreamError =
+        rawMessage.startsWith('RD ') ||
+        rawMessage.includes('inference_failed') ||
+        rawMessage.includes('Unexpected response') ||
+        rawMessage.includes('timed out');
+
+      const customerMessage = isUpstreamError
+        ? `Animation failed due to a temporary issue with the AI service.${refundedNote} Please try again in a few minutes.`
+        : `${rawMessage}${refundedNote}`;
+
+      console.error('[generation error]', { rawMessage, errorCode: poll.error?.errorCode });
+      setGenerationError(customerMessage);
+
+      // Refresh token balance to reflect any refund that fired server-side
+      void fetchBalance();
+
       setGenerating(false);
       setGeneratingAction(null);
       inFlightRef.current = null;

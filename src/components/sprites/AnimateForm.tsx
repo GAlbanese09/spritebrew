@@ -397,7 +397,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         rawMessage.includes('timed out');
 
       const customerMessage = isUpstreamError
-        ? `Animation failed due to a temporary issue with the AI service.${refundedNote} Please try again in a few minutes.`
+        ? `Animation failed due to a temporary issue with the AI service.${refundedNote} Please try again in a few minutes, or try a smaller frame count (6 or 8) if the issue persists.`
         : `${rawMessage}${refundedNote}`;
 
       console.error('[generation error]', { rawMessage, errorCode: poll.error?.errorCode });

@@ -47,6 +47,13 @@ interface SpriteStore {
    *  generatedImageDataUrl (which stays as-is for back-navigation). */
   pendingEditorHandoff: boolean;
 
+  /** One-shot intent flag: user clicked "Send to Animator" on a Create-mode
+   *  Generation Result. Detected by GeneratePage (which flips the tab to
+   *  'animate') and consumed-and-cleared by AnimateForm's reactive effect
+   *  once it mounts. Two-stage state machine because /generate is the
+   *  current route — no remount, so the consume effect must be reactive. */
+  pendingAnimatorHandoff: boolean;
+
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
   setFrameDataUrls: (urls: Map<string, string>) => void;
@@ -81,6 +88,10 @@ interface SpriteStore {
   // Send-to-editor handoff
   setPendingEditorHandoff: (pending: boolean) => void;
   clearPendingEditorHandoff: () => void;
+
+  // Send-to-animator handoff
+  setPendingAnimatorHandoff: (pending: boolean) => void;
+  clearPendingAnimatorHandoff: () => void;
 }
 
 export const useSpriteStore = create<SpriteStore>((set, get) => ({
@@ -107,6 +118,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   streakLifetimeMax: 0,
   emailListClaimed: false,
   pendingEditorHandoff: false,
+  pendingAnimatorHandoff: false,
 
   setSpriteSheet: (sheet) =>
     set({ spriteSheet: sheet, selectedFrames: [], animations: [] }),
@@ -182,7 +194,15 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
     set({ generatedImageUrl: url, generatedImageDataUrl: dataUrl, generationError: null }),
 
   clearGeneratedImage: () =>
-    set({ generatedImageUrl: null, generatedImageDataUrl: null, originalCharacterDataUrl: null }),
+    set({
+      generatedImageUrl: null,
+      generatedImageDataUrl: null,
+      originalCharacterDataUrl: null,
+      // Clear any pending handoffs alongside the image — they have nothing
+      // left to consume once the image is gone.
+      pendingEditorHandoff: false,
+      pendingAnimatorHandoff: false,
+    }),
 
   setGenerating: (loading) => set({ isGenerating: loading }),
 
@@ -238,4 +258,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
 
   setPendingEditorHandoff: (pending) => set({ pendingEditorHandoff: pending }),
   clearPendingEditorHandoff: () => set({ pendingEditorHandoff: false }),
+
+  setPendingAnimatorHandoff: (pending) => set({ pendingAnimatorHandoff: pending }),
+  clearPendingAnimatorHandoff: () => set({ pendingAnimatorHandoff: false }),
 }));

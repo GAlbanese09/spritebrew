@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight, Eraser, Pencil } from 'lucide-react';
+import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight, Eraser, Pencil, Film } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
@@ -31,6 +31,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
   const setPendingEditorHandoff = useSpriteStore((s) => s.setPendingEditorHandoff);
+  const setPendingAnimatorHandoff = useSpriteStore((s) => s.setPendingAnimatorHandoff);
 
   const [zoom, setZoom] = useState(4);
   const [history, setHistory] = useState<GenerationHistoryEntry[]>([]);
@@ -109,6 +110,18 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     setPendingEditorHandoff(true);
     router.push('/editor');
   }, [router, bgRemovalActive, bgRemovedDataUrl, setGeneratedImage, setPendingEditorHandoff]);
+
+  const handleSendToAnimator = useCallback(() => {
+    // Honor bg-removal toggle the same way Send to Editor / Send to Slicer do.
+    // Same route as the user's already on (/generate) — receiving effects must
+    // be reactive subscriptions, not mount-only. Two-stage state machine:
+    // GeneratePage flips the tab; AnimateForm consumes the flag on mount.
+    if (bgRemovalActive && bgRemovedDataUrl) {
+      setGeneratedImage(bgRemovedDataUrl, bgRemovedDataUrl);
+    }
+    setPendingAnimatorHandoff(true);
+    router.push('/generate');
+  }, [router, bgRemovalActive, bgRemovedDataUrl, setGeneratedImage, setPendingAnimatorHandoff]);
 
   const handleToggleBgRemoval = useCallback(() => {
     setBgRemovalActive((v) => !v);
@@ -398,6 +411,12 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           <Pencil size={14} />
           Send to Editor
         </Button>
+        {!originalCharacterDataUrl && (
+          <Button variant="secondary" size="md" onClick={handleSendToAnimator}>
+            <Film size={14} />
+            Send to Animator
+          </Button>
+        )}
         <Button variant="secondary" size="md" onClick={handleDownload}>
           <Download size={14} />
           Download PNG

@@ -114,6 +114,16 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   // when a fresh-enough activeJob entry exists.
   const poll = useGenerationPoll();
 
+  // Send-to-Animator handoff consumers. Reactive subscriptions (not getState()
+  // on mount) because GenerationResult lives on the same /generate route —
+  // GeneratePage flips the tab, AnimateForm mounts, AND THEN this effect
+  // fires to consume the flag. The decode-and-preload path mirrors
+  // handleFileUpload exactly so the flow downstream (AutoPrep modal →
+  // accept → "Character ready") is identical to a manual upload.
+  const pendingAnimatorHandoff = useSpriteStore((s) => s.pendingAnimatorHandoff);
+  const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
+  const clearPendingAnimatorHandoff = useSpriteStore((s) => s.clearPendingAnimatorHandoff);
+
   // Captures click-time action/motion so the poll-success effect can write
   // history with the right context. Null on resume.
   const inFlightRef = useRef<{ action: string; motionPrompt: string } | null>(null);
@@ -162,6 +172,40 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     const newSize = currentMode.kind === 'locked' ? currentMode.size : currentMode.default;
     setSelectedResolution((prev) => (prev === newSize ? prev : newSize));
   }, [currentMode]);
+
+  // Consume the Send-to-Animator handoff. When the flag is set AND a
+  // generated image is available, clear any existing character state
+  // (mirrors handleRemoveChar) so the AutoPrep modal doesn't race a
+  // stale "Character ready" card, then decode the data URL to extract
+  // dimensions and feed pendingDataUrl exactly the way handleFileUpload
+  // does. The flag is consumed here (not in GeneratePage's tab-flip
+  // effect) — single-consumer to avoid double-fire.
+  useEffect(() => {
+    if (!pendingAnimatorHandoff || !generatedImageDataUrl) return;
+
+    // Consume the flag immediately, before the async image decode, so a
+    // re-render mid-load can't trigger this effect a second time.
+    clearPendingAnimatorHandoff();
+
+    // Clear stale character state (mirrors handleRemoveChar's character
+    // half — but keep selected action / frame count / resolution so the
+    // user's form selections survive the handoff).
+    setCharacterDataUrl(null);
+    setCharWidth(0);
+    setCharHeight(0);
+    setHasAlpha(false);
+
+    const img = new Image();
+    img.onload = () => {
+      setPendingDataUrl(generatedImageDataUrl);
+      setPendingWidth(img.naturalWidth);
+      setPendingHeight(img.naturalHeight);
+    };
+    img.onerror = () => {
+      console.error('[animator handoff] Failed to decode preloaded character');
+    };
+    img.src = generatedImageDataUrl;
+  }, [pendingAnimatorHandoff, generatedImageDataUrl, clearPendingAnimatorHandoff]);
 
   // When resolution changes after a character is already prepped, invalidate it
   // so the user re-runs Auto-Prep at the new size. This is simpler and more

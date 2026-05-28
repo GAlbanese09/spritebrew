@@ -188,6 +188,18 @@ export default function GeneratePage() {
     [setAnimateMode]
   );
 
+  // Send-to-Animator handoff: when GenerationResult sets the flag and pushes
+  // /generate, we're already on this route so GeneratePage does NOT remount.
+  // Reactive subscription watches the flag and flips the tab so AnimateForm
+  // mounts. AnimateForm's own effect then consumes-and-clears the flag.
+  // We deliberately do NOT clear the flag here — that's AnimateForm's job.
+  const pendingAnimatorHandoff = useSpriteStore((s) => s.pendingAnimatorHandoff);
+  useEffect(() => {
+    if (pendingAnimatorHandoff && tab === 'create') {
+      handleTabChange('animate');
+    }
+  }, [pendingAnimatorHandoff, tab, handleTabChange]);
+
   const handleGenerated = useCallback(async (dataUrl: string, prompt: string, style: string) => {
     // Determine mode + action from the style key
     const isAnimate = style.startsWith('any_animation_');

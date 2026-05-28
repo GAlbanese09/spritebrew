@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight, Eraser } from 'lucide-react';
+import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight, Eraser, Pencil } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
@@ -30,6 +30,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
+  const setPendingEditorHandoff = useSpriteStore((s) => s.setPendingEditorHandoff);
 
   const [zoom, setZoom] = useState(4);
   const [history, setHistory] = useState<GenerationHistoryEntry[]>([]);
@@ -97,6 +98,17 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     }
     router.push('/upload');
   }, [router, bgRemovalActive, bgRemovedDataUrl, setGeneratedImage]);
+
+  const handleSendToEditor = useCallback(() => {
+    // Honor bg-removal toggle the same way Send to Slicer does — push the
+    // transparent variant into the store before the handoff so the editor
+    // receives what the user is currently seeing.
+    if (bgRemovalActive && bgRemovedDataUrl) {
+      setGeneratedImage(bgRemovedDataUrl, bgRemovedDataUrl);
+    }
+    setPendingEditorHandoff(true);
+    router.push('/editor');
+  }, [router, bgRemovalActive, bgRemovedDataUrl, setGeneratedImage, setPendingEditorHandoff]);
 
   const handleToggleBgRemoval = useCallback(() => {
     setBgRemovalActive((v) => !v);
@@ -381,6 +393,10 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         <Button variant="primary" size="md" onClick={handleSendToSlicer}>
           <Scissors size={14} />
           Send to Slicer
+        </Button>
+        <Button variant="secondary" size="md" onClick={handleSendToEditor}>
+          <Pencil size={14} />
+          Send to Editor
         </Button>
         <Button variant="secondary" size="md" onClick={handleDownload}>
           <Download size={14} />

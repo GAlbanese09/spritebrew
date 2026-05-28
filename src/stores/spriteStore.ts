@@ -42,6 +42,11 @@ interface SpriteStore {
    *  on rewards check. Optimistically set after a successful subscribe. */
   emailListClaimed: boolean;
 
+  /** One-shot intent flag: user clicked "Send to Editor" on the Generation
+   *  Result. Consumed-and-cleared by /editor's mount effect. Does NOT replace
+   *  generatedImageDataUrl (which stays as-is for back-navigation). */
+  pendingEditorHandoff: boolean;
+
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
   setFrameDataUrls: (urls: Map<string, string>) => void;
@@ -72,6 +77,10 @@ interface SpriteStore {
   dequeueReward: () => PendingReward | null;
   setStreak: (count: number, lifetimeMax: number) => void;
   setEmailListClaimed: (claimed: boolean) => void;
+
+  // Send-to-editor handoff
+  setPendingEditorHandoff: (pending: boolean) => void;
+  clearPendingEditorHandoff: () => void;
 }
 
 export const useSpriteStore = create<SpriteStore>((set, get) => ({
@@ -97,6 +106,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   streakCount: 0,
   streakLifetimeMax: 0,
   emailListClaimed: false,
+  pendingEditorHandoff: false,
 
   setSpriteSheet: (sheet) =>
     set({ spriteSheet: sheet, selectedFrames: [], animations: [] }),
@@ -225,4 +235,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   setStreak: (count, lifetimeMax) => set({ streakCount: count, streakLifetimeMax: lifetimeMax }),
 
   setEmailListClaimed: (claimed) => set({ emailListClaimed: claimed }),
+
+  setPendingEditorHandoff: (pending) => set({ pendingEditorHandoff: pending }),
+  clearPendingEditorHandoff: () => set({ pendingEditorHandoff: false }),
 }));

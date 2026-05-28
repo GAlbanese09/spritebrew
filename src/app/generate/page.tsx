@@ -195,8 +195,15 @@ export default function GeneratePage() {
   // We deliberately do NOT clear the flag here — that's AnimateForm's job.
   const pendingAnimatorHandoff = useSpriteStore((s) => s.pendingAnimatorHandoff);
   useEffect(() => {
-    if (pendingAnimatorHandoff && tab === 'create') {
-      handleTabChange('animate');
+    if (pendingAnimatorHandoff) {
+      // Force the form area open BEFORE the tab flip — otherwise the
+      // "Generation complete!" placeholder keeps rendering and AnimateForm
+      // never mounts, so its consume effect never fires and AutoPrep never
+      // appears. See diagnostic on commit 291f228.
+      setShowForm(true);
+      if (tab === 'create') {
+        handleTabChange('animate');
+      }
     }
   }, [pendingAnimatorHandoff, tab, handleTabChange]);
 

@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.6';
+export const CURRENT_VERSION = '0.5.7';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.5.7 — Send to Editor (May 27, 2026) ──
+  {
+    releaseLabel: 'MAY 27, 2026 — SEND TO EDITOR',
+    emoji: '🖌️',
+    title: 'Send your generated sprites straight to the Pixel Editor',
+    description:
+      "Added a new 'Send to Editor' button on every generation result. Click it to open your sprite in the Pixel Editor for pixel-level refinements — perfect for cleaning up small details the AI got slightly wrong. Honors the 'Remove background' toggle so you get the variant you saw on the result.",
+  },
   // ── 0.5.6 — Gallery Goes Server-Side (May 22, 2026) ──
   {
     releaseLabel: 'MAY 22, 2026 — GALLERY GOES SERVER-SIDE',

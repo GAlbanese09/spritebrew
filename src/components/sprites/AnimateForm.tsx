@@ -121,8 +121,10 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   // handleFileUpload exactly so the flow downstream (AutoPrep modal →
   // accept → "Character ready") is identical to a manual upload.
   const pendingAnimatorHandoff = useSpriteStore((s) => s.pendingAnimatorHandoff);
+  const pendingAnimatorSkipBgRemoval = useSpriteStore((s) => s.pendingAnimatorSkipBgRemoval);
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
   const clearPendingAnimatorHandoff = useSpriteStore((s) => s.clearPendingAnimatorHandoff);
+  const clearPendingAnimatorSkipBgRemoval = useSpriteStore((s) => s.clearPendingAnimatorSkipBgRemoval);
 
   // Captures click-time action/motion so the poll-success effect can write
   // history with the right context. Null on resume.
@@ -136,6 +138,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const [charWidth, setCharWidth] = useState(0);
   const [charHeight, setCharHeight] = useState(0);
   const [hasAlpha, setHasAlpha] = useState(false);
+  // Captured from spriteStore.pendingAnimatorSkipBgRemoval at handoff-consume
+  // time, forwarded to CharacterAutoPrep as initialSkipBgRemoval. Reset to
+  // false on manual file upload so the handoff preference only applies to
+  // handoff-sourced characters.
+  const [handoffSkipBgRemoval, setHandoffSkipBgRemoval] = useState(false);
   const [pendingDataUrl, setPendingDataUrl] = useState<string | null>(null);
   const [pendingWidth, setPendingWidth] = useState(0);
   const [pendingHeight, setPendingHeight] = useState(0);
@@ -183,9 +190,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   useEffect(() => {
     if (!pendingAnimatorHandoff || !generatedImageDataUrl) return;
 
-    // Consume the flag immediately, before the async image decode, so a
+    // Capture the skip-bg preference BEFORE clearing the flag — otherwise
+    // the AutoPrep modal would mount with the default (false) and ignore
+    // the user's result-side choice.
+    setHandoffSkipBgRemoval(pendingAnimatorSkipBgRemoval);
+
+    // Consume both flags immediately, before the async image decode, so a
     // re-render mid-load can't trigger this effect a second time.
     clearPendingAnimatorHandoff();
+    clearPendingAnimatorSkipBgRemoval();
 
     // Clear stale character state (mirrors handleRemoveChar's character
     // half — but keep selected action / frame count / resolution so the
@@ -205,7 +218,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       console.error('[animator handoff] Failed to decode preloaded character');
     };
     img.src = generatedImageDataUrl;
-  }, [pendingAnimatorHandoff, generatedImageDataUrl, clearPendingAnimatorHandoff]);
+  }, [pendingAnimatorHandoff, pendingAnimatorSkipBgRemoval, generatedImageDataUrl, clearPendingAnimatorHandoff, clearPendingAnimatorSkipBgRemoval]);
 
   // When resolution changes after a character is already prepped, invalidate it
   // so the user re-runs Auto-Prep at the new size. This is simpler and more
@@ -233,6 +246,10 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       useSpriteStore.getState().setGenerationError('Please upload a PNG file.');
       return;
     }
+
+    // Manual upload — reset any lingering handoff preference so it only
+    // applies to the original handoff-sourced character.
+    setHandoffSkipBgRemoval(false);
 
     const reader = new FileReader();
     reader.onload = () => {
@@ -599,6 +616,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
           characterSizePct={characterSizePct}
           onPaddingEnabledChange={setPaddingEnabled}
           onCharacterSizePctChange={setCharacterSizePct}
+          initialSkipBgRemoval={handoffSkipBgRemoval}
         />
       )}
 

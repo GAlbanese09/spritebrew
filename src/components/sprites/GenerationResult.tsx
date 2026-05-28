@@ -32,6 +32,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
   const setPendingEditorHandoff = useSpriteStore((s) => s.setPendingEditorHandoff);
   const setPendingAnimatorHandoff = useSpriteStore((s) => s.setPendingAnimatorHandoff);
+  const setPendingAnimatorSkipBgRemoval = useSpriteStore((s) => s.setPendingAnimatorSkipBgRemoval);
 
   const [zoom, setZoom] = useState(4);
   const [history, setHistory] = useState<GenerationHistoryEntry[]>([]);
@@ -119,9 +120,16 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     if (bgRemovalActive && bgRemovedDataUrl) {
       setGeneratedImage(bgRemovedDataUrl, bgRemovedDataUrl);
     }
+    // Communicate the user's bg-removal CHOICE to AutoPrep. If the result-side
+    // toggle was OFF, the user wants to keep the bg — tell AutoPrep to skip
+    // removal too. (When toggle is ON, the transparent variant lands in the
+    // store via setGeneratedImage above and AutoPrep auto-detects alpha and
+    // skips removal regardless — so the skip flag is essentially a no-op on
+    // that branch, but setting it consistently keeps the intent explicit.)
+    setPendingAnimatorSkipBgRemoval(!bgRemovalActive);
     setPendingAnimatorHandoff(true);
     router.push('/generate');
-  }, [router, bgRemovalActive, bgRemovedDataUrl, setGeneratedImage, setPendingAnimatorHandoff]);
+  }, [router, bgRemovalActive, bgRemovedDataUrl, setGeneratedImage, setPendingAnimatorHandoff, setPendingAnimatorSkipBgRemoval]);
 
   const handleToggleBgRemoval = useCallback(() => {
     setBgRemovalActive((v) => !v);

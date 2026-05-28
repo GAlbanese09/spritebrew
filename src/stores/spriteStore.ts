@@ -54,6 +54,12 @@ interface SpriteStore {
    *  current route — no remount, so the consume effect must be reactive. */
   pendingAnimatorHandoff: boolean;
 
+  /** Companion to pendingAnimatorHandoff: communicates the user's result-side
+   *  bg-removal choice through to CharacterAutoPrep. True = user had bg-removal
+   *  OFF on the result and wants AutoPrep to skip removal too. Captured-then-
+   *  cleared by AnimateForm alongside pendingAnimatorHandoff. */
+  pendingAnimatorSkipBgRemoval: boolean;
+
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
   setFrameDataUrls: (urls: Map<string, string>) => void;
@@ -92,6 +98,8 @@ interface SpriteStore {
   // Send-to-animator handoff
   setPendingAnimatorHandoff: (pending: boolean) => void;
   clearPendingAnimatorHandoff: () => void;
+  setPendingAnimatorSkipBgRemoval: (skip: boolean) => void;
+  clearPendingAnimatorSkipBgRemoval: () => void;
 }
 
 export const useSpriteStore = create<SpriteStore>((set, get) => ({
@@ -119,6 +127,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   emailListClaimed: false,
   pendingEditorHandoff: false,
   pendingAnimatorHandoff: false,
+  pendingAnimatorSkipBgRemoval: false,
 
   setSpriteSheet: (sheet) =>
     set({ spriteSheet: sheet, selectedFrames: [], animations: [] }),
@@ -202,6 +211,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
       // left to consume once the image is gone.
       pendingEditorHandoff: false,
       pendingAnimatorHandoff: false,
+      pendingAnimatorSkipBgRemoval: false,
     }),
 
   setGenerating: (loading) => set({ isGenerating: loading }),
@@ -261,4 +271,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
 
   setPendingAnimatorHandoff: (pending) => set({ pendingAnimatorHandoff: pending }),
   clearPendingAnimatorHandoff: () => set({ pendingAnimatorHandoff: false }),
+
+  setPendingAnimatorSkipBgRemoval: (skip) => set({ pendingAnimatorSkipBgRemoval: skip }),
+  clearPendingAnimatorSkipBgRemoval: () => set({ pendingAnimatorSkipBgRemoval: false }),
 }));

@@ -40,6 +40,11 @@ interface CharacterAutoPrepProps {
   characterSizePct: number;
   onPaddingEnabledChange: (enabled: boolean) => void;
   onCharacterSizePctChange: (pct: number) => void;
+  /** When true, AutoPrep skips its bg-removal step and routes the cropped
+   *  canvas straight to the fit step. Set by the Send-to-Animator handoff
+   *  to honor the user's result-side "Remove background" toggle choice.
+   *  Initial value only — user can toggle the checkbox in-modal too. */
+  initialSkipBgRemoval?: boolean;
 }
 
 type Stage = 'processing' | 'ready' | 'error';
@@ -55,6 +60,7 @@ export default function CharacterAutoPrep({
   characterSizePct,
   onPaddingEnabledChange,
   onCharacterSizePctChange,
+  initialSkipBgRemoval,
 }: CharacterAutoPrepProps) {
   const [stage, setStage] = useState<Stage>('processing');
   const [preparedDataUrl, setPreparedDataUrl] = useState<string | null>(null);
@@ -63,6 +69,7 @@ export default function CharacterAutoPrep({
   const [sourceHasAlpha, setSourceHasAlpha] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tolerance, setTolerance] = useState(30);
+  const [skipBgRemoval, setSkipBgRemoval] = useState(initialSkipBgRemoval ?? false);
   const [editorOpen, setEditorOpen] = useState(false);
 
   // The user's manually edited 64×64 image. When set, padding changes apply
@@ -147,7 +154,9 @@ export default function CharacterAutoPrep({
         croppedHasAlphaRef.current = foundAlpha;
 
         let bgRemovedCanvas: HTMLCanvasElement;
-        if (foundAlpha) {
+        if (foundAlpha || skipBgRemoval) {
+          // foundAlpha → input already transparent, no removal needed.
+          // skipBgRemoval → user opted out (handoff carrier OR in-modal toggle).
           bgRemovedCanvas = croppedCanvas;
         } else {
           const { dataUrl } = removeBackgroundColor(croppedCanvas, tolerance);
@@ -180,6 +189,7 @@ export default function CharacterAutoPrep({
   useEffect(() => {
     if (!croppedCanvasRef.current || lastSourceRef.current !== sourceDataUrl) return;
     if (croppedHasAlphaRef.current) return;
+    if (skipBgRemoval) return; // user opted out — tolerance slider is hidden anyway
     if (tolerance === lastToleranceRef.current) return; // no change
 
     let cancelled = false;
@@ -203,7 +213,44 @@ export default function CharacterAutoPrep({
       }
     })();
     return () => { cancelled = true; };
-  }, [sourceDataUrl, tolerance, targetSize, effectivePct]);
+  }, [sourceDataUrl, tolerance, targetSize, effectivePct, skipBgRemoval]);
+
+  // ── Re-run pipeline when skipBgRemoval toggles post-mount ──
+  // Mirrors the tolerance-change effect's shape: clears manual edits (because
+  // the base image just changed), recomputes bgRemovedRef, re-fits the display.
+  useEffect(() => {
+    if (!croppedCanvasRef.current || lastSourceRef.current !== sourceDataUrl) return;
+    if (croppedHasAlphaRef.current) return; // input already transparent, toggle has no effect
+
+    let cancelled = false;
+    (async () => {
+      try {
+        let bgRemovedCanvas: HTMLCanvasElement;
+        if (skipBgRemoval) {
+          bgRemovedCanvas = croppedCanvasRef.current!;
+        } else {
+          const { dataUrl } = removeBackgroundColor(croppedCanvasRef.current!, tolerance);
+          const removedImg = await loadImage(dataUrl);
+          if (cancelled) return;
+          bgRemovedCanvas = imageToCanvas(removedImg);
+          lastToleranceRef.current = tolerance;
+        }
+        bgRemovedRef.current = bgRemovedCanvas;
+
+        // Toggling skip changes the base; clear manual edits so padding
+        // applies to the new base.
+        setEditedBaseDataUrl(null);
+
+        const prepared = fitToTransparentSquarePadded(bgRemovedCanvas, targetSize, effectivePct);
+        if (!cancelled) setPreparedDataUrl(prepared);
+      } catch {
+        // ignore
+      }
+    })();
+    return () => { cancelled = true; };
+    // tolerance is intentionally NOT in deps — that's the other effect's job.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [skipBgRemoval, sourceDataUrl, targetSize, effectivePct]);
 
   // ── Re-fit when padding OR target size changes — uses editedBaseDataUrl if available ──
   // effectivePct + targetSize fully cover when re-fitting is needed;
@@ -346,31 +393,50 @@ export default function CharacterAutoPrep({
             </div>
           </div>
 
-          {/* Background removal tolerance slider */}
+          {/* Background removal: skip checkbox + tolerance slider */}
           {!sourceHasAlpha && (
-            <div className="rounded border border-border-default bg-bg-elevated p-3 space-y-2">
-              <div className="flex items-center gap-3">
-                <label className="text-[10px] font-mono text-text-muted w-20 flex-shrink-0">
-                  BG Removal
-                </label>
+            <div className="rounded border border-border-default bg-bg-elevated p-3 space-y-3">
+              <label
+                className="flex items-center gap-2 cursor-pointer"
+                title="Keep the original background instead of removing it. Useful when the character shares colors with the background (e.g. white beard on white background)."
+              >
                 <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={tolerance}
-                  onChange={(e) => handleToleranceChange(Number(e.target.value))}
-                  className="flex-1 accent-[var(--accent-amber)]"
+                  type="checkbox"
+                  checked={skipBgRemoval}
+                  onChange={(e) => setSkipBgRemoval(e.target.checked)}
+                  className="accent-[var(--accent-amber)] cursor-pointer"
                 />
-                <span className="text-[10px] font-mono text-text-primary w-8 text-right">
-                  {tolerance}
+                <span className="text-[11px] font-mono font-semibold text-text-primary">
+                  Skip background removal (keep original background)
                 </span>
-              </div>
-              <p className="text-[9px] font-mono text-text-muted">
-                Increase if background pixels remain. Decrease if character pixels are being removed.
-                {editedBaseDataUrl && (
-                  <span className="text-amber-400 ml-1">(changing will reset manual edits)</span>
-                )}
-              </p>
+                <Info size={11} className="text-text-muted" />
+              </label>
+              {!skipBgRemoval && (
+                <>
+                  <div className="flex items-center gap-3">
+                    <label className="text-[10px] font-mono text-text-muted w-20 flex-shrink-0">
+                      BG Removal
+                    </label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={tolerance}
+                      onChange={(e) => handleToleranceChange(Number(e.target.value))}
+                      className="flex-1 accent-[var(--accent-amber)]"
+                    />
+                    <span className="text-[10px] font-mono text-text-primary w-8 text-right">
+                      {tolerance}
+                    </span>
+                  </div>
+                  <p className="text-[9px] font-mono text-text-muted">
+                    Increase if background pixels remain. Decrease if character pixels are being removed.
+                    {editedBaseDataUrl && (
+                      <span className="text-amber-400 ml-1">(changing will reset manual edits)</span>
+                    )}
+                  </p>
+                </>
+              )}
             </div>
           )}
 
@@ -388,7 +454,13 @@ export default function CharacterAutoPrep({
             )}
             <DetailRow
               label="Background"
-              value={sourceHasAlpha ? 'Already transparent' : `Removed (tolerance ${tolerance})`}
+              value={
+                sourceHasAlpha
+                  ? 'Already transparent'
+                  : skipBgRemoval
+                    ? 'Kept (no removal)'
+                    : `Removed (tolerance ${tolerance})`
+              }
             />
             {editedBaseDataUrl && (
               <DetailRow label="Manual edits" value="Applied" />

@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.7';
+export const CURRENT_VERSION = '0.5.8';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.5.8 — Send to Animator + BG Control (May 28, 2026) ──
+  {
+    releaseLabel: 'MAY 28, 2026 — SEND TO ANIMATOR + BG CONTROL',
+    emoji: '🎬',
+    title: 'Send your generated sprites straight to the Animator',
+    description:
+      'Added a "Send to Animator" button on every Create-mode generation result. Click it to drop your sprite straight into the Animate flow with no download-and-reupload step. Now you can also choose whether to keep your sprite\'s background — your "Remove background" choice from the result carries through to AutoPrep, and there is a new "Skip background removal" toggle for when you want to keep the original background completely intact.',
+  },
   // ── 0.5.7 — Send to Editor (May 27, 2026) ──
   {
     releaseLabel: 'MAY 27, 2026 — SEND TO EDITOR',

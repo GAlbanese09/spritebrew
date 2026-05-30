@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { Pencil, Eraser, Pipette, Undo2, Redo2, Save, X, ArrowLeft } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Pencil, Eraser, Pipette, Undo2, Redo2, Save, X, ArrowLeft, Film } from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import Button from '@/components/ui/Button';
 import {
@@ -12,6 +13,7 @@ import {
   VALID_BRUSH_SIZES,
   type Tool,
 } from './editorStore';
+import { useSpriteStore } from '@/stores/spriteStore';
 import { extractPaletteFromImageData } from '@/lib/imagePalette';
 
 /**
@@ -61,6 +63,15 @@ export default function PixelEditorBody({
   const isDirty = useEditorStore((s) => s.historyIndex > 0);
   const canUndo = useEditorStore(selectCanUndo);
   const canRedo = useEditorStore(selectCanRedo);
+
+  // Send-to-Animator handoff (v0.5.9): the editor → animator round-trip.
+  // Selectors are pulled imperatively from spriteStore so they don't trigger
+  // unrelated re-renders of the editor body. router is from next/navigation.
+  const router = useRouter();
+  const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
+  const setOriginalCharacter = useSpriteStore((s) => s.setOriginalCharacter);
+  const setPendingAnimatorHandoff = useSpriteStore((s) => s.setPendingAnimatorHandoff);
+  const setPendingAnimatorSkipBgRemoval = useSpriteStore((s) => s.setPendingAnimatorSkipBgRemoval);
 
   const loadFrame = useEditorStore((s) => s.loadFrame);
   const beginStroke = useEditorStore((s) => s.beginStroke);
@@ -285,6 +296,24 @@ export default function PixelEditorBody({
     onDismiss();
   }, [renderToDataUrl, onSave, onDismiss]);
 
+  // Send-to-Animator (page-mode only). Snapshot the canvas synchronously
+  // BEFORE any state change or navigation. The dataUrl is a JS string copy
+  // — once it's staged in spriteStore (which is decoupled from editorStore),
+  // the natural unmount-driven editorStore.reset() can fire without harming
+  // it. Do NOT call onDismiss here — onDismiss triggers reset() before the
+  // snapshot completes and zeros out the canvas.
+  const handleSendToAnimator = useCallback(() => {
+    const dataUrl = renderToDataUrl();
+    if (!dataUrl) return;
+
+    setGeneratedImage(dataUrl, dataUrl);
+    setOriginalCharacter(null);                    // clear stale Animate-source if any
+    setPendingAnimatorSkipBgRemoval(true);         // user just edited; respect what they made
+    setPendingAnimatorHandoff(true);
+
+    router.push('/generate');
+  }, [renderToDataUrl, setGeneratedImage, setOriginalCharacter, setPendingAnimatorSkipBgRemoval, setPendingAnimatorHandoff, router]);
+
   // Page-mode Save: PNG download via <a download>. Editor stays open.
   const doSaveAsDownload = useCallback(() => {
     const dataUrl = renderToDataUrl();
@@ -368,6 +397,12 @@ export default function PixelEditorBody({
                 Back
               </Button>
             </Link>
+            {layout === 'page' && (
+              <Button variant="secondary" size="sm" onClick={handleSendToAnimator}>
+                <Film size={14} />
+                Send to Animator
+              </Button>
+            )}
             <Button variant="primary" size="sm" onClick={doSaveAsDownload}>
               <Save size={14} />
               Save (download PNG)

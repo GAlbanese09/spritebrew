@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.8';
+export const CURRENT_VERSION = '0.5.9';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.5.9 — Editor Round-Trip Complete (May 30, 2026) ──
+  {
+    releaseLabel: 'MAY 30, 2026 — EDITOR ROUND-TRIP COMPLETE',
+    emoji: '🔄',
+    title: 'Send your edited sprite straight to the Animator',
+    description:
+      'Added a "Send to Animator" button inside the Pixel Editor. Now you can take a fresh generation, clean it up in the editor (removing unwanted details or fixing pixels), then send it straight into the Animate flow without downloading and re-uploading. Closes the full round-trip: generate, edit, animate. Your edited sprite is preserved exactly as you made it — background removal is skipped by default since you just spent time editing.',
+  },
   // ── 0.5.8 — Send to Animator + BG Control (May 28, 2026) ──
   {
     releaseLabel: 'MAY 28, 2026 — SEND TO ANIMATOR + BG CONTROL',

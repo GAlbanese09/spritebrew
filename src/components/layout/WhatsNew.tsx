@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.9';
+export const CURRENT_VERSION = '0.5.10';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.5.10 — Smoother Pixel Editor (May 30, 2026) ──
+  {
+    releaseLabel: 'MAY 30, 2026 — SMOOTHER PIXEL EDITOR',
+    emoji: '🖌️',
+    title: 'Faster, smoother brush on large canvases',
+    description:
+      'The pixel editor brush is now much smoother on larger canvases. Strokes keep up with fast movements without gaps, and the canvas no longer stutters while you draw at higher zoom levels. Editing at 128x128 and above feels the way it should.',
+  },
   // ── 0.5.9 — Editor Round-Trip Complete (May 30, 2026) ──
   {
     releaseLabel: 'MAY 30, 2026 — EDITOR ROUND-TRIP COMPLETE',

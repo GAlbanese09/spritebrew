@@ -12,6 +12,7 @@ import {
   selectCanRedo,
   VALID_BRUSH_SIZES,
   type Tool,
+  type DirtyRect,
 } from './editorStore';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { extractPaletteFromImageData } from '@/lib/imagePalette';
@@ -52,6 +53,15 @@ export default function PixelEditorBody({
 }: PixelEditorBodyProps) {
   const editorCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  // Long-lived stage canvas hoisted to a ref (was allocated fresh per render
+  // pre-smoothness-fix). Holds the native-resolution pixel buffer; sub-region
+  // patches go into it via putImageData(dirty rect), then drawImage copies the
+  // scaled sub-region to the editor canvas without redrawing chrome.
+  const stageCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Tracks the last pointer cell of the active stroke so handleMouseMove can
+  // interpolate via Bresenham (paintLine) instead of just stamping discrete
+  // points (which left gaps at high pointer speeds).
+  const prevCellRef = useRef<{ x: number; y: number } | null>(null);
 
   // Non-pixel store subscriptions (re-render on change).
   const tool = useEditorStore((s) => s.activeTool);
@@ -78,6 +88,8 @@ export default function PixelEditorBody({
   const endStroke = useEditorStore((s) => s.endStroke);
   const paintPixel = useEditorStore((s) => s.paintPixel);
   const erasePixel = useEditorStore((s) => s.erasePixel);
+  const paintLine = useEditorStore((s) => s.paintLine);
+  const eraseLine = useEditorStore((s) => s.eraseLine);
   const eyedrop = useEditorStore((s) => s.eyedrop);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
@@ -128,15 +140,25 @@ export default function PixelEditorBody({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameDataUrl, frameWidth, frameHeight]);
 
-  // Imperative canvas render — reads pixels via getState so we don't depend
-  // on React re-renders to draw. Called on subscription fire and on zoom change.
-  const renderCanvases = useCallback(() => {
+  // Full canvas render — runs on mount, zoom change, frame load, undo/redo,
+  // and stroke end (to restore any grid pixels the per-event patches drew over).
+  // Redraws ALL chrome (checkerboard + image + grid) at scaled resolution.
+  // Initializes / resizes the hoisted stage canvas on first use.
+  const renderCanvasesFull = useCallback(() => {
     const { pixels, width, height } = useEditorStore.getState();
     if (!pixels || width === 0 || height === 0) return;
 
-    const stage = document.createElement('canvas');
-    stage.width = width;
-    stage.height = height;
+    // Initialize or resize the hoisted stage canvas. Assigning width/height
+    // clears the canvas, so we always do a full putImageData below to refill.
+    let stage = stageCanvasRef.current;
+    if (!stage) {
+      stage = document.createElement('canvas');
+      stageCanvasRef.current = stage;
+    }
+    if (stage.width !== width || stage.height !== height) {
+      stage.width = width;
+      stage.height = height;
+    }
     const stageCtx = stage.getContext('2d')!;
     stageCtx.putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0);
 
@@ -186,20 +208,82 @@ export default function PixelEditorBody({
     }
   }, [zoom]);
 
+  // Per-event patch render — only the dirty sub-region. Chrome (checkerboard +
+  // grid) is NOT redrawn; it persists from the last full render. The brush may
+  // overwrite a grid pixel within the patch region — restored on stroke end.
+  // Allocates a small contiguous sub-buffer (rect.w × rect.h × 4 bytes) rather
+  // than copying the entire pixel buffer per event.
+  const patchDirtyRect = useCallback((rect: DirtyRect) => {
+    const { pixels, width, height } = useEditorStore.getState();
+    if (!pixels || width === 0 || height === 0) return;
+    const stage = stageCanvasRef.current;
+    if (!stage) {
+      // No stage yet — fall through to a full render to bootstrap.
+      renderCanvasesFull();
+      return;
+    }
+
+    // Build a small ImageData containing only the dirty sub-region (row-by-row
+    // copy because the source rows aren't contiguous in the full-frame buffer).
+    const subData = new Uint8ClampedArray(rect.w * rect.h * 4);
+    for (let row = 0; row < rect.h; row++) {
+      const srcOffset = ((rect.y + row) * width + rect.x) * 4;
+      const dstOffset = row * rect.w * 4;
+      subData.set(pixels.subarray(srcOffset, srcOffset + rect.w * 4), dstOffset);
+    }
+    const subImageData = new ImageData(subData, rect.w, rect.h);
+
+    // Patch the stage at native resolution.
+    const stageCtx = stage.getContext('2d')!;
+    stageCtx.putImageData(subImageData, rect.x, rect.y);
+
+    // Patch the editor canvas's corresponding scaled sub-region.
+    const ec = editorCanvasRef.current;
+    if (ec) {
+      const ctx = ec.getContext('2d')!;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(
+        stage,
+        rect.x, rect.y, rect.w, rect.h,
+        rect.x * zoom, rect.y * zoom, rect.w * zoom, rect.h * zoom
+      );
+    }
+
+    // Preview canvas is native-res and cheap — full redraw is fine.
+    const pc = previewCanvasRef.current;
+    if (pc) {
+      const ctx = pc.getContext('2d')!;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(stage, 0, 0);
+    }
+  }, [zoom, renderCanvasesFull]);
+
   // Pixel subscription — fires outside React reconciliation, no re-render.
+  // Subscribes to `pixels` (always changes reference on any pixel mutation),
+  // then reads `lastDirtyRect` via getState to decide between full vs patch.
+  // We subscribe to pixels (not lastDirtyRect) so wholesale replacements
+  // — undo/redo, which set lastDirtyRect: null — still trigger the listener
+  // even when prior lastDirtyRect was also null (Object.is would miss that).
   useEffect(() => {
-    renderCanvases();
+    renderCanvasesFull();
     const unsub = useEditorStore.subscribe(
       (s) => s.pixels,
-      () => renderCanvases()
+      () => {
+        const rect = useEditorStore.getState().lastDirtyRect;
+        if (rect === null) {
+          renderCanvasesFull();
+        } else {
+          patchDirtyRect(rect);
+        }
+      }
     );
     return unsub;
-  }, [renderCanvases]);
+  }, [renderCanvasesFull, patchDirtyRect]);
 
-  // Re-render on zoom change (canvas dims change).
+  // Re-render on zoom change (canvas dims change — must redraw chrome).
   useEffect(() => {
-    renderCanvases();
-  }, [zoom, renderCanvases]);
+    renderCanvasesFull();
+  }, [zoom, renderCanvasesFull]);
 
   const getPixelCoords = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -230,13 +314,34 @@ export default function PixelEditorBody({
     [tool, color, paintPixel, erasePixel, eyedrop, setColor, setTool]
   );
 
+  // Interpolated line stamp for mid-stroke pointermove. Single store action
+  // (one subscription fire) regardless of segment length. Eyedropper not
+  // applicable (filtered out by the caller).
+  const applyLine = useCallback(
+    (x0: number, y0: number, x1: number, y1: number) => {
+      if (tool === 'pencil') {
+        paintLine(x0, y0, x1, y1, color);
+      } else if (tool === 'eraser') {
+        eraseLine(x0, y0, x1, y1);
+      }
+    },
+    [tool, color, paintLine, eraseLine]
+  );
+
   const handleMouseDown = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       const coords = getPixelCoords(e);
       if (!coords) return;
       if (tool !== 'eyedropper') beginStroke();
       setIsDrawing(true);
+      // Fresh stroke — no previous cell to interpolate from.
+      prevCellRef.current = null;
       applyAt(coords.x, coords.y);
+      // After the initial stamp, seed prev so the next pointermove can
+      // Bresenham-interpolate from here. Eyedropper is one-shot; no prev.
+      if (tool !== 'eyedropper') {
+        prevCellRef.current = coords;
+      }
     },
     [getPixelCoords, tool, beginStroke, applyAt]
   );
@@ -259,17 +364,36 @@ export default function PixelEditorBody({
 
       if (!isDrawing || tool === 'eyedropper') return;
       const coords = getPixelCoords(e);
-      if (coords) applyAt(coords.x, coords.y);
+      if (!coords) return;
+
+      const prev = prevCellRef.current;
+      if (prev && (prev.x !== coords.x || prev.y !== coords.y)) {
+        // Interpolate to close per-event gaps on fast strokes. Bresenham
+        // walks each cell from prev→current; the line bbox covers the whole
+        // segment so the patch render captures every stamp in one update.
+        applyLine(prev.x, prev.y, coords.x, coords.y);
+      } else if (!prev) {
+        // Defensive — shouldn't happen given handleMouseDown seeds prev,
+        // but fall back to a single stamp so the user's input isn't lost.
+        applyAt(coords.x, coords.y);
+      }
+      // Same cell as prev → no-op (no stamp, no render).
+      prevCellRef.current = coords;
     },
-    [isDrawing, tool, brushSize, zoom, getPixelCoords, applyAt]
+    [isDrawing, tool, brushSize, zoom, getPixelCoords, applyAt, applyLine]
   );
 
   const handleMouseUp = useCallback(() => {
     if (isDrawing && tool !== 'eyedropper') {
       endStroke();
+      // Per-event patches may have overwritten grid pixels inside their dirty
+      // rects. One full redraw at stroke end restores the grid. Cheap (once
+      // per stroke, not per event).
+      renderCanvasesFull();
     }
     setIsDrawing(false);
-  }, [isDrawing, tool, endStroke]);
+    prevCellRef.current = null;
+  }, [isDrawing, tool, endStroke, renderCanvasesFull]);
 
   const handleMouseEnter = useCallback(() => setCursorVisible(true), []);
   const handleMouseLeaveCanvas = useCallback(() => {

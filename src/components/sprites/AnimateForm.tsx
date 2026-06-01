@@ -22,6 +22,7 @@ import {
 } from '@/lib/styleRegistry';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
+import { loadLatestConfig, saveLatestConfig } from '@/lib/animateConfig';
 
 const ACTIONS = [
   { id: 'walking', name: 'Walk', desc: 'Walking cycle animation' },
@@ -133,6 +134,25 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   // 1s click-debounce (one-render race window beyond isGenerating).
   const lastGenerateAtRef = useRef<number>(0);
 
+  // Snap-effect guards for the auto-restore flow. Two existing useEffects
+  // (PADDING_ON_ACTIONS auto-toggle and the resolution snap) watch action /
+  // currentMode changes and overwrite paddingEnabled / selectedResolution
+  // with the action's defaults. Without these guards, auto-restore would
+  // set selectedAction to the saved value, then the snap effects would
+  // fire in the next commit and clobber paddingEnabled / selectedResolution
+  // back to the action's defaults — half-fixed bug.
+  //
+  // Strategy: TWO refs, one per snap effect, each consumed by its own
+  // effect (so neither steals the other's skip). Refs are set to true
+  // INSIDE the auto-restore effect AFTER all setters fire, so the snap
+  // effects in the post-restore commit see them as true and skip exactly
+  // once. The auto-restore effect is placed AFTER the snap effects in
+  // source order so commit-1 (initial-mount, default deps) snap effects
+  // fire BEFORE the refs get set — those no-op default snaps don't
+  // consume the refs.
+  const restoringPaddingRef = useRef(false);
+  const restoringResolutionRef = useRef(false);
+
   // Character state
   const [characterDataUrl, setCharacterDataUrl] = useState<string | null>(null);
   const [charWidth, setCharWidth] = useState(0);
@@ -170,15 +190,82 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   );
 
   // Auto-toggle animation padding based on selected action.
+  // Skip exactly once when auto-restore set selectedAction — the saved
+  // paddingEnabled should win over the action's default.
   useEffect(() => {
+    if (restoringPaddingRef.current) {
+      restoringPaddingRef.current = false;
+      return;
+    }
     setPaddingEnabled(PADDING_ON_ACTIONS.has(selectedAction));
   }, [selectedAction]);
 
   // When the selected action's mode changes, snap selectedResolution to its default/locked size.
+  // Same one-shot skip pattern as the padding snap above.
   useEffect(() => {
+    if (restoringResolutionRef.current) {
+      restoringResolutionRef.current = false;
+      return;
+    }
     const newSize = currentMode.kind === 'locked' ? currentMode.size : currentMode.default;
     setSelectedResolution((prev) => (prev === newSize ? prev : newSize));
   }, [currentMode]);
+
+  // Auto-restore last-used config on mount. Placed AFTER the snap effects
+  // in source order so the initial-mount snap effects fire FIRST with
+  // default deps (those default snaps are no-ops and don't consume the
+  // skip refs). When this effect runs, it sets the refs to true AFTER
+  // calling the setters; the post-restore commit's snap effects then
+  // consume the refs and skip, preserving the restored paddingEnabled /
+  // selectedResolution.
+  //
+  // Read inside useEffect (never during render) — no SSR hydration risk
+  // and no first-paint flash because the effect fires after first commit.
+  useEffect(() => {
+    const saved = loadLatestConfig();
+    if (!saved) return;
+    setSelectedAction(saved.selectedAction);
+    setFrameCount(saved.frameCount);
+    setMotionPrompt(saved.motionPrompt);
+    setSelectedResolution(saved.selectedResolution);
+    setBgColor(saved.bgColor);
+    setPaddingEnabled(saved.paddingEnabled);
+    setCharacterSizePct(saved.characterSizePct);
+    // Tell the snap effects to skip their next fire (the post-restore
+    // commit). Set AFTER the setters so the refs aren't consumed by
+    // commit-1's no-op default snaps.
+    restoringPaddingRef.current = true;
+    restoringResolutionRef.current = true;
+  }, []);
+
+  // Auto-save (debounced 200ms) — writes the seven form-config fields on
+  // every change. NOT included: character image, pendingDataUrl, handoff
+  // one-shots, or any AutoPrep companion state. Persists the user's
+  // last-used config indefinitely (no clear-on-generation-success — least
+  // surprising behavior).
+  useEffect(() => {
+    const t = setTimeout(() => {
+      saveLatestConfig({
+        v: 1,
+        selectedAction,
+        frameCount,
+        motionPrompt,
+        selectedResolution,
+        bgColor,
+        paddingEnabled,
+        characterSizePct,
+      });
+    }, 200);
+    return () => clearTimeout(t);
+  }, [
+    selectedAction,
+    frameCount,
+    motionPrompt,
+    selectedResolution,
+    bgColor,
+    paddingEnabled,
+    characterSizePct,
+  ]);
 
   // Consume the Send-to-Animator handoff. When the flag is set AND a
   // generated image is available, clear any existing character state

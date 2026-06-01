@@ -52,7 +52,7 @@ const VALID_FRAME_COUNTS: readonly number[] = [4, 6, 8, 10, 12, 16];
 // Must match AnimateForm.tsx's useState defaults.
 const DEFAULT_ACTION = 'walking';
 const DEFAULT_FRAME_COUNT = 4;
-const DEFAULT_BG_COLOR = '#000000';
+const DEFAULT_BG_COLOR = '#00ff00';
 const DEFAULT_CHARACTER_SIZE_PCT = 75;
 const MIN_CHARACTER_SIZE_PCT = 50;
 const MAX_CHARACTER_SIZE_PCT = 95;

@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.11';
+export const CURRENT_VERSION = '0.5.12';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.5.12 — Save Your Animation Presets (May 31, 2026) ──
+  {
+    releaseLabel: 'MAY 31, 2026 — SAVE YOUR ANIMATION PRESETS',
+    emoji: '⭐',
+    title: 'Save and reuse your animation settings',
+    description:
+      'You can now save your animation settings as named templates and load them with one click. Set up your favorite frame count, action, background, and resolution once, save it as a preset, and reuse it on any character. Find it in the Animate tab above the action picker.',
+  },
   // ── 0.5.11 — Animate Settings Remembered (May 31, 2026) ──
   {
     releaseLabel: 'MAY 31, 2026 — ANIMATE SETTINGS REMEMBERED',

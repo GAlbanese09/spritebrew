@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.10';
+export const CURRENT_VERSION = '0.5.11';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.5.11 — Animate Settings Remembered (May 31, 2026) ──
+  {
+    releaseLabel: 'MAY 31, 2026 — ANIMATE SETTINGS REMEMBERED',
+    emoji: '💾',
+    title: 'Your animation settings now stick around',
+    description:
+      'The Animate form now remembers your settings. Frame count, animation action, background color, resolution, and the rest stay put if you refresh the page or switch tabs, so you no longer lose your setup partway through. Your last-used settings are waiting for you next time too.',
+  },
   // ── 0.5.10 — Smoother Pixel Editor (May 30, 2026) ──
   {
     releaseLabel: 'MAY 30, 2026 — SMOOTHER PIXEL EDITOR',

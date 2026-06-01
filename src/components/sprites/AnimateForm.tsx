@@ -176,7 +176,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const [pendingDataUrl, setPendingDataUrl] = useState<string | null>(null);
   const [pendingWidth, setPendingWidth] = useState(0);
   const [pendingHeight, setPendingHeight] = useState(0);
-  const [bgColor, setBgColor] = useState('#00ff00');
+  const [bgColor, setBgColor] = useState('#ff00ff');
   const [paddingEnabled, setPaddingEnabled] = useState(false);
   const [characterSizePct, setCharacterSizePct] = useState(75);
   const [selectedAction, setSelectedAction] = useState('walking');

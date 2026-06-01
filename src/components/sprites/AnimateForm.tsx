@@ -9,6 +9,7 @@ import {
   AlertCircle,
   Play,
   Lock,
+  Save,
 } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
@@ -22,7 +23,16 @@ import {
 } from '@/lib/styleRegistry';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
-import { loadLatestConfig, saveLatestConfig } from '@/lib/animateConfig';
+import {
+  loadLatestConfig,
+  saveLatestConfig,
+  loadTemplates,
+  saveTemplate,
+  deleteTemplate,
+  MAX_TEMPLATES,
+  MAX_TEMPLATE_NAME_LEN,
+  type AnimateTemplate,
+} from '@/lib/animateConfig';
 
 const ACTIONS = [
   { id: 'walking', name: 'Walk', desc: 'Walking cycle animation' },
@@ -175,6 +185,13 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const [selectedResolution, setSelectedResolution] = useState<number>(ADVANCED_ANIM_DEFAULT_RESOLUTION);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Named templates (v0.5.12 Piece B). Backed by spritebrew:animate:templates.
+  // Templates are character-agnostic — only the 7 config fields are persisted.
+  const [templates, setTemplates] = useState<AnimateTemplate[]>([]);
+  const [showSaveInput, setShowSaveInput] = useState(false);
+  const [saveInputValue, setSaveInputValue] = useState('');
+  const [templateError, setTemplateError] = useState<string | null>(null);
+
   // Token cost depends on selected action
   const actionPromptStyle = ACTION_STYLE_MAP[selectedAction] ?? 'rd_advanced_animation__walking';
   const tokenCost = getTokenCost(actionPromptStyle);
@@ -236,6 +253,12 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     // commit-1's no-op default snaps.
     restoringPaddingRef.current = true;
     restoringResolutionRef.current = true;
+  }, []);
+
+  // Mount-only: hydrate templates list from localStorage. Read inside
+  // useEffect (never during render) — no SSR hydration mismatch.
+  useEffect(() => {
+    setTemplates(loadTemplates());
   }, []);
 
   // Auto-save (debounced 200ms) — writes the seven form-config fields on
@@ -383,6 +406,92 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setPendingDataUrl(null);
     setPendingWidth(0);
     setPendingHeight(0);
+  }, []);
+
+  // Template handlers (v0.5.12 Piece B).
+  //
+  // Load: writes all 7 config fields from the template, then sets BOTH
+  // snap-effect-guard refs to true — same pattern as the Piece A
+  // auto-restore effect. Without this, the post-load commit's padding /
+  // resolution snap effects would clobber the just-loaded paddingEnabled
+  // and selectedResolution back to the action's defaults.
+  //
+  // The auto-save cascade is automatic: the seven setters change the
+  // Piece A auto-save effect's deps, which then writes the loaded values
+  // to spritebrew:animate:latest after the 200ms debounce. No special
+  // wiring needed.
+  const handleLoadTemplate = useCallback((tpl: AnimateTemplate) => {
+    const c = tpl.config;
+    setSelectedAction(c.selectedAction);
+    setFrameCount(c.frameCount);
+    setMotionPrompt(c.motionPrompt);
+    setSelectedResolution(c.selectedResolution);
+    setBgColor(c.bgColor);
+    setPaddingEnabled(c.paddingEnabled);
+    setCharacterSizePct(c.characterSizePct);
+    restoringPaddingRef.current = true;
+    restoringResolutionRef.current = true;
+    setTemplateError(null);
+  }, []);
+
+  // Save: pre-flight validates name and cap so we can surface specific
+  // errors. saveTemplate returns null on cap/empty-name/persistence
+  // failure; UI already gated the first two so a null here means
+  // localStorage rejected the write (quota, disabled).
+  const handleSaveTemplate = useCallback(() => {
+    const name = saveInputValue.trim();
+    if (!name) {
+      setTemplateError('Name required.');
+      return;
+    }
+    if (templates.length >= MAX_TEMPLATES) {
+      setTemplateError(`Template limit reached (${MAX_TEMPLATES}). Delete some to save more.`);
+      return;
+    }
+    const updated = saveTemplate(name, {
+      v: 1,
+      selectedAction,
+      frameCount,
+      motionPrompt,
+      selectedResolution,
+      bgColor,
+      paddingEnabled,
+      characterSizePct,
+    });
+    if (!updated) {
+      setTemplateError("Couldn't save template — storage may be full.");
+      return;
+    }
+    setTemplates(updated);
+    setShowSaveInput(false);
+    setSaveInputValue('');
+    setTemplateError(null);
+  }, [
+    saveInputValue,
+    templates.length,
+    selectedAction,
+    frameCount,
+    motionPrompt,
+    selectedResolution,
+    bgColor,
+    paddingEnabled,
+    characterSizePct,
+  ]);
+
+  const handleDeleteTemplate = useCallback((id: string) => {
+    const updated = deleteTemplate(id);
+    if (!updated) {
+      setTemplateError("Couldn't delete template.");
+      return;
+    }
+    setTemplates(updated);
+    setTemplateError(null);
+  }, []);
+
+  const handleCancelSaveInput = useCallback(() => {
+    setShowSaveInput(false);
+    setSaveInputValue('');
+    setTemplateError(null);
   }, []);
 
   /** Convert the uploaded RGBA image to RGB by compositing onto bgColor */
@@ -737,6 +846,108 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
           </div>
         </div>
       )}
+
+      {/* Saved templates (v0.5.12) — character-agnostic, persisted to
+          spritebrew:animate:templates. Click a pill to load all 7 form
+          fields; X to delete. Save current as a new template via the
+          inline input below. */}
+      <div>
+        <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2">
+          Saved Templates
+        </label>
+
+        {templates.length === 0 ? (
+          <p className="text-[10px] font-mono text-text-muted/70 mb-2">
+            No saved templates yet. Save the current config below to start a library.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {templates.map((tpl) => (
+              <div
+                key={tpl.id}
+                className="inline-flex items-center rounded border border-border-default bg-bg-surface hover:border-border-strong overflow-hidden transition-colors"
+              >
+                <button
+                  onClick={() => handleLoadTemplate(tpl)}
+                  className="px-2.5 py-1 text-[11px] font-mono text-text-primary hover:text-accent-amber cursor-pointer max-w-[180px] truncate"
+                  title={`Load "${tpl.name}"`}
+                >
+                  {tpl.name}
+                </button>
+                <button
+                  onClick={() => handleDeleteTemplate(tpl.id)}
+                  className="px-1.5 py-1 text-text-muted hover:text-red-400 cursor-pointer border-l border-border-subtle"
+                  title={`Delete "${tpl.name}"`}
+                  aria-label={`Delete template ${tpl.name}`}
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {showSaveInput ? (
+          <div className="flex items-center gap-1.5">
+            <input
+              type="text"
+              value={saveInputValue}
+              onChange={(e) => {
+                setSaveInputValue(e.target.value);
+                if (templateError) setTemplateError(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleSaveTemplate();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  handleCancelSaveInput();
+                }
+              }}
+              autoFocus
+              maxLength={MAX_TEMPLATE_NAME_LEN}
+              placeholder="Template name…"
+              className="flex-1 min-w-0 rounded bg-bg-elevated border border-border-default px-2.5 py-1
+                text-[11px] font-mono text-text-primary placeholder:text-text-muted
+                focus:outline-none focus:border-accent-amber"
+            />
+            <button
+              onClick={handleSaveTemplate}
+              disabled={!saveInputValue.trim()}
+              className="px-2.5 py-1 rounded text-[11px] font-mono bg-accent-amber text-bg-primary
+                hover:bg-accent-amber/90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
+            >
+              Save
+            </button>
+            <button
+              onClick={handleCancelSaveInput}
+              className="p-1 text-text-muted hover:text-text-primary cursor-pointer"
+              aria-label="Cancel"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowSaveInput(true)}
+            disabled={templates.length >= MAX_TEMPLATES}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-mono
+              bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle
+              disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
+            title={templates.length >= MAX_TEMPLATES ? `Template limit reached (${MAX_TEMPLATES})` : 'Save current config as a named template'}
+          >
+            <Save size={11} />
+            Save current as template…
+          </button>
+        )}
+
+        {templateError && (
+          <p className="text-[10px] font-mono text-red-400 mt-1.5">
+            {templateError}
+          </p>
+        )}
+      </div>
 
       {/* Action selector */}
       <div>

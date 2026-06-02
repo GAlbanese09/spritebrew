@@ -17,17 +17,16 @@ import {
 
 const ZOOM_OPTIONS = [1, 2, 4, 8] as const;
 
-/** Size-aware default zoom — snapped to one of ZOOM_OPTIONS. Chosen so big
- *  animate sheets (≥512px) display at 1x (don't overflow the preview), while
- *  tiny sprites (<128px) get 8x so they're not lost in the container. The
- *  preview container width is implicit (overflow-auto), so the thresholds
- *  target "won't immediately scroll on a typical desktop" rather than a
- *  measured fit. Display-only — never feeds export. */
-function computeDefaultZoom(naturalWidth: number): number {
-  if (naturalWidth >= 512) return 1;
-  if (naturalWidth >= 256) return 2;
-  if (naturalWidth >= 128) return 4;
-  return 8;
+/** Fit-to-container default zoom — picks the largest value from ZOOM_OPTIONS
+ *  such that naturalWidth × zoom fits within the measured container width.
+ *  Display-only; the data URL passed to download/export/handoffs is always
+ *  native resolution regardless of the displayed zoom. */
+function computeFitZoom(naturalWidth: number, containerWidth: number): number {
+  const usable = Math.max(64, containerWidth - 8); // small buffer for border / sub-pixel rounding
+  for (const z of [...ZOOM_OPTIONS].reverse()) {
+    if (naturalWidth * z <= usable) return z;
+  }
+  return 1; // even 1x overflows — let it scroll
 }
 
 interface GenerationResultProps {
@@ -48,12 +47,22 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const setPendingAnimatorSkipBgRemoval = useSpriteStore((s) => s.setPendingAnimatorSkipBgRemoval);
 
   const [zoom, setZoom] = useState(4);
+  // Natural dimensions of the loaded image. Drives the actual-size CSS width /
+  // height in place of transform: scale (which left the layout box unscaled
+  // and broke overflow-auto scroll/centering when zoom > 1). Reset to {0,0}
+  // on each new generation so a stale dim × current zoom can't briefly render
+  // mis-sized before the new onLoad fires.
+  const [naturalDims, setNaturalDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   // Track the generatedImageDataUrl the size-aware default was last computed
   // for. Tracks the *source* (not displayImageDataUrl) so toggling background
   // removal — which swaps displayImageDataUrl to the transparent variant with
   // the same natural dimensions — doesn't re-fire the default and clobber a
   // user-picked zoom. Only a genuinely new generation triggers a recompute.
   const lastDefaultZoomSrcRef = useRef<string | null>(null);
+  // Ref to the overflow-auto preview container. Read at onLoad time so the
+  // fit-zoom calc uses the real available width (adapts to viewport / sidebar)
+  // rather than a hardcoded magic number.
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const [history, setHistory] = useState<GenerationHistoryEntry[]>([]);
 
   // Background removal state
@@ -68,12 +77,17 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     setHistory(loadHistory(userId));
   }, [generatedImageDataUrl, userId]);
 
-  // Reset background removal when a new generation arrives
+  // Reset background removal when a new generation arrives. Also reset
+  // naturalDims so the new image isn't briefly rendered at the previous
+  // generation's dimensions × current zoom — the undefined-width fallback in
+  // the <img> style lets the browser layout-size from the source's natural
+  // dims for the one frame before onLoad fires the fit-zoom recompute.
   useEffect(() => {
     setBgRemovalActive(false);
     setBgRemovedDataUrl(null);
     setDetectedBgColor(null);
     setBgRemovalError(null);
+    setNaturalDims({ w: 0, h: 0 });
   }, [generatedImageDataUrl]);
 
   // Recompute background removal when tolerance changes
@@ -324,8 +338,16 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         </div>
       )}
 
-      {/* Result image */}
-      <div className="rounded-lg border border-border-default bg-bg-elevated p-4 overflow-auto">
+      {/* Result image. Outer container is overflow-auto + scrollable. The
+          inline-block mx-auto inner wrapper centers small images and
+          left-aligns + scrolls large ones (margin: auto resolves to 0 when
+          content > container). Image uses explicit width/height (not
+          transform: scale) so the layout box matches the visual size — that's
+          what makes overflow-auto compute scroll correctly. */}
+      <div
+        ref={containerRef}
+        className="rounded-lg border border-border-default bg-bg-elevated p-4 overflow-auto"
+      >
         <div
           className="inline-block mx-auto"
           style={{
@@ -338,21 +360,35 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           <img
             src={displayImageDataUrl ?? generatedImageDataUrl}
             alt="Generated sprite sheet"
-            className="pixel-art-render"
+            className="pixel-art-render block"
             style={{
               imageRendering: 'pixelated',
-              transform: `scale(${zoom})`,
-              transformOrigin: 'top left',
+              width: naturalDims.w ? naturalDims.w * zoom : undefined,
+              height: naturalDims.h ? naturalDims.h * zoom : undefined,
             }}
             onLoad={(e) => {
-              // Size-aware default zoom — fires once per new generation. Skip
-              // if this load is just a bg-removal toggle on the same source
-              // (ref still matches the current generatedImageDataUrl). Once a
-              // user manually picks a zoom, no further loads happen until a
-              // genuinely new source URL arrives — so manual zoom sticks.
+              // Always record natural dims (used by the explicit width/height
+              // style on every render, including bg-removal toggle loads).
+              const nw = e.currentTarget.naturalWidth;
+              const nh = e.currentTarget.naturalHeight;
+              setNaturalDims({ w: nw, h: nh });
+
+              // Fit-to-container default zoom — fires once per new generation.
+              // Skip if this load is just a bg-removal toggle on the same
+              // source (ref still matches the current generatedImageDataUrl).
+              // Once a user manually picks a zoom, no further loads happen
+              // until a genuinely new source URL arrives — so manual zoom
+              // sticks.
               if (lastDefaultZoomSrcRef.current === generatedImageDataUrl) return;
               lastDefaultZoomSrcRef.current = generatedImageDataUrl;
-              setZoom(computeDefaultZoom(e.currentTarget.naturalWidth));
+
+              // clientWidth includes the container's p-4 padding (16px each
+              // side = 32px total). Subtract it to get usable content width.
+              // Fallback to 480 if the ref isn't ready (defensive — onLoad
+              // runs after the first commit so the ref is normally populated).
+              const el = containerRef.current;
+              const containerWidth = el ? Math.max(64, el.clientWidth - 32) : 480;
+              setZoom(computeFitZoom(nw, containerWidth));
             }}
           />
         </div>

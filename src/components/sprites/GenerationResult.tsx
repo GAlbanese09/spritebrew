@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight, Eraser, Pencil, Film } from 'lucide-react';
@@ -16,6 +16,19 @@ import {
 } from '@/lib/generationHistory';
 
 const ZOOM_OPTIONS = [1, 2, 4, 8] as const;
+
+/** Size-aware default zoom — snapped to one of ZOOM_OPTIONS. Chosen so big
+ *  animate sheets (≥512px) display at 1x (don't overflow the preview), while
+ *  tiny sprites (<128px) get 8x so they're not lost in the container. The
+ *  preview container width is implicit (overflow-auto), so the thresholds
+ *  target "won't immediately scroll on a typical desktop" rather than a
+ *  measured fit. Display-only — never feeds export. */
+function computeDefaultZoom(naturalWidth: number): number {
+  if (naturalWidth >= 512) return 1;
+  if (naturalWidth >= 256) return 2;
+  if (naturalWidth >= 128) return 4;
+  return 8;
+}
 
 interface GenerationResultProps {
   onReset: () => void;
@@ -35,6 +48,12 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const setPendingAnimatorSkipBgRemoval = useSpriteStore((s) => s.setPendingAnimatorSkipBgRemoval);
 
   const [zoom, setZoom] = useState(4);
+  // Track the generatedImageDataUrl the size-aware default was last computed
+  // for. Tracks the *source* (not displayImageDataUrl) so toggling background
+  // removal — which swaps displayImageDataUrl to the transparent variant with
+  // the same natural dimensions — doesn't re-fire the default and clobber a
+  // user-picked zoom. Only a genuinely new generation triggers a recompute.
+  const lastDefaultZoomSrcRef = useRef<string | null>(null);
   const [history, setHistory] = useState<GenerationHistoryEntry[]>([]);
 
   // Background removal state
@@ -324,6 +343,16 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
               imageRendering: 'pixelated',
               transform: `scale(${zoom})`,
               transformOrigin: 'top left',
+            }}
+            onLoad={(e) => {
+              // Size-aware default zoom — fires once per new generation. Skip
+              // if this load is just a bg-removal toggle on the same source
+              // (ref still matches the current generatedImageDataUrl). Once a
+              // user manually picks a zoom, no further loads happen until a
+              // genuinely new source URL arrives — so manual zoom sticks.
+              if (lastDefaultZoomSrcRef.current === generatedImageDataUrl) return;
+              lastDefaultZoomSrcRef.current = generatedImageDataUrl;
+              setZoom(computeDefaultZoom(e.currentTarget.naturalWidth));
             }}
           />
         </div>

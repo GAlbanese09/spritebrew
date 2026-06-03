@@ -360,7 +360,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           <img
             src={displayImageDataUrl ?? generatedImageDataUrl}
             alt="Generated sprite sheet"
-            className="pixel-art-render block"
+            className="pixel-art-render block max-w-none"
             style={{
               imageRendering: 'pixelated',
               width: naturalDims.w ? naturalDims.w * zoom : undefined,

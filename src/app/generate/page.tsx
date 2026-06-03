@@ -294,7 +294,7 @@ export default function GeneratePage() {
       <LimitNoticeBanner />
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Form — left 3/5 */}
-        <div className="lg:col-span-3 space-y-4">
+        <div className="lg:col-span-3 space-y-4 min-w-0">
           {/* Tab switcher */}
           <div className="flex gap-1 rounded-lg bg-bg-secondary p-1 w-fit">
             <button
@@ -346,7 +346,7 @@ export default function GeneratePage() {
         </div>
 
         {/* Result — right 2/5 */}
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 min-w-0">
           <div className="rounded-lg border border-border-default bg-bg-surface p-6">
             <GenerationResult onReset={handleReset} />
           </div>

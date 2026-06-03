@@ -536,7 +536,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
     {/* Sticky generate bar — viewport-fixed at bottom, sidebar-offset on desktop */}
     <div
-      className="fixed bottom-0 left-0 right-0 lg:left-[var(--sidebar-width)] z-40 px-4 py-3 backdrop-blur-md border-t isolate"
+      className="fixed bottom-0 left-0 right-0 lg:left-[var(--sidebar-width)] z-40 px-4 py-3 backdrop-blur-md border-t isolate transform-gpu"
       style={{
         backgroundColor: 'rgba(20, 18, 16, 0.92)',
         borderColor: '#3a3430',

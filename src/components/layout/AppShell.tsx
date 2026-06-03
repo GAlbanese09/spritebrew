@@ -31,7 +31,7 @@ export default function AppShell({ children }: AppShellProps) {
       <div className="flex flex-1 flex-col lg:ml-[var(--sidebar-width)]">
         <Header onMenuClick={() => setSidebarOpen(true)} />
 
-        <main className="flex-1 overflow-y-auto pixel-grid">
+        <main className="flex-1 overflow-y-auto pixel-grid overscroll-none">
           <div className="p-6 sm:p-8">
             {children}
           </div>

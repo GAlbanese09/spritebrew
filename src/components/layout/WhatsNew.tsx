@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.12';
+export const CURRENT_VERSION = '0.5.13';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.5.13 — Animate & Preview Polish (Jun 2, 2026) ──
+  {
+    releaseLabel: 'JUN 2, 2026 — ANIMATE & PREVIEW POLISH',
+    emoji: '🎨',
+    title: 'Smarter defaults and a cleaner result preview',
+    description:
+      'Two improvements: new animations now default to a magenta background fill, which keeps your character cleaner when the background is removed. And the result preview now picks the right zoom automatically based on the image size, so your sprite fits the view and stays centered instead of getting cut off or shrunk.',
+  },
   // ── 0.5.12 — Save Your Animation Presets (May 31, 2026) ──
   {
     releaseLabel: 'MAY 31, 2026 — SAVE YOUR ANIMATION PRESETS',

@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { createPortal } from 'react-dom';
 import { Sparkles, X, Check, Loader2, AlertCircle, ChevronDown, ChevronUp, Maximize2 } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
@@ -535,77 +534,72 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       <div className="h-32" aria-hidden="true" />
     </div>
 
-    {/* THROWAWAY EXPERIMENT: portal the bar to document.body so it renders
-        outside <main>'s scroll ancestry. Validates the "fixed-inside-scroller"
-        hypothesis. NOT the final fix — revert before commit. */}
-    {typeof document !== 'undefined' && createPortal(
-      <div
-        className="fixed bottom-0 left-0 right-0 lg:left-[var(--sidebar-width)] z-40 px-4 py-3 backdrop-blur-md border-t isolate transform-gpu overscroll-none"
-        style={{
-          backgroundColor: 'rgba(20, 18, 16, 0.92)',
-          borderColor: '#3a3430',
-          paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))',
-        }}
-      >
-        <div className="max-w-5xl mx-auto">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
-            <p className="text-[10px] font-mono text-text-muted">
-              {effectiveWidth}x{effectiveHeight}px &middot; {tokenCost} tokens
-              {isAdmin && (
-                <span> &middot; ~${selectedStyle.costPerGeneration.toFixed(2)}</span>
+    {/* Sticky generate bar — viewport-fixed at bottom, sidebar-offset on desktop */}
+    <div
+      className="fixed bottom-0 left-0 right-0 lg:left-[var(--sidebar-width)] z-40 px-4 py-3 backdrop-blur-md border-t isolate transform-gpu overscroll-none"
+      style={{
+        backgroundColor: 'rgba(20, 18, 16, 0.92)',
+        borderColor: '#3a3430',
+        paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))',
+      }}
+    >
+      <div className="max-w-5xl mx-auto">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
+          <p className="text-[10px] font-mono text-text-muted">
+            {effectiveWidth}x{effectiveHeight}px &middot; {tokenCost} tokens
+            {isAdmin && (
+              <span> &middot; ~${selectedStyle.costPerGeneration.toFixed(2)}</span>
+            )}
+            {userId && (
+              <span className={`ml-2 ${insufficientTokens ? 'text-red-400' : 'text-accent-amber'}`}>
+                &middot; Balance: {tokenBalance} 🪙
+              </span>
+            )}
+          </p>
+          {/* Toggles group — column wrapper so the conditional warning sits
+              under the toggles, and the whole group flows as one sticky-bar item. */}
+          <div className="flex flex-col items-start gap-1">
+            <div className="flex items-center gap-3 flex-wrap">
+              {selectedStyle.supportsRemoveBg && (
+                <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer select-none whitespace-nowrap">
+                  <input
+                    type="checkbox"
+                    checked={removeBg}
+                    onChange={(e) => setRemoveBg(e.target.checked)}
+                    className="accent-[var(--accent-amber)] cursor-pointer"
+                  />
+                  <span>Remove background</span>
+                </label>
               )}
-              {userId && (
-                <span className={`ml-2 ${insufficientTokens ? 'text-red-400' : 'text-accent-amber'}`}>
-                  &middot; Balance: {tokenBalance} 🪙
-                </span>
-              )}
-            </p>
-            {/* Toggles group — column wrapper so the conditional warning sits
-                under the toggles, and the whole group flows as one sticky-bar item. */}
-            <div className="flex flex-col items-start gap-1">
-              <div className="flex items-center gap-3 flex-wrap">
-                {selectedStyle.supportsRemoveBg && (
-                  <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer select-none whitespace-nowrap">
-                    <input
-                      type="checkbox"
-                      checked={removeBg}
-                      onChange={(e) => setRemoveBg(e.target.checked)}
-                      className="accent-[var(--accent-amber)] cursor-pointer"
-                    />
-                    <span>Remove background</span>
-                  </label>
-                )}
-              </div>
             </div>
-            <Button
-              size="lg"
-              onClick={handleGenerate}
-              disabled={!prompt.trim() || isGenerating || insufficientTokens}
-              className={`w-full sm:w-auto whitespace-nowrap ${!isGenerating && prompt.trim() && !insufficientTokens ? 'animate-pulse' : ''}`}
-              title={insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
-            >
-              {isGenerating ? (
-                <>
-                  <Loader2 size={16} className="animate-spin" />
-                  Brewing...
-                </>
-              ) : insufficientTokens ? (
-                <>
-                  <Sparkles size={16} />
-                  Need {tokensNeeded} more 🪙
-                </>
-              ) : (
-                <>
-                  <Sparkles size={16} />
-                  {selectedStyle.isAnimation ? 'Generate Animation' : 'Generate Sprite'} ({tokenCost} 🪙)
-                </>
-              )}
-            </Button>
           </div>
+          <Button
+            size="lg"
+            onClick={handleGenerate}
+            disabled={!prompt.trim() || isGenerating || insufficientTokens}
+            className={`w-full sm:w-auto whitespace-nowrap ${!isGenerating && prompt.trim() && !insufficientTokens ? 'animate-pulse' : ''}`}
+            title={insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Brewing...
+              </>
+            ) : insufficientTokens ? (
+              <>
+                <Sparkles size={16} />
+                Need {tokensNeeded} more 🪙
+              </>
+            ) : (
+              <>
+                <Sparkles size={16} />
+                {selectedStyle.isAnimation ? 'Generate Animation' : 'Generate Sprite'} ({tokenCost} 🪙)
+              </>
+            )}
+          </Button>
         </div>
-      </div>,
-      document.body
-    )}
+      </div>
+    </div>
 
     {/* Style-examples lightbox carousel — opened by the ⤢ overlay on style cards. */}
     <StyleExamplesLightbox

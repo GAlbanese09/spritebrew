@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { Dialog } from '@headlessui/react';
+import { HotkeysProvider } from 'react-hotkeys-hook';
 import PixelEditorBody from './PixelEditorBody';
 import { useEditorStore, selectIsDirty } from './editorStore';
 
@@ -56,7 +57,11 @@ export default function PixelEditor({
   }, [onSave, onClose]);
 
   return (
-    <>
+    // HotkeysProvider scopes the editor's brush-size / undo / redo hotkeys
+    // to the 'editor' scope (Fix #3). Wrapping from outside guarantees the
+    // provider's context is established BEFORE PixelEditorBody's useHotkeys
+    // calls run on first render.
+    <HotkeysProvider initiallyActiveScopes={['editor']}>
       <Dialog open onClose={attemptDismiss} className="relative z-[100]">
         <div className="fixed inset-0 bg-black/70" aria-hidden="true" />
         <div className="fixed inset-0 flex items-center justify-center p-4">
@@ -125,6 +130,6 @@ export default function PixelEditor({
           </Dialog.Panel>
         </div>
       </Dialog>
-    </>
+    </HotkeysProvider>
   );
 }

@@ -1,9 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { HotkeysProvider } from 'react-hotkeys-hook';
 import EditorLanding from '@/components/sprites/EditorLanding';
 import PixelEditorBody from '@/components/sprites/PixelEditorBody';
-import { useEditorStore } from '@/components/sprites/editorStore';
+import {
+  useEditorStore,
+  dimsWithinEditorLimits,
+  editorDimsRejectionMessage,
+} from '@/components/sprites/editorStore';
 import { useSpriteStore } from '@/stores/spriteStore';
 
 /**
@@ -43,6 +48,10 @@ export default function EditorPage() {
     height: number;
   } | null>(null);
   const [isLoadingHandoff, setIsLoadingHandoff] = useState(false);
+  // Handoff-source rejection (Fix #5). When a Send-to-Editor handoff carries
+  // an image whose dimensions exceed the editor's caps, surface a clear error
+  // on the landing instead of mounting the body just to bounce out.
+  const [handoffError, setHandoffError] = useState<string | null>(null);
   const reset = useEditorStore((s) => s.reset);
 
   // Consume the "Send to Editor" handoff intent flag on mount. Read state
@@ -62,6 +71,15 @@ export default function EditorPage() {
 
     const img = new Image();
     img.onload = () => {
+      // Fix #5: refuse oversized handoff sources before committing to the
+      // body mount. PixelEditorBody also enforces this defensively, but
+      // catching here keeps the user on the landing with a clear message
+      // instead of bouncing through the body's error UI.
+      if (!dimsWithinEditorLimits(img.naturalWidth, img.naturalHeight)) {
+        setHandoffError(editorDimsRejectionMessage(img.naturalWidth, img.naturalHeight));
+        setIsLoadingHandoff(false);
+        return;
+      }
       setPending({
         dataUrl: generatedImageDataUrl,
         width: img.naturalWidth,
@@ -92,28 +110,55 @@ export default function EditorPage() {
 
   if (!pending) {
     return (
-      <EditorLanding
-        onProjectReady={(dataUrl, width, height) =>
-          setPending({ dataUrl, width, height })
-        }
-      />
+      <>
+        {handoffError && (
+          <div className="max-w-3xl mx-auto px-8 pt-6">
+            <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-4 flex items-start gap-3">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-mono font-semibold text-red-400 mb-1">
+                  Couldn&apos;t bring that image into the editor
+                </p>
+                <p className="text-[11px] font-mono text-text-secondary leading-relaxed">
+                  {handoffError}
+                </p>
+              </div>
+              <button
+                onClick={() => setHandoffError(null)}
+                className="text-[10px] font-mono text-text-muted hover:text-text-primary cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+        <EditorLanding
+          onProjectReady={(dataUrl, width, height) =>
+            setPending({ dataUrl, width, height })
+          }
+        />
+      </>
     );
   }
 
   return (
-    <PixelEditorBody
-      frameDataUrl={pending.dataUrl}
-      frameWidth={pending.width}
-      frameHeight={pending.height}
-      onSave={() => {
-        // Page-mode Save is a PNG download, handled inside PixelEditorBody.
-        // This callback is unused in page layout but kept for prop parity.
-      }}
-      onDismiss={() => {
-        reset();
-        setPending(null);
-      }}
-      layout="page"
-    />
+    // HotkeysProvider scopes the editor's hotkeys to the 'editor' scope so
+    // they don't fire while a text input (project name, gallery search, etc.)
+    // is focused. Matches the modal-mode provider in PixelEditor.tsx.
+    <HotkeysProvider initiallyActiveScopes={['editor']}>
+      <PixelEditorBody
+        frameDataUrl={pending.dataUrl}
+        frameWidth={pending.width}
+        frameHeight={pending.height}
+        onSave={() => {
+          // Page-mode Save is a PNG download, handled inside PixelEditorBody.
+          // This callback is unused in page layout but kept for prop parity.
+        }}
+        onDismiss={() => {
+          reset();
+          setPending(null);
+        }}
+        layout="page"
+      />
+    </HotkeysProvider>
   );
 }

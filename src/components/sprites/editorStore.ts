@@ -16,6 +16,30 @@ export const VALID_BRUSH_SIZES: readonly BrushSize[] = [1, 2, 4, 8, 16];
 
 const MAX_HISTORY = 50;
 
+// Dimension guardrails (Wave 1a — Fix #5). Cap any image loaded into the
+// editor so untrusted dims from Open Project / Pick from Gallery can't blow
+// memory. EDITOR_MAX_DIMENSION is the per-side cap; EDITOR_MAX_PIXELS guards
+// against e.g. a 4096×64 strip whose per-side caps are within bounds but
+// whose total area is large. Both must be respected.
+// TODO(wave-1b): per-tier frame caps come with the frame model; this is a
+// flat ceiling for now.
+export const EDITOR_MAX_DIMENSION = 512;
+export const EDITOR_MAX_PIXELS = EDITOR_MAX_DIMENSION * EDITOR_MAX_DIMENSION;
+
+/** Friendly message for the over-limit error path. */
+export function editorDimsRejectionMessage(w: number, h: number): string {
+  return `Image is too large for the editor (${w}×${h}). Max ${EDITOR_MAX_DIMENSION}×${EDITOR_MAX_DIMENSION} per side, up to ${EDITOR_MAX_PIXELS.toLocaleString()} total pixels.`;
+}
+
+/** True when (w, h) fit the editor's load caps. */
+export function dimsWithinEditorLimits(w: number, h: number): boolean {
+  if (!Number.isFinite(w) || !Number.isFinite(h)) return false;
+  if (w <= 0 || h <= 0) return false;
+  if (w > EDITOR_MAX_DIMENSION || h > EDITOR_MAX_DIMENSION) return false;
+  if (w * h > EDITOR_MAX_PIXELS) return false;
+  return true;
+}
+
 export interface DirtyRect {
   x: number;
   y: number;
@@ -81,11 +105,20 @@ export interface PixelEditorState {
   width: number;
   height: number;
 
-  // Undo/redo timeline. historyStack[0] = initial loaded frame; each
+  // Undo/redo timeline. historyStack[0] = initial loaded frame UNTIL the
+  // 50-entry cap forces a shift; after overflow, historyStack[0] is no longer
+  // the loaded baseline — use `originalPixels` for that instead. Each
   // subsequent entry = post-stroke snapshot. historyIndex points to the
   // entry that currently matches `pixels`.
   historyStack: Uint8ClampedArray[];
   historyIndex: number; // -1 = empty, 0 = initial state, 1+ = edits
+
+  /**
+   * Loaded-frame baseline, captured by loadFrame and independent of the
+   * history stack. Survives history overflow so "Revert to original" remains
+   * possible after >50 strokes. Cleared by reset() between frame loads.
+   */
+  originalPixels: Uint8ClampedArray | null;
 
   activeTool: Tool;
   foregroundColor: string;
@@ -122,19 +155,65 @@ export interface PixelEditorState {
   eyedrop: (x: number, y: number) => string | null;
   undo: () => void;
   redo: () => void;
+  /**
+   * Restore the loaded-frame baseline as a new undoable history entry. No-ops
+   * if there's no baseline or the current pixels already byte-match it. The
+   * revert itself is undoable (pushes onto historyStack like a normal stroke).
+   */
+  revertToOriginal: () => void;
   setActiveTool: (tool: Tool) => void;
   setForegroundColor: (color: string) => void;
   setBrushSize: (size: BrushSize) => void;
   reset: () => void;
 }
 
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.replace('#', '');
-  return [
-    parseInt(h.slice(0, 2), 16),
-    parseInt(h.slice(2, 4), 16),
-    parseInt(h.slice(4, 6), 16),
-  ];
+/**
+ * Parse a CSS hex color into [r, g, b, a] bytes (0–255). Accepts #RGB, #RGBA,
+ * #RRGGBB, #RRGGBBAA. Expands 3/4-digit shorthand the standard way (#abc →
+ * #aabbcc). Returns null on any malformed input — callers MUST no-op the
+ * paint rather than coerce a bad parse to NaN→0 (silent black).
+ *
+ * Module-private: paint callers handle the null path here. Eyedrop produces
+ * its own #RRGGBB output and never needs this in reverse.
+ */
+function hexToRgb(hex: string): [number, number, number, number] | null {
+  if (typeof hex !== 'string') return null;
+  let h = hex.startsWith('#') ? hex.slice(1) : hex;
+  if (!/^[0-9a-fA-F]+$/.test(h)) return null;
+  if (h.length === 3 || h.length === 4) {
+    // Expand shorthand: each nibble doubled. #abc → #aabbcc, #abcd → #aabbccdd.
+    h = h.split('').map((c) => c + c).join('');
+  }
+  if (h.length !== 6 && h.length !== 8) return null;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  const a = h.length === 8 ? parseInt(h.slice(6, 8), 16) : 255;
+  return [r, g, b, a];
+}
+
+// Dev-only round-trip assertions for hexToRgb. Stripped in production.
+if (process.env.NODE_ENV !== 'production') {
+  console.assert(
+    JSON.stringify(hexToRgb('#ff8800')) === JSON.stringify([255, 136, 0, 255]),
+    'hexToRgb #ff8800',
+  );
+  console.assert(
+    JSON.stringify(hexToRgb('#abc')) === JSON.stringify([170, 187, 204, 255]),
+    'hexToRgb #abc shorthand expansion',
+  );
+  console.assert(
+    JSON.stringify(hexToRgb('#abcd')) === JSON.stringify([170, 187, 204, 221]),
+    'hexToRgb #abcd shorthand expansion',
+  );
+  console.assert(
+    JSON.stringify(hexToRgb('#ff880080')) === JSON.stringify([255, 136, 0, 128]),
+    'hexToRgb #ff880080 8-digit alpha',
+  );
+  console.assert(hexToRgb('#zz') === null, 'hexToRgb #zz rejects non-hex');
+  console.assert(hexToRgb('garbage') === null, 'hexToRgb garbage rejects');
+  console.assert(hexToRgb('') === null, 'hexToRgb empty rejects');
+  console.assert(hexToRgb('#fffff') === null, 'hexToRgb 5-digit rejects');
 }
 
 function applyBrushSquare(
@@ -171,20 +250,27 @@ export const useEditorStore = create<PixelEditorState>()(
     height: 0,
     historyStack: [],
     historyIndex: -1,
+    originalPixels: null,
     activeTool: 'pencil',
     foregroundColor: '#d4871c',
     brushSize: 1,
     lastDirtyRect: null,
 
     loadFrame: (frameId, pixels, width, height) => {
-      const snap = new Uint8ClampedArray(pixels);
+      // Capture three independent copies of the source bytes: live pixels
+      // (mutated by paint), history seed (cycled by undo/redo + capped at 50),
+      // and originalPixels (immortal baseline for Revert).
+      const liveCopy = new Uint8ClampedArray(pixels);
+      const historySeed = new Uint8ClampedArray(pixels);
+      const baselineCopy = new Uint8ClampedArray(pixels);
       set({
         frameId,
         width,
         height,
-        pixels: new Uint8ClampedArray(pixels),
-        historyStack: [snap],
+        pixels: liveCopy,
+        historyStack: [historySeed],
         historyIndex: 0,
+        originalPixels: baselineCopy,
         lastDirtyRect: null, // full repaint needed for a fresh frame
       });
     },
@@ -209,9 +295,10 @@ export const useEditorStore = create<PixelEditorState>()(
       if (!pixels) return;
       const bbox = computeStampBbox(x, y, brushSize, width, height);
       if (!bbox) return; // fully off-canvas — no-op
-      const [r, g, b] = hexToRgb(color);
+      const rgba = hexToRgb(color);
+      if (!rgba) return; // malformed color — no-op (do NOT silently paint black)
       const next = new Uint8ClampedArray(pixels);
-      applyBrushSquare(next, width, height, x, y, brushSize, [r, g, b, 255]);
+      applyBrushSquare(next, width, height, x, y, brushSize, rgba);
       set({ pixels: next, lastDirtyRect: bbox });
     },
 
@@ -230,7 +317,8 @@ export const useEditorStore = create<PixelEditorState>()(
       if (!pixels) return;
       const bbox = computeLineBbox(x0, y0, x1, y1, brushSize, width, height);
       if (!bbox) return;
-      const [r, g, b] = hexToRgb(color);
+      const rgba = hexToRgb(color);
+      if (!rgba) return; // malformed color — no-op
       const next = new Uint8ClampedArray(pixels);
       // Bresenham. Both endpoints stamped (idempotent w.r.t. last event's prev).
       const dx = Math.abs(x1 - x0);
@@ -241,7 +329,7 @@ export const useEditorStore = create<PixelEditorState>()(
       let cx = x0;
       let cy = y0;
       while (true) {
-        applyBrushSquare(next, width, height, cx, cy, brushSize, [r, g, b, 255]);
+        applyBrushSquare(next, width, height, cx, cy, brushSize, rgba);
         if (cx === x1 && cy === y1) break;
         const e2 = 2 * err;
         if (e2 > -dy) { err -= dy; cx += sx; }
@@ -306,6 +394,32 @@ export const useEditorStore = create<PixelEditorState>()(
       });
     },
 
+    revertToOriginal: () => {
+      const { originalPixels, pixels, historyStack, historyIndex } = get();
+      if (!originalPixels || !pixels) return;
+      if (originalPixels.length !== pixels.length) return; // defensive
+      // Byte-equal check, early-exit on first diff. Cheap at editor sizes
+      // (≤ EDITOR_MAX_PIXELS bytes × 4 = ~1 MB worst case).
+      let equal = true;
+      for (let i = 0; i < originalPixels.length; i++) {
+        if (originalPixels[i] !== pixels[i]) { equal = false; break; }
+      }
+      if (equal) return; // already at baseline — no-op
+      // Truncate any redo branch (same shape as beginStroke), then push the
+      // baseline as a new history entry so the revert itself is undoable.
+      const truncated = historyIndex < historyStack.length - 1
+        ? historyStack.slice(0, historyIndex + 1)
+        : historyStack;
+      const nextStack = [...truncated, new Uint8ClampedArray(originalPixels)];
+      while (nextStack.length > MAX_HISTORY) nextStack.shift();
+      set({
+        pixels: new Uint8ClampedArray(originalPixels),
+        historyStack: nextStack,
+        historyIndex: nextStack.length - 1,
+        lastDirtyRect: null, // wholesale replacement → full repaint
+      });
+    },
+
     setActiveTool: (tool) => set({ activeTool: tool }),
     setForegroundColor: (color) => set({ foregroundColor: color }),
     setBrushSize: (size) => set({ brushSize: size }),
@@ -318,6 +432,7 @@ export const useEditorStore = create<PixelEditorState>()(
         height: 0,
         historyStack: [],
         historyIndex: -1,
+        originalPixels: null,
         activeTool: 'pencil',
         foregroundColor: '#d4871c',
         brushSize: 1,

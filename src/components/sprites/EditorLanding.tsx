@@ -1,9 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { UploadCloud, FilePlus, FolderOpen, Image as ImageIcon } from 'lucide-react';
+import { UploadCloud, FilePlus, FolderOpen, Image as ImageIcon, AlertCircle } from 'lucide-react';
 import UploadZone from './UploadZone';
 import Button from '@/components/ui/Button';
+import {
+  dimsWithinEditorLimits,
+  editorDimsRejectionMessage,
+} from '@/components/sprites/editorStore';
 
 /**
  * Landing UI for the /editor route. Lets the user choose how to start
@@ -27,6 +31,11 @@ interface EditorLandingProps {
 
 export default function EditorLanding({ onProjectReady }: EditorLandingProps) {
   const [size, setSize] = useState<SizePreset>(32);
+  // Fix #5: editor-specific dimension guardrail at the upload ingestion point.
+  // UploadZone itself stays generic (the /upload slicer route uses it with
+  // larger sheets); we filter on the editor side so the user gets immediate
+  // feedback without a page transition into the body.
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   function handleStartBlank() {
     // Empty canvas → transparent PNG data URL.
@@ -35,6 +44,17 @@ export default function EditorLanding({ onProjectReady }: EditorLandingProps) {
     canvas.height = size;
     const dataUrl = canvas.toDataURL('image/png');
     onProjectReady(dataUrl, size, size);
+  }
+
+  function handleUploadLoaded(_file: File, blobUrl: string, w: number, h: number) {
+    if (!dimsWithinEditorLimits(w, h)) {
+      // Revoke the blob URL we won't be using.
+      URL.revokeObjectURL(blobUrl);
+      setUploadError(editorDimsRejectionMessage(w, h));
+      return;
+    }
+    setUploadError(null);
+    onProjectReady(blobUrl, w, h);
   }
 
   return (
@@ -105,10 +125,24 @@ export default function EditorLanding({ onProjectReady }: EditorLandingProps) {
             </div>
 
             <UploadZone
-              onImageLoaded={(_file, blobUrl, w, h) => onProjectReady(blobUrl, w, h)}
+              onImageLoaded={handleUploadLoaded}
               currentImage={null}
               onRemove={() => {}}
             />
+            {uploadError && (
+              <div className="rounded-md border border-red-500/30 bg-red-500/5 p-3 flex items-start gap-2">
+                <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
+                <p className="text-[11px] font-mono text-text-secondary leading-relaxed flex-1 min-w-0">
+                  {uploadError}
+                </p>
+                <button
+                  onClick={() => setUploadError(null)}
+                  className="text-[10px] font-mono text-text-muted hover:text-text-primary cursor-pointer flex-shrink-0"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
           </div>
 
           {/* CARD 3: Open project (disabled — coming soon) */}

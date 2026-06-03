@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Pencil, Eraser, Pipette, Undo2, Redo2, Save, X, ArrowLeft, Film } from 'lucide-react';
+import { Pencil, Eraser, Pipette, Undo2, Redo2, History, Save, X, ArrowLeft, Film, AlertCircle } from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import Button from '@/components/ui/Button';
 import {
@@ -11,9 +11,20 @@ import {
   selectCanUndo,
   selectCanRedo,
   VALID_BRUSH_SIZES,
+  dimsWithinEditorLimits,
+  editorDimsRejectionMessage,
   type Tool,
   type DirtyRect,
 } from './editorStore';
+
+/** Scope key for editor hotkeys — keeps brush-size / undo / redo bindings
+ *  isolated to the editor subtree so they don't fire when a text input
+ *  outside the editor is focused (or when a future input INSIDE the editor
+ *  is focused — react-hotkeys-hook's default `enableOnFormTags: false`
+ *  also handles that, but scoping is the cleaner contract). The matching
+ *  <HotkeysProvider initiallyActiveScopes={['editor']}> lives in
+ *  PixelEditor.tsx (modal) and app/editor/page.tsx (page route). */
+const EDITOR_HOTKEY_SCOPE = 'editor';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { extractPaletteFromImageData } from '@/lib/imagePalette';
 
@@ -93,7 +104,14 @@ export default function PixelEditorBody({
   const eyedrop = useEditorStore((s) => s.eyedrop);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
+  const revertToOriginal = useEditorStore((s) => s.revertToOriginal);
   const reset = useEditorStore((s) => s.reset);
+
+  // Dimension-guardrail error path (Fix #5). If the loaded image exceeds
+  // EDITOR_MAX_DIMENSION / EDITOR_MAX_PIXELS, the load effect bails out before
+  // touching the store and sets this — the canvas area renders a friendly
+  // refusal instead of an empty canvas, and the editor stays in a valid state.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [zoom, setZoom] = useState(8);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -118,9 +136,32 @@ export default function PixelEditorBody({
 
   // Load frame pixels into the store + extract palette. Reset on unmount so
   // the next editor open gets a clean slate.
+  //
+  // Fix #5: defensive dimension guardrail. Callers (EditorLanding upload,
+  // EditorPage handoff) also check, but this is the last line of defense
+  // before any pixel buffer is allocated/copied.
+  //
+  // Fix #4: if the incoming URL is a blob URL (from UploadZone or the gallery
+  // Send-to-Editor path), revoke it AFTER decode — the bytes are now in the
+  // store and the browser can release the underlying File/Blob reference.
   useEffect(() => {
+    setLoadError(null);
+
+    // Pre-flight check on the props' declared dimensions.
+    if (!dimsWithinEditorLimits(frameWidth, frameHeight)) {
+      setLoadError(editorDimsRejectionMessage(frameWidth, frameHeight));
+      return () => { reset(); };
+    }
+
     const img = new Image();
+    let cancelled = false;
     img.onload = () => {
+      if (cancelled) return;
+      // Double-check against the decoded natural dims in case the props lied.
+      if (!dimsWithinEditorLimits(img.naturalWidth, img.naturalHeight)) {
+        setLoadError(editorDimsRejectionMessage(img.naturalWidth, img.naturalHeight));
+        return;
+      }
       const tmp = document.createElement('canvas');
       tmp.width = frameWidth;
       tmp.height = frameHeight;
@@ -131,10 +172,18 @@ export default function PixelEditorBody({
 
       setPalette(extractPaletteFromImageData(imageData, 16));
       loadFrame('current', new Uint8ClampedArray(imageData.data), frameWidth, frameHeight);
+
+      if (frameDataUrl.startsWith('blob:')) {
+        // We own the consumption side of this blob URL. UploadZone created
+        // it; once the bytes are copied into the store, the underlying File
+        // can be released.
+        URL.revokeObjectURL(frameDataUrl);
+      }
     };
     img.src = frameDataUrl;
 
     return () => {
+      cancelled = true;
       reset();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -479,12 +528,33 @@ export default function PixelEditorBody({
     [setBrushSize]
   );
 
-  useHotkeys('[', () => cycleBrushSize(-1), { useKey: true });
-  useHotkeys(']', () => cycleBrushSize(+1), { useKey: true });
-  useHotkeys('-', () => cycleBrushSize(-1), { useKey: true });
-  useHotkeys(['=', '+'], () => cycleBrushSize(+1), { useKey: true, splitKey: '_' });
-  useHotkeys('mod+z', (e) => { e.preventDefault(); undo(); });
-  useHotkeys('mod+shift+z', (e) => { e.preventDefault(); redo(); });
+  // Fix #3: scope every editor hotkey to the 'editor' scope so they don't
+  // fire while a text input (e.g., the future project-name prompt or a
+  // gallery search) is focused. The matching <HotkeysProvider initiallyActive
+  // Scopes={['editor']}> wraps both editor mount sites (modal + page).
+  useHotkeys('[', () => cycleBrushSize(-1), { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
+  useHotkeys(']', () => cycleBrushSize(+1), { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
+  useHotkeys('-', () => cycleBrushSize(-1), { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
+  useHotkeys(['=', '+'], () => cycleBrushSize(+1), { useKey: true, splitKey: '_', scopes: [EDITOR_HOTKEY_SCOPE] });
+  useHotkeys('mod+z', (e) => { e.preventDefault(); undo(); }, { scopes: [EDITOR_HOTKEY_SCOPE] });
+  useHotkeys('mod+shift+z', (e) => { e.preventDefault(); redo(); }, { scopes: [EDITOR_HOTKEY_SCOPE] });
+
+  // Fix #4: cancel pending RAF + brush-toast timer on unmount. They're
+  // otherwise no-ops if the component is gone (React 19 swallows setState),
+  // but explicit cleanup prevents any post-unmount callbacks from firing.
+  useEffect(() => {
+    return () => {
+      if (cursorRafRef.current !== null) {
+        cancelAnimationFrame(cursorRafRef.current);
+        cursorRafRef.current = null;
+      }
+      if (brushToastTimerRef.current !== null) {
+        clearTimeout(brushToastTimerRef.current);
+        brushToastTimerRef.current = null;
+      }
+    };
+  }, []);
+
 
   const toolButtons: Array<{ id: Tool; icon: typeof Pencil; label: string }> = [
     { id: 'pencil', icon: Pencil, label: 'Pencil' },
@@ -593,10 +663,43 @@ export default function PixelEditorBody({
         >
           <Redo2 size={16} />
         </button>
+
+        <div className="w-full h-px bg-border-subtle my-1" />
+
+        <button
+          onClick={revertToOriginal}
+          title="Revert to original (undoable)"
+          disabled={!isDirty}
+          className="p-2 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+          aria-label="Revert to original"
+        >
+          <History size={16} />
+        </button>
       </aside>
 
       {/* Canvas (center) */}
       <main className="[grid-area:canvas] overflow-auto bg-bg-primary relative">
+        {loadError && (
+          <div className="absolute inset-0 flex items-center justify-center p-8 z-10">
+            <div className="max-w-md rounded-lg border border-red-500/30 bg-red-500/5 p-4 flex items-start gap-3">
+              <AlertCircle size={18} className="text-red-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-mono font-semibold text-red-400 mb-1">
+                  Can&apos;t open this image
+                </p>
+                <p className="text-[11px] font-mono text-text-secondary leading-relaxed">
+                  {loadError}
+                </p>
+                <button
+                  onClick={onDismiss}
+                  className="mt-3 text-[10px] font-mono text-accent-amber hover:text-accent-amber-strong cursor-pointer underline"
+                >
+                  Go back
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="min-h-full flex flex-col items-center justify-center p-4 gap-4">
           {/* Zoom controls (Wave 2 replaces with react-zoom-pan-pinch) */}
           <div className="flex items-center gap-2">

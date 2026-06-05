@@ -9,6 +9,7 @@ import {
   dimsWithinEditorLimits,
   editorDimsRejectionMessage,
 } from '@/components/sprites/editorStore';
+import type { SpriteProjectSource } from '@/lib/spriteProject';
 import { useSpriteStore } from '@/stores/spriteStore';
 
 /**
@@ -46,6 +47,7 @@ export default function EditorPage() {
     dataUrl: string;
     width: number;
     height: number;
+    source?: SpriteProjectSource;
   } | null>(null);
   const [isLoadingHandoff, setIsLoadingHandoff] = useState(false);
   // Handoff-source rejection (Fix #5). When a Send-to-Editor handoff carries
@@ -84,6 +86,7 @@ export default function EditorPage() {
         dataUrl: generatedImageDataUrl,
         width: img.naturalWidth,
         height: img.naturalHeight,
+        source: { kind: 'generation' },
       });
       setIsLoadingHandoff(false);
     };
@@ -132,8 +135,8 @@ export default function EditorPage() {
           </div>
         )}
         <EditorLanding
-          onProjectReady={(dataUrl, width, height) =>
-            setPending({ dataUrl, width, height })
+          onProjectReady={(dataUrl, width, height, source) =>
+            setPending({ dataUrl, width, height, source })
           }
         />
       </>
@@ -158,6 +161,7 @@ export default function EditorPage() {
           setPending(null);
         }}
         layout="page"
+        source={pending.source}
       />
     </HotkeysProvider>
   );

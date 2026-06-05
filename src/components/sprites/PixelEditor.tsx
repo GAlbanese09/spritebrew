@@ -5,6 +5,7 @@ import { Dialog } from '@headlessui/react';
 import { HotkeysProvider } from 'react-hotkeys-hook';
 import PixelEditorBody from './PixelEditorBody';
 import { useEditorStore, selectIsDirty } from './editorStore';
+import type { SpriteProjectSource } from '@/lib/spriteProject';
 
 /**
  * Modal-mode wrapper around <PixelEditorBody>. Preserves the existing
@@ -19,6 +20,9 @@ interface PixelEditorProps {
   frameHeight: number;
   onSave: (newDataUrl: string) => void;
   onClose: () => void;
+  /** Origin lineage forwarded to the SpriteProjectV1 document model
+   *  (Wave 1b). Optional — omit when origin is unknown. */
+  source?: SpriteProjectSource;
 }
 
 export default function PixelEditor({
@@ -27,6 +31,7 @@ export default function PixelEditor({
   frameHeight,
   onSave,
   onClose,
+  source,
 }: PixelEditorProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -73,6 +78,7 @@ export default function PixelEditor({
               onSave={onSave}
               onDismiss={attemptDismiss}
               layout="modal"
+              source={source}
             />
           </Dialog.Panel>
         </div>

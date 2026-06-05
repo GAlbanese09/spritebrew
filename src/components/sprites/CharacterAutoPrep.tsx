@@ -546,6 +546,7 @@ export default function CharacterAutoPrep({
           frameHeight={targetSize}
           onSave={handleEditorSave}
           onClose={() => setEditorOpen(false)}
+          source={{ kind: 'generation' }}
         />
       )}
     </div>

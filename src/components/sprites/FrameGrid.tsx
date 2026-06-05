@@ -167,6 +167,7 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
           frameHeight={editingFrame.height}
           onSave={handleEditSave}
           onClose={() => setEditingFrameId(null)}
+          source={{ kind: 'sheet-import' }}
         />
       )}
     </div>

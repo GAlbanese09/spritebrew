@@ -8,6 +8,7 @@ import {
   dimsWithinEditorLimits,
   editorDimsRejectionMessage,
 } from '@/components/sprites/editorStore';
+import type { SpriteProjectSource } from '@/lib/spriteProject';
 
 /**
  * Landing UI for the /editor route. Lets the user choose how to start
@@ -26,7 +27,15 @@ const SIZE_PRESETS = [16, 32, 64, 128, 256] as const;
 type SizePreset = (typeof SIZE_PRESETS)[number];
 
 interface EditorLandingProps {
-  onProjectReady: (frameDataUrl: string, width: number, height: number) => void;
+  /** Hand off a decoded image to the parent for editor mount. The 4th arg
+   *  carries provenance into the SpriteProjectV1 document model (Wave 1b).
+   *  Optional so future entry points can omit when origin is unknown. */
+  onProjectReady: (
+    frameDataUrl: string,
+    width: number,
+    height: number,
+    source?: SpriteProjectSource,
+  ) => void;
 }
 
 export default function EditorLanding({ onProjectReady }: EditorLandingProps) {
@@ -43,7 +52,7 @@ export default function EditorLanding({ onProjectReady }: EditorLandingProps) {
     canvas.width = size;
     canvas.height = size;
     const dataUrl = canvas.toDataURL('image/png');
-    onProjectReady(dataUrl, size, size);
+    onProjectReady(dataUrl, size, size, { kind: 'blank' });
   }
 
   function handleUploadLoaded(_file: File, blobUrl: string, w: number, h: number) {
@@ -54,7 +63,7 @@ export default function EditorLanding({ onProjectReady }: EditorLandingProps) {
       return;
     }
     setUploadError(null);
-    onProjectReady(blobUrl, w, h);
+    onProjectReady(blobUrl, w, h, { kind: 'upload' });
   }
 
   return (

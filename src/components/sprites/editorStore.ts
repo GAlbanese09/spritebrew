@@ -9,6 +9,14 @@
 
 import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
+import { hexToRgb } from '@/lib/colorUtils';
+import {
+  ACTIVE_FRAME_MEMORY_KEY,
+  createProjectFromImageData,
+  validateProject,
+  type SpriteProjectSource,
+  type SpriteProjectV1,
+} from '@/lib/spriteProject';
 
 export type Tool = 'pencil' | 'eraser' | 'eyedropper';
 export type BrushSize = 1 | 2 | 4 | 8 | 16;
@@ -96,11 +104,30 @@ function computeLineBbox(
 }
 
 export interface PixelEditorState {
+  // ── Document model (Wave 1b) ───────────────────────────────────────────
+  // The editor's runtime backs ONE frame of a SpriteProjectV1 document.
+  // Today: single-frame, but the document carries frames[] so save/import
+  // never need a frames migration (Wave 5 lights up the multi-buffer
+  // runtime on top of this same shape).
+
+  /** Server-side project identifier, set when the project has been saved.
+   *  Null for unsaved in-memory documents. Wave 3 will populate this. */
+  projectId: string | null;
+  /** Human-facing project name. Defaults to "Untitled project" until the
+   *  user (or a future Save dialog) renames. */
+  projectName: string;
+  /** Origin lineage — see SpriteProjectSource. Null when unknown. */
+  source: SpriteProjectSource | null;
+
+  // ── Active-frame runtime state ─────────────────────────────────────────
   // Pixel data: source of truth at native frame resolution. RGBA bytes,
   // length = width * height * 4. Stored as Uint8ClampedArray (not ImageData)
   // because ImageData's internal buffer is non-cloneable and breaks
   // Zustand's structural sharing.
   pixels: Uint8ClampedArray | null;
+  /** Active frame's stable id (matches frames[activeIndex].id in the
+   *  document). Today there is exactly one frame, so this is the only id
+   *  getFramePixels accepts. */
   frameId: string | null;
   width: number;
   height: number;
@@ -133,11 +160,41 @@ export interface PixelEditorState {
    */
   lastDirtyRect: DirtyRect | null;
 
+  /**
+   * The seam (Wave 1b). Returns the bytes for a given frame id, or null if
+   * the editor doesn't have that frame loaded. Today only the active frame's
+   * id is recognized; Wave 5 multi-buffer runtime will broaden this.
+   */
+  getFramePixels: (frameId: string) => Uint8ClampedArray | null;
+
+  /**
+   * Materialize a SpriteProjectV1 into the editor's runtime. Validates the
+   * envelope first (boundary check from the Plan); on failure returns false
+   * and leaves state untouched. On success: copies pixels into the active
+   * buffer, captures the originalPixels baseline, resets history, populates
+   * document fields. The `framePixels` argument supplies the bytes for
+   * frames[0] — for {kind:'memory'} pixelRefs the bytes can't live inside
+   * the JSON envelope, so they're passed in alongside.
+   */
+  loadProject: (
+    project: SpriteProjectV1,
+    framePixels: Uint8ClampedArray
+  ) => boolean;
+
+  /**
+   * Serialize the current runtime state into a SpriteProjectV1 envelope.
+   * The bytes themselves are NOT embedded — frames[0].pixelRef points to
+   * the active-memory key, and a future caller (Wave 3 Save) will fetch
+   * the bytes via getFramePixels(frames[0].id).
+   */
+  toProject: () => SpriteProjectV1 | null;
+
   loadFrame: (
     frameId: string,
     pixels: Uint8ClampedArray,
     width: number,
-    height: number
+    height: number,
+    source?: SpriteProjectSource,
   ) => void;
   // Stroke boundaries: beginStroke clears any redo branch; endStroke
   // pushes the post-stroke pixel snapshot as a single history entry.
@@ -167,54 +224,9 @@ export interface PixelEditorState {
   reset: () => void;
 }
 
-/**
- * Parse a CSS hex color into [r, g, b, a] bytes (0–255). Accepts #RGB, #RGBA,
- * #RRGGBB, #RRGGBBAA. Expands 3/4-digit shorthand the standard way (#abc →
- * #aabbcc). Returns null on any malformed input — callers MUST no-op the
- * paint rather than coerce a bad parse to NaN→0 (silent black).
- *
- * Module-private: paint callers handle the null path here. Eyedrop produces
- * its own #RRGGBB output and never needs this in reverse.
- */
-function hexToRgb(hex: string): [number, number, number, number] | null {
-  if (typeof hex !== 'string') return null;
-  let h = hex.startsWith('#') ? hex.slice(1) : hex;
-  if (!/^[0-9a-fA-F]+$/.test(h)) return null;
-  if (h.length === 3 || h.length === 4) {
-    // Expand shorthand: each nibble doubled. #abc → #aabbcc, #abcd → #aabbccdd.
-    h = h.split('').map((c) => c + c).join('');
-  }
-  if (h.length !== 6 && h.length !== 8) return null;
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  const a = h.length === 8 ? parseInt(h.slice(6, 8), 16) : 255;
-  return [r, g, b, a];
-}
-
-// Dev-only round-trip assertions for hexToRgb. Stripped in production.
-if (process.env.NODE_ENV !== 'production') {
-  console.assert(
-    JSON.stringify(hexToRgb('#ff8800')) === JSON.stringify([255, 136, 0, 255]),
-    'hexToRgb #ff8800',
-  );
-  console.assert(
-    JSON.stringify(hexToRgb('#abc')) === JSON.stringify([170, 187, 204, 255]),
-    'hexToRgb #abc shorthand expansion',
-  );
-  console.assert(
-    JSON.stringify(hexToRgb('#abcd')) === JSON.stringify([170, 187, 204, 221]),
-    'hexToRgb #abcd shorthand expansion',
-  );
-  console.assert(
-    JSON.stringify(hexToRgb('#ff880080')) === JSON.stringify([255, 136, 0, 128]),
-    'hexToRgb #ff880080 8-digit alpha',
-  );
-  console.assert(hexToRgb('#zz') === null, 'hexToRgb #zz rejects non-hex');
-  console.assert(hexToRgb('garbage') === null, 'hexToRgb garbage rejects');
-  console.assert(hexToRgb('') === null, 'hexToRgb empty rejects');
-  console.assert(hexToRgb('#fffff') === null, 'hexToRgb 5-digit rejects');
-}
+// hexToRgb lifted to @/lib/colorUtils in Wave 1b — single source of truth for
+// editor paint + spriteProject validation. Behavior is byte-identical to the
+// Wave 1a private version.
 
 function applyBrushSquare(
   pixels: Uint8ClampedArray,
@@ -244,6 +256,11 @@ function applyBrushSquare(
 
 export const useEditorStore = create<PixelEditorState>()(
   subscribeWithSelector((set, get) => ({
+    // Document fields (Wave 1b)
+    projectId: null,
+    projectName: 'Untitled project',
+    source: null,
+
     pixels: null,
     frameId: null,
     width: 0,
@@ -256,23 +273,146 @@ export const useEditorStore = create<PixelEditorState>()(
     brushSize: 1,
     lastDirtyRect: null,
 
-    loadFrame: (frameId, pixels, width, height) => {
-      // Capture three independent copies of the source bytes: live pixels
-      // (mutated by paint), history seed (cycled by undo/redo + capped at 50),
-      // and originalPixels (immortal baseline for Revert).
-      const liveCopy = new Uint8ClampedArray(pixels);
-      const historySeed = new Uint8ClampedArray(pixels);
-      const baselineCopy = new Uint8ClampedArray(pixels);
+    getFramePixels: (frameId) => {
+      const s = get();
+      // Single-frame runtime: only the active frame is materialized. Future
+      // multi-buffer (Wave 5) keeps this seam stable.
+      if (!s.frameId || s.frameId !== frameId) return null;
+      return s.pixels;
+    },
+
+    loadProject: (project, framePixels) => {
+      // Boundary validator first (defense in depth; Wave 3 untrusted loads
+      // will hit this same path). On failure, leave state untouched.
+      const result = validateProject(project);
+      if (!result.ok) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.error('[editorStore.loadProject] validation failed:', result.error);
+        }
+        return false;
+      }
+      const p = result.project;
+
+      // Wave 1b only materializes frames[0]. Multi-frame runtime is Wave 5.
+      const frame0 = p.frames[0];
+
+      // Cross-check the supplied pixel bytes against the document's declared
+      // canvas dims. A length mismatch is an integration bug — refuse rather
+      // than corrupt the buffer.
+      const expectedLength = p.canvas.width * p.canvas.height * 4;
+      if (framePixels.length !== expectedLength) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.error(
+            '[editorStore.loadProject] pixel buffer size mismatch:',
+            `expected ${expectedLength} bytes for ${p.canvas.width}x${p.canvas.height}, got ${framePixels.length}`,
+          );
+        }
+        return false;
+      }
+
+      // Capture three independent copies of the source bytes (matches the
+      // prior loadFrame contract exactly).
+      const liveCopy = new Uint8ClampedArray(framePixels);
+      const historySeed = new Uint8ClampedArray(framePixels);
+      const baselineCopy = new Uint8ClampedArray(framePixels);
+
       set({
-        frameId,
-        width,
-        height,
+        projectId: p.projectId ?? null,
+        projectName: p.name,
+        source: p.source ?? null,
+        frameId: frame0.id,
+        width: p.canvas.width,
+        height: p.canvas.height,
         pixels: liveCopy,
         historyStack: [historySeed],
         historyIndex: 0,
         originalPixels: baselineCopy,
+        foregroundColor: p.color.foreground,
         lastDirtyRect: null, // full repaint needed for a fresh frame
       });
+
+      // Dev-only round-trip assert (Wave 1b): the freshly loaded state must
+      // serialize back to a valid project. Catches regressions in the
+      // document <-> runtime translation on every editor open.
+      if (process.env.NODE_ENV !== 'production') {
+        const roundTripped = get().toProject();
+        const reValidated = roundTripped ? validateProject(roundTripped) : { ok: false as const, error: 'toProject returned null' };
+        console.assert(
+          reValidated.ok === true,
+          '[editorStore] toProject round-trip failed:',
+          reValidated.ok === false ? reValidated.error : '',
+        );
+        if (reValidated.ok) {
+          console.assert(
+            reValidated.project.canvas.width === p.canvas.width &&
+            reValidated.project.canvas.height === p.canvas.height,
+            '[editorStore] round-trip dims drifted',
+          );
+        }
+      }
+
+      return true;
+    },
+
+    toProject: () => {
+      const s = get();
+      if (!s.pixels || !s.frameId || s.width === 0 || s.height === 0) return null;
+      const now = Date.now();
+      return {
+        schema: 'spritebrew.project',
+        schemaVersion: 1,
+        projectId: s.projectId ?? undefined,
+        name: s.projectName,
+        createdAt: now,
+        updatedAt: now,
+        canvas: { width: s.width, height: s.height, transparent: true },
+        color: {
+          mode: 'rgba',
+          palette: [], // Palette lives in PixelEditorBody local state today;
+                      // Wave 3 Save will source it from the caller.
+          recentColors: [],
+          foreground: s.foregroundColor,
+          background: 'none',
+        },
+        frames: [
+          {
+            id: s.frameId,
+            index: 0,
+            durationMs: Math.round(1000 / 12),
+            pixelRef: { kind: 'memory', key: ACTIVE_FRAME_MEMORY_KEY },
+          },
+        ],
+        animation: { fps: 12, playback: 'loop' },
+        source: s.source ?? undefined,
+      };
+    },
+
+    loadFrame: (frameId, pixels, width, height, source) => {
+      // Wave 1b: route every loadFrame through the document model so the
+      // SpriteProjectV1 path is exercised on every editor open (not dead
+      // code waiting for Wave 3). The frameId arg is ignored — the document
+      // model assigns a fresh id via createProjectFromImageData — because
+      // callers today only ever pass the literal 'current', and routing
+      // through the project model normalizes that.
+      void frameId; // intentionally unused — kept in signature for compat
+      // Defense in depth: editor dim caps re-checked here (the canonical
+      // entry points already check via dimsWithinEditorLimits, and
+      // validateProject inside loadProject checks again).
+      if (!dimsWithinEditorLimits(width, height)) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.error(
+            '[editorStore.loadFrame] dims exceed editor caps:',
+            editorDimsRejectionMessage(width, height),
+          );
+        }
+        return;
+      }
+      // Build a one-frame ImageData from the supplied bytes purely for the
+      // document factory's dims hint. The bytes themselves are also passed
+      // to loadProject; ImageData is not retained.
+      const imageData = new ImageData(new Uint8ClampedArray(pixels), width, height);
+      const project = createProjectFromImageData(imageData, { source });
+      get().loadProject(project, pixels);
     },
 
     beginStroke: () => {
@@ -426,6 +566,9 @@ export const useEditorStore = create<PixelEditorState>()(
 
     reset: () =>
       set({
+        projectId: null,
+        projectName: 'Untitled project',
+        source: null,
         pixels: null,
         frameId: null,
         width: 0,

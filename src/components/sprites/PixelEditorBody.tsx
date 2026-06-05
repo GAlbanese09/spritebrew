@@ -16,6 +16,7 @@ import {
   type Tool,
   type DirtyRect,
 } from './editorStore';
+import type { SpriteProjectSource } from '@/lib/spriteProject';
 
 /** Scope key for editor hotkeys — keeps brush-size / undo / redo bindings
  *  isolated to the editor subtree so they don't fire when a text input
@@ -52,6 +53,13 @@ interface PixelEditorBodyProps {
   onSave: (newDataUrl: string) => void;
   onDismiss: () => void;
   layout: 'modal' | 'page';
+  /**
+   * Origin lineage for the loaded image (Wave 1b). Threaded into the
+   * SpriteProjectV1 document via loadFrame so the editor's document model
+   * carries provenance. Optional — when omitted, the project's source is
+   * left undefined.
+   */
+  source?: SpriteProjectSource;
 }
 
 export default function PixelEditorBody({
@@ -61,6 +69,7 @@ export default function PixelEditorBody({
   onSave,
   onDismiss,
   layout,
+  source,
 }: PixelEditorBodyProps) {
   const editorCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -171,7 +180,7 @@ export default function PixelEditorBody({
       const imageData = ctx.getImageData(0, 0, frameWidth, frameHeight);
 
       setPalette(extractPaletteFromImageData(imageData, 16));
-      loadFrame('current', new Uint8ClampedArray(imageData.data), frameWidth, frameHeight);
+      loadFrame('current', new Uint8ClampedArray(imageData.data), frameWidth, frameHeight, source);
 
       if (frameDataUrl.startsWith('blob:')) {
         // We own the consumption side of this blob URL. UploadZone created

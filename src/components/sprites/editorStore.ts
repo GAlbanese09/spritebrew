@@ -23,7 +23,7 @@ const MAX_HISTORY = 50;
 // whose total area is large. Both must be respected.
 // TODO(wave-1b): per-tier frame caps come with the frame model; this is a
 // flat ceiling for now.
-export const EDITOR_MAX_DIMENSION = 512;
+export const EDITOR_MAX_DIMENSION = 1024;
 export const EDITOR_MAX_PIXELS = EDITOR_MAX_DIMENSION * EDITOR_MAX_DIMENSION;
 
 /** Friendly message for the over-limit error path. */
@@ -399,7 +399,7 @@ export const useEditorStore = create<PixelEditorState>()(
       if (!originalPixels || !pixels) return;
       if (originalPixels.length !== pixels.length) return; // defensive
       // Byte-equal check, early-exit on first diff. Cheap at editor sizes
-      // (≤ EDITOR_MAX_PIXELS bytes × 4 = ~1 MB worst case).
+      // (≤ EDITOR_MAX_PIXELS × 4 bytes = ~4 MB worst case at 1024×1024).
       let equal = true;
       for (let i = 0; i < originalPixels.length; i++) {
         if (originalPixels[i] !== pixels[i]) { equal = false; break; }

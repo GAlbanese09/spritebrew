@@ -11,6 +11,10 @@ import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { hexToRgb } from '@/lib/colorUtils';
 import {
+  EDITOR_MAX_DIMENSION,
+  EDITOR_MAX_PIXELS,
+} from '@/lib/editorConstants';
+import {
   ACTIVE_FRAME_MEMORY_KEY,
   createProjectFromImageData,
   validateProject,
@@ -24,15 +28,10 @@ export const VALID_BRUSH_SIZES: readonly BrushSize[] = [1, 2, 4, 8, 16];
 
 const MAX_HISTORY = 50;
 
-// Dimension guardrails (Wave 1a — Fix #5). Cap any image loaded into the
-// editor so untrusted dims from Open Project / Pick from Gallery can't blow
-// memory. EDITOR_MAX_DIMENSION is the per-side cap; EDITOR_MAX_PIXELS guards
-// against e.g. a 4096×64 strip whose per-side caps are within bounds but
-// whose total area is large. Both must be respected.
-// TODO(wave-1b): per-tier frame caps come with the frame model; this is a
-// flat ceiling for now.
-export const EDITOR_MAX_DIMENSION = 1024;
-export const EDITOR_MAX_PIXELS = EDITOR_MAX_DIMENSION * EDITOR_MAX_DIMENSION;
+// Dimension guardrails — the constants themselves live in @/lib/editorConstants
+// (Wave 1b.1 break-the-circular-import lift). Re-exported here so existing
+// importers of editorStore see no surface change.
+export { EDITOR_MAX_DIMENSION, EDITOR_MAX_PIXELS };
 
 /** Friendly message for the over-limit error path. */
 export function editorDimsRejectionMessage(w: number, h: number): string {

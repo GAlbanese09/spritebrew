@@ -15,10 +15,7 @@
  * Pure module — no React, no Zustand. Safe to call from any context.
  */
 
-import {
-  EDITOR_MAX_DIMENSION,
-  EDITOR_MAX_PIXELS,
-} from '@/components/sprites/editorStore';
+import { EDITOR_MAX_DIMENSION, EDITOR_MAX_PIXELS } from '@/lib/editorConstants';
 import { hexToRgb } from '@/lib/colorUtils';
 
 // ── Constants ────────────────────────────────────────────────────────────────

@@ -275,55 +275,107 @@ export async function POST(request: Request) {
       );
     }
 
-    const jobId = await deriveJobId(userId, idempotencyKey);
-    const env = process.env as Record<string, unknown>;
-    const kv = env.SPRITEBREW_KV as {
-      get: (k: string) => Promise<string | null>;
-      put: (k: string, v: string, opts?: unknown) => Promise<void>;
-    };
+    // Wrap everything from here through the 202 in try/catch so a throw at
+    // any step (KV get/put, RD body build, enqueueJob's binding check, or
+    // q.send) refunds the debit and returns a structured 503. Mirrors the
+    // SSE path's compensating refund at line ~342-343. Without this, a
+    // synchronous throw bubbles to the Edge runtime → bare 500 text/plain
+    // → consumer never runs → consumer-side refund never fires → debit
+    // orphaned (Day-21 incident).
+    let jobId: string | undefined;
+    try {
+      jobId = await deriveJobId(userId, idempotencyKey);
+      const env = process.env as Record<string, unknown>;
+      const kv = env.SPRITEBREW_KV as {
+        get: (k: string) => Promise<string | null>;
+        put: (k: string, v: string, opts?: unknown) => Promise<void>;
+      };
 
-    // Request-side idempotency: same jobId already exists → return it without re-enqueue.
-    const existing = await kv.get(`job:${jobId}`);
-    if (existing) {
+      // Request-side idempotency: same jobId already exists → return it without re-enqueue.
+      const existing = await kv.get(`job:${jobId}`);
+      if (existing) {
+        return new Response(
+          JSON.stringify({ jobId, replayed: true }),
+          { status: 202, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
+      const now = Date.now();
+      await kv.put(
+        `job:${jobId}`,
+        JSON.stringify({
+          status: 'pending',
+          userId,
+          mode,
+          enqueuedAt: now,
+        }),
+        { expirationTtl: 3600 }
+      );
+
+      // Translate camelCase request body → snake_case RD wire format BEFORE
+      // enqueueing. The consumer forwards body verbatim to RD, so the producer
+      // must hand it the exact RD shape (Build #2A.1). Mirrors runCreate/runAnimate.
+      const rdBody = mode === 'animate'
+        ? buildRdAnimateBody(body)
+        : buildRdCreateBody(body);
+
+      await enqueueJob(env.RD_QUEUE, {
+        jobId,
+        userId,
+        idempotencyKey,
+        tokenCost,
+        mode,
+        body: rdBody,
+        enqueuedAt: now,
+      });
+
       return new Response(
-        JSON.stringify({ jobId, replayed: true }),
+        JSON.stringify({ jobId }),
         { status: 202, headers: { 'content-type': 'application/json' } }
       );
+    } catch {
+      // Compensating refund. Same idempotency seed as the SSE path so a
+      // retry that lands in this branch (or in SSE) dedupes correctly via
+      // tokenBalance's token_idempotency:* check.
+      await creditTokens(userId, tokenCost, 'generation_failed_refund', `refund:${requestId}`);
+
+      // Best-effort: update the pending job KV record to a terminal failed
+      // state so a stray poll doesn't see "pending" forever. jobId is
+      // defined only if deriveJobId succeeded — the catch may have fired
+      // before that, in which case there's no pending record to update.
+      // Inner try/catch — must never mask the refund return path above.
+      if (jobId) {
+        try {
+          const env = process.env as Record<string, unknown>;
+          const kv = env.SPRITEBREW_KV as {
+            put: (k: string, v: string, opts?: unknown) => Promise<void>;
+          } | undefined;
+          if (kv && typeof kv.put === 'function') {
+            await kv.put(
+              `job:${jobId}`,
+              JSON.stringify({
+                status: 'failed',
+                userId,
+                mode,
+                error: 'submission_failed',
+                refunded: true,
+                failedAt: Date.now(),
+              }),
+              { expirationTtl: 3600 }
+            );
+          }
+        } catch { /* best-effort cleanup */ }
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: 'submission_failed',
+          message: 'Could not start your generation — your tokens were refunded. Please try again.',
+        }),
+        { status: 503, headers: { 'content-type': 'application/json' } }
+      );
     }
-
-    const now = Date.now();
-    await kv.put(
-      `job:${jobId}`,
-      JSON.stringify({
-        status: 'pending',
-        userId,
-        mode,
-        enqueuedAt: now,
-      }),
-      { expirationTtl: 3600 }
-    );
-
-    // Translate camelCase request body → snake_case RD wire format BEFORE
-    // enqueueing. The consumer forwards body verbatim to RD, so the producer
-    // must hand it the exact RD shape (Build #2A.1). Mirrors runCreate/runAnimate.
-    const rdBody = mode === 'animate'
-      ? buildRdAnimateBody(body)
-      : buildRdCreateBody(body);
-
-    await enqueueJob(env.RD_QUEUE, {
-      jobId,
-      userId,
-      idempotencyKey,
-      tokenCost,
-      mode,
-      body: rdBody,
-      enqueuedAt: now,
-    });
-
-    return new Response(
-      JSON.stringify({ jobId }),
-      { status: 202, headers: { 'content-type': 'application/json' } }
-    );
   }
   // === END QUEUE-KICKOFF GATE ===
 

@@ -74,7 +74,8 @@ export async function fetchGeneration(
     return { mode: 'stream', response: res };
   }
 
-  // JSON error envelope (validation, auth, insufficient tokens, free-tier cap).
+  // JSON error envelope (validation, auth, insufficient tokens, free-tier cap,
+  // submission_failed from the queue-kickoff catch).
   if (contentType.includes('application/json')) {
     const data = await res.json();
     if (!data.success) {
@@ -94,7 +95,20 @@ export async function fetchGeneration(
         if (data.tier) err.tier = data.tier;
         throw err;
       }
-      throw new Error(data.error || `HTTP ${res.status}`);
+      // Generic structured-error envelope: surface server's error + message so
+      // form catches can render specific UX (e.g. submission_failed from the
+      // queue-kickoff post-debit refund path returns a 503 with this shape).
+      // Without this, a 503 JSON body would fall through to the "Unexpected
+      // response" branch and the form's catch would tack on the false
+      // "(your tokens are safe)" copy.
+      const message = data.message || data.error || `HTTP ${res.status}`;
+      const err = new Error(message) as Error & {
+        error?: string;
+        status?: number;
+      };
+      if (typeof data.error === 'string') err.error = data.error;
+      err.status = res.status;
+      throw err;
     }
     // 200 + JSON + success:true (rare path the legacy code allowed; preserve).
     return { mode: 'stream', response: res };

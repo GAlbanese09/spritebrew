@@ -237,6 +237,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         required?: number;
         code?: string;
         tier?: 'pro' | 'fast';
+        error?: string;
       };
       if (errObj.code === 'free_tier_cap_reached') {
         const tierLabel = errObj.tier === 'fast' ? 'Fast' : 'Pro';
@@ -250,6 +251,14 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
           `You need ${errObj.required} tokens for this style, but you have ${errObj.balance}. Try a cheaper style or buy more tokens!`
         );
         setTokenBalance(errObj.balance);
+        return;
+      }
+      if (errObj.error === 'submission_failed') {
+        // Server already refunded — surface its message verbatim, do NOT
+        // append the generic "(your tokens are safe)" copy.
+        setGenerationError(msg);
+        // Refresh balance so the user sees the refund landed.
+        void fetchBalance();
         return;
       }
       setGenerationError(`Generation failed: ${msg} (your tokens are safe)`);

@@ -73,11 +73,11 @@ export default function PixelEditorBody({
 }: PixelEditorBodyProps) {
   const editorCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
-  // Long-lived stage canvas hoisted to a ref (was allocated fresh per render
-  // pre-smoothness-fix). Holds the native-resolution pixel buffer; sub-region
-  // patches go into it via putImageData(dirty rect), then drawImage copies the
-  // scaled sub-region to the editor canvas without redrawing chrome.
-  const stageCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Display-resolution overlay canvas — hosts ONLY the grid (Wave 1c). DPR-
+  // aware so 1px strokes stay crisp on HiDPI. Redrawn on zoom / dims / window
+  // resize; never touched during paint. Sits between the image canvas and the
+  // cursor footprint div in the DOM (paint-order stacking).
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   // Tracks the last pointer cell of the active stroke so handleMouseMove can
   // interpolate via Bresenham (paintLine) instead of just stamping discrete
   // points (which left gaps at high pointer speeds).
@@ -198,85 +198,59 @@ export default function PixelEditorBody({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameDataUrl, frameWidth, frameHeight]);
 
-  // Full canvas render — runs on mount, zoom change, frame load, undo/redo,
-  // and stroke end (to restore any grid pixels the per-event patches drew over).
-  // Redraws ALL chrome (checkerboard + image + grid) at scaled resolution.
-  // Initializes / resizes the hoisted stage canvas on first use.
+  // Full image repaint — runs on mount, zoom change, frame load, undo/redo.
+  // Wave 1c: visible canvas backing store is NATIVE WxH; the browser handles
+  // the upscale via CSS + image-rendering: pixelated, so the work is now
+  // zoom-independent (O(W*H) bytes, not O(W*H*zoom^2)). The transparency
+  // checkerboard lives in CSS on the canvas element; the grid lives in the
+  // overlay canvas — neither is touched here.
   const renderCanvasesFull = useCallback(() => {
     const { pixels, width, height } = useEditorStore.getState();
     if (!pixels || width === 0 || height === 0) return;
 
-    // Initialize or resize the hoisted stage canvas. Assigning width/height
-    // clears the canvas, so we always do a full putImageData below to refill.
-    let stage = stageCanvasRef.current;
-    if (!stage) {
-      stage = document.createElement('canvas');
-      stageCanvasRef.current = stage;
-    }
-    if (stage.width !== width || stage.height !== height) {
-      stage.width = width;
-      stage.height = height;
-    }
-    const stageCtx = stage.getContext('2d')!;
-    stageCtx.putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0);
-
     const ec = editorCanvasRef.current;
     if (ec) {
-      const w = width * zoom;
-      const h = height * zoom;
-      ec.width = w;
-      ec.height = h;
+      // Assigning width/height clears the canvas, so only re-size when the
+      // native dims actually change (avoids the zoom-change wipe).
+      if (ec.width !== width || ec.height !== height) {
+        ec.width = width;
+        ec.height = height;
+      }
+      // CSS size carries the visible scale. Backing store stays native.
+      ec.style.width = `${width * zoom}px`;
+      ec.style.height = `${height * zoom}px`;
       const ctx = ec.getContext('2d')!;
-      ctx.imageSmoothingEnabled = false;
-
-      const tileSize = Math.max(zoom / 2, 4);
-      for (let y = 0; y < h; y += tileSize) {
-        for (let x = 0; x < w; x += tileSize) {
-          const light = ((Math.floor(x / tileSize) + Math.floor(y / tileSize)) % 2) === 0;
-          ctx.fillStyle = light ? '#2a2725' : '#1e1b18';
-          ctx.fillRect(x, y, tileSize, tileSize);
-        }
-      }
-      ctx.drawImage(stage, 0, 0, w, h);
-
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-      ctx.lineWidth = 1;
-      for (let x = 0; x <= width; x++) {
-        ctx.beginPath();
-        ctx.moveTo(x * zoom + 0.5, 0);
-        ctx.lineTo(x * zoom + 0.5, h);
-        ctx.stroke();
-      }
-      for (let y = 0; y <= height; y++) {
-        ctx.beginPath();
-        ctx.moveTo(0, y * zoom + 0.5);
-        ctx.lineTo(w, y * zoom + 0.5);
-        ctx.stroke();
-      }
+      ctx.putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0);
     }
 
     const pc = previewCanvasRef.current;
-    if (pc) {
+    if (pc && ec) {
       pc.width = width;
       pc.height = height;
       const ctx = pc.getContext('2d')!;
       ctx.imageSmoothingEnabled = false;
       ctx.clearRect(0, 0, width, height);
-      ctx.drawImage(stage, 0, 0);
+      // Source from the visible canvas (now native res) — the off-screen
+      // stage canvas is gone in Wave 1c.
+      ctx.drawImage(ec, 0, 0);
     }
   }, [zoom]);
 
-  // Per-event patch render — only the dirty sub-region. Chrome (checkerboard +
-  // grid) is NOT redrawn; it persists from the last full render. The brush may
-  // overwrite a grid pixel within the patch region — restored on stroke end.
-  // Allocates a small contiguous sub-buffer (rect.w × rect.h × 4 bytes) rather
-  // than copying the entire pixel buffer per event.
+  // Per-event patch — writes only the dirty sub-region at native resolution.
+  // Wave 1c: ONE putImageData straight to the visible canvas (which is native
+  // res now), no stage, no scaled drawImage. This is the real-time erase fix:
+  // putImageData REPLACES bytes (no source-over composite), so alpha=0 pixels
+  // become transparent immediately — the CSS-bg checkerboard shows through
+  // during the drag, not just after stroke-end.
   const patchDirtyRect = useCallback((rect: DirtyRect) => {
     const { pixels, width, height } = useEditorStore.getState();
     if (!pixels || width === 0 || height === 0) return;
-    const stage = stageCanvasRef.current;
-    if (!stage) {
-      // No stage yet — fall through to a full render to bootstrap.
+    const ec = editorCanvasRef.current;
+    if (!ec) return;
+    if (ec.width !== width || ec.height !== height) {
+      // Visible canvas not yet sized for these dims (race with a fresh load);
+      // bootstrap with a full render then bail — the patch is included in the
+      // bytes the full render just wrote.
       renderCanvasesFull();
       return;
     }
@@ -291,30 +265,63 @@ export default function PixelEditorBody({
     }
     const subImageData = new ImageData(subData, rect.w, rect.h);
 
-    // Patch the stage at native resolution.
-    const stageCtx = stage.getContext('2d')!;
-    stageCtx.putImageData(subImageData, rect.x, rect.y);
+    // Single native-res write.
+    const ctx = ec.getContext('2d')!;
+    ctx.putImageData(subImageData, rect.x, rect.y);
 
-    // Patch the editor canvas's corresponding scaled sub-region.
-    const ec = editorCanvasRef.current;
-    if (ec) {
-      const ctx = ec.getContext('2d')!;
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(
-        stage,
-        rect.x, rect.y, rect.w, rect.h,
-        rect.x * zoom, rect.y * zoom, rect.w * zoom, rect.h * zoom
-      );
-    }
-
-    // Preview canvas is native-res and cheap — full redraw is fine.
+    // Preview canvas — source from the visible canvas (also native res).
     const pc = previewCanvasRef.current;
     if (pc) {
-      const ctx = pc.getContext('2d')!;
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(stage, 0, 0);
+      const pctx = pc.getContext('2d')!;
+      pctx.imageSmoothingEnabled = false;
+      pctx.clearRect(0, 0, width, height);
+      pctx.drawImage(ec, 0, 0);
     }
-  }, [zoom, renderCanvasesFull]);
+  }, [renderCanvasesFull]);
+
+  // Grid overlay — stroked on a separate DPR-aware canvas (Wave 1c). Crisp
+  // 1 device px on HiDPI, never touched during paint. Called on mount, zoom
+  // change, dims/frame-load change, and window resize (DPR may have changed
+  // if the window moved to another monitor).
+  const drawGridOverlay = useCallback(() => {
+    const { width, height } = useEditorStore.getState();
+    const oc = overlayCanvasRef.current;
+    if (!oc || width === 0 || height === 0) return;
+
+    const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+    const cssW = width * zoom;
+    const cssH = height * zoom;
+
+    // Backing store at device res for crisp 1px lines. Assigning width/height
+    // resets the transform too, so reapply scale immediately after.
+    const bsW = Math.round(cssW * dpr);
+    const bsH = Math.round(cssH * dpr);
+    if (oc.width !== bsW || oc.height !== bsH) {
+      oc.width = bsW;
+      oc.height = bsH;
+    }
+    oc.style.width = `${cssW}px`;
+    oc.style.height = `${cssH}px`;
+
+    const ctx = oc.getContext('2d')!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.lineWidth = 1;
+    // CSS-logical space (the DPR transform handles HiDPI).
+    for (let x = 0; x <= width; x++) {
+      ctx.beginPath();
+      ctx.moveTo(x * zoom + 0.5, 0);
+      ctx.lineTo(x * zoom + 0.5, cssH);
+      ctx.stroke();
+    }
+    for (let y = 0; y <= height; y++) {
+      ctx.beginPath();
+      ctx.moveTo(0, y * zoom + 0.5);
+      ctx.lineTo(cssW, y * zoom + 0.5);
+      ctx.stroke();
+    }
+  }, [zoom]);
 
   // Pixel subscription — fires outside React reconciliation, no re-render.
   // Subscribes to `pixels` (always changes reference on any pixel mutation),
@@ -324,24 +331,36 @@ export default function PixelEditorBody({
   // even when prior lastDirtyRect was also null (Object.is would miss that).
   useEffect(() => {
     renderCanvasesFull();
+    drawGridOverlay();
     const unsub = useEditorStore.subscribe(
       (s) => s.pixels,
       () => {
         const rect = useEditorStore.getState().lastDirtyRect;
         if (rect === null) {
           renderCanvasesFull();
+          // Wholesale change may be a frame load with new dims — refresh grid.
+          drawGridOverlay();
         } else {
           patchDirtyRect(rect);
         }
       }
     );
     return unsub;
-  }, [renderCanvasesFull, patchDirtyRect]);
+  }, [renderCanvasesFull, patchDirtyRect, drawGridOverlay]);
 
-  // Re-render on zoom change (canvas dims change — must redraw chrome).
+  // Re-render on zoom change (image canvas's CSS size + overlay's full geometry).
   useEffect(() => {
     renderCanvasesFull();
-  }, [zoom, renderCanvasesFull]);
+    drawGridOverlay();
+  }, [zoom, renderCanvasesFull, drawGridOverlay]);
+
+  // Window resize — DPR may have changed (e.g., window dragged to another
+  // monitor). Overlay-only; the image canvas is DPR-agnostic.
+  useEffect(() => {
+    const handler = () => drawGridOverlay();
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, [drawGridOverlay]);
 
   const getPixelCoords = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -444,14 +463,22 @@ export default function PixelEditorBody({
   const handleMouseUp = useCallback(() => {
     if (isDrawing && tool !== 'eyedropper') {
       endStroke();
-      // Per-event patches may have overwritten grid pixels inside their dirty
-      // rects. One full redraw at stroke end restores the grid. Cheap (once
-      // per stroke, not per event).
-      renderCanvasesFull();
+      // Wave 1c: minimal correctness backstop. The grid + checkerboard live
+      // on separate layers and weren't touched by the patch path, so the old
+      // full-chrome redraw is unnecessary (it caused a visible flash). A
+      // single putImageData of the canonical buffer is cheap and zoom-
+      // independent — guards against any sub-pixel drift between the per-
+      // event patches and the store's final buffer state.
+      const ec = editorCanvasRef.current;
+      const { pixels, width, height } = useEditorStore.getState();
+      if (ec && pixels && width > 0 && height > 0 && ec.width === width && ec.height === height) {
+        const ctx = ec.getContext('2d')!;
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0);
+      }
     }
     setIsDrawing(false);
     prevCellRef.current = null;
-  }, [isDrawing, tool, endStroke, renderCanvasesFull]);
+  }, [isDrawing, tool, endStroke]);
 
   const handleMouseEnter = useCallback(() => setCursorVisible(true), []);
   const handleMouseLeaveCanvas = useCallback(() => {
@@ -730,7 +757,11 @@ export default function PixelEditorBody({
             ))}
           </div>
 
-          {/* Canvas + cursor footprint overlay */}
+          {/* Canvas stack — image (bottom) → grid overlay (middle) → cursor
+              footprint (top). DOM order = paint order. The image canvas has
+              the transparency checkerboard as its CSS background, so any
+              alpha-0 region (eraser strokes, transparent project canvases)
+              reveals it through the canvas — no in-canvas tile fill needed. */}
           <div className="relative">
             <canvas
               ref={editorCanvasRef}
@@ -740,7 +771,24 @@ export default function PixelEditorBody({
               onMouseEnter={handleMouseEnter}
               onMouseLeave={handleMouseLeaveCanvas}
               className="block"
-              style={{ imageRendering: 'pixelated', cursor: 'none' }}
+              style={{
+                imageRendering: 'pixelated',
+                cursor: 'none',
+                // Wave 1c CSS checkerboard. Fixed 16px screen tile (8px
+                // squares) — intentional look change from the prior zoom-
+                // scaled in-canvas fill.
+                backgroundColor: '#1e1b18',
+                backgroundImage:
+                  'linear-gradient(45deg, #2a2725 25%, transparent 25%, transparent 75%, #2a2725 75%, #2a2725), ' +
+                  'linear-gradient(45deg, #2a2725 25%, transparent 25%, transparent 75%, #2a2725 75%, #2a2725)',
+                backgroundSize: '16px 16px',
+                backgroundPosition: '0 0, 8px 8px',
+              }}
+            />
+            <canvas
+              ref={overlayCanvasRef}
+              aria-hidden="true"
+              className="absolute top-0 left-0 pointer-events-none block"
             />
             <div
               aria-hidden="true"

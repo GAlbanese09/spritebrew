@@ -143,6 +143,8 @@ import { buildRdCreateBody, buildRdAnimateBody } from '@/lib/rdBodyBuilder';
 import {
   FREE_TIER_LIFETIME_PRO_CAP,
   FREE_TIER_LIFETIME_FAST_CAP,
+  ANIMATE_INPUT_B64_SERVER_MAX,
+  REFS_TOTAL_B64_QUEUE_MAX,
 } from '@/lib/constants';
 
 const FREE_TIER_CAP: Record<FreeTierBucket, number> = {
@@ -201,6 +203,73 @@ export async function POST(request: Request) {
   const tokenCost = getTokenCost(promptStyle);
   const bucket: FreeTierBucket = getFreeTierBucket(promptStyle);
   const isAdmin = isAdminUser(userId);
+
+  // Queue-kickoff routing decision — hoisted so the pre-debit guards below
+  // can short-circuit cleanly for users on the queue path without re-running
+  // the feature-flag check inside the post-debit branch.
+  const queueKickoff = isQueueKickoffEnabled(userId, process.env as Record<string, unknown>);
+
+  // Pre-debit gates for the queue-kickoff path. All return 400 BEFORE any
+  // debit fires, so there's no refund/orphan-debit churn for these cases.
+
+  // 1. idempotencyKey requirement — moved here from inside the queue branch
+  //    (previously a post-debit 400 that orphaned the debit on misbehaving
+  //    clients). Same JSON shape as the old check.
+  if (queueKickoff) {
+    const idempotencyKey = body.idempotencyKey;
+    if (typeof idempotencyKey !== 'string' || idempotencyKey.length < 8) {
+      return new Response(
+        JSON.stringify({ error: 'idempotencyKey required for queue-kickoff path' }),
+        { status: 400, headers: { 'content-type': 'application/json' } }
+      );
+    }
+  }
+
+  // 2. Animate inputImage payload-size guard. Cloudflare Queues caps a
+  //    message at 128 KB and the base64-encoded inputImage is the dominant
+  //    field. Reject above ANIMATE_INPUT_B64_SERVER_MAX with a friendly
+  //    message; client now budgets to a stricter ANIMATE_INPUT_B64_CLIENT_MAX,
+  //    so this only fires for misbehaving clients or stale tabs.
+  if (
+    queueKickoff &&
+    mode === 'animate' &&
+    typeof body.inputImage === 'string' &&
+    body.inputImage.length > ANIMATE_INPUT_B64_SERVER_MAX
+  ) {
+    return Response.json(
+      {
+        success: false,
+        error: 'input_image_too_large',
+        message: 'Your character image is too large to process. Re-upload it (it will be optimized automatically) or choose a smaller resolution.',
+      },
+      { status: 400 }
+    );
+  }
+
+  // 3. Create-mode reference-images total-size guard (queue path only).
+  //    Reference uploads aren't client-side budgeted today, so this is the
+  //    only line of defense against an oversized aggregate.
+  if (
+    queueKickoff &&
+    mode === 'create' &&
+    Array.isArray(body.referenceImages) &&
+    body.referenceImages.length > 0
+  ) {
+    const totalRefBytes = body.referenceImages.reduce(
+      (sum, img) => sum + (typeof img === 'string' ? img.length : 0),
+      0
+    );
+    if (totalRefBytes > REFS_TOTAL_B64_QUEUE_MAX) {
+      return Response.json(
+        {
+          success: false,
+          error: 'reference_images_too_large',
+          message: 'Reference images this large are not supported for queued generations yet. Use fewer or smaller references for now.',
+        },
+        { status: 400 }
+      );
+    }
+  }
 
   // (S16: email-verify earn-back removed — bots pass OTP trivially. Engagement
   // rewards now live in the daily-login + email-list flows. We keep the
@@ -265,15 +334,10 @@ export async function POST(request: Request) {
   //
   // Day-1+ rollout: env var stays 'false'; admin auto-included via isAdminUser, staged-rollout users via isQueueBetaUser.
   // When flag is OFF, behavior below is byte-identical to pre-refactor.
-  if (isQueueKickoffEnabled(userId, process.env as Record<string, unknown>)) {
-    // Client must supply idempotencyKey for this path.
-    const idempotencyKey = body.idempotencyKey;
-    if (typeof idempotencyKey !== 'string' || idempotencyKey.length < 8) {
-      return new Response(
-        JSON.stringify({ error: 'idempotencyKey required for queue-kickoff path' }),
-        { status: 400, headers: { 'content-type': 'application/json' } }
-      );
-    }
+  // queueKickoff hoisted above the debit; idempotencyKey already validated.
+  if (queueKickoff) {
+    // idempotencyKey is guaranteed valid by the pre-debit gate above.
+    const idempotencyKey = body.idempotencyKey as string;
 
     // Wrap everything from here through the 202 in try/catch so a throw at
     // any step (KV get/put, RD body build, enqueueJob's binding check, or

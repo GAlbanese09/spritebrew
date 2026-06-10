@@ -82,6 +82,31 @@ export const EARN_BACK_DISCORD_JOINED_TOKENS = 40;
 export const EARN_BACK_FIRST_SHARE_TOKENS = 20;
 export const EARN_BACK_FLAG_TTL_SECONDS = 50 * 24 * 60 * 60; // 50 days
 
+// ── Animate queue-path payload budgets ──
+// Cloudflare Queues caps a single message at 128,000 bytes (the consumer's
+// receive() throws/drops above that). Our queue message is JSON-stringified
+// and the dominant field is the base64-encoded input image (or reference
+// images on Create mode). Base64 inflates raw bytes by 4/3, so a 90 KB PNG
+// becomes ~120,000 base64 chars — already most of the budget. The three
+// caps below leave headroom for the JSON envelope (jobId, userId, mode,
+// idempotencyKey, etc., ~2-3 KB) and for any future field additions:
+//
+//   CLIENT_MAX:  client encode ladder targets this — if encoding exceeds
+//                it the ladder posterizes/pixelates the buffer before
+//                handing off to handleGenerate.
+//   SERVER_MAX:  server reject threshold (pre-debit guard); slightly
+//                above CLIENT_MAX so a legitimately-just-over client
+//                still gets a friendly 400 instead of a bare 500.
+//   REFS_TOTAL:  combined cap on Create-mode reference_images when the
+//                queue-kickoff path is on. Reference uploads currently
+//                aren't client-side budgeted, so the server-side guard
+//                is the only line of defense here.
+//
+// All three are expressed in BASE64 STRING LENGTH, not raw bytes.
+export const ANIMATE_INPUT_B64_CLIENT_MAX = 120_000;
+export const ANIMATE_INPUT_B64_SERVER_MAX = 124_000;
+export const REFS_TOTAL_B64_QUEUE_MAX = 110_000;
+
 // Demo area keyboard controls
 export const DEMO_CONTROLS = {
   move: { keys: ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'], alt: ['a', 'd', 'w', 's'], description: 'Move character' },

@@ -23,6 +23,7 @@ import {
 } from '@/lib/styleRegistry';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
+import { ANIMATE_INPUT_B64_CLIENT_MAX } from '@/lib/constants';
 import {
   loadLatestConfig,
   saveLatestConfig,
@@ -352,8 +353,29 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     if (!file) return;
     e.target.value = '';
 
-    if (file.type !== 'image/png') {
-      useSpriteStore.getState().setGenerationError('Please upload a PNG file.');
+    // Widened format allowlist (build #2025-06). Downstream canvas re-encode
+    // normalizes everything to PNG, so JPG/WebP/GIF flow through unchanged.
+    // For GIFs only the first frame is used (native Image decode). Empty
+    // file.type means the Files app didn't supply a MIME — let decode decide.
+    const ACCEPTED_TYPES = new Set([
+      'image/png',
+      'image/jpeg',
+      'image/webp',
+      'image/gif',
+    ]);
+    if (file.type && !ACCEPTED_TYPES.has(file.type)) {
+      // HEIC/HEIF: iOS-photo-library special case (the user almost certainly
+      // got here by picking from the Files app rather than the Photos app).
+      const lowerName = file.name.toLowerCase();
+      const isHeic =
+        file.type === 'image/heic' ||
+        file.type === 'image/heif' ||
+        lowerName.endsWith('.heic') ||
+        lowerName.endsWith('.heif');
+      const msg = isHeic
+        ? "iPhone HEIC photos aren't supported directly. Pick the photo from your Photos library instead (iOS converts it automatically) or export it as JPG or PNG first."
+        : "Couldn't read that image file. Please try a PNG or JPG.";
+      useSpriteStore.getState().setGenerationError(msg);
       return;
     }
 
@@ -373,6 +395,18 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         setCharWidth(0);
         setCharHeight(0);
         setHasAlpha(false);
+      };
+      img.onerror = () => {
+        const lowerName = file.name.toLowerCase();
+        const isHeic =
+          file.type === 'image/heic' ||
+          file.type === 'image/heif' ||
+          lowerName.endsWith('.heic') ||
+          lowerName.endsWith('.heif');
+        const msg = isHeic
+          ? "iPhone HEIC photos aren't supported directly. Pick the photo from your Photos library instead (iOS converts it automatically) or export it as JPG or PNG first."
+          : "Couldn't read that image file. Please try a PNG or JPG.";
+        useSpriteStore.getState().setGenerationError(msg);
       };
       img.src = dataUrl;
     };
@@ -494,12 +528,36 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setTemplateError(null);
   }, []);
 
-  /** Convert the uploaded RGBA image to RGB by compositing onto bgColor */
-  const convertToRgbBase64 = useCallback((): string | null => {
+  /**
+   * Convert the uploaded RGBA image to a base64-encoded RGB PNG, compositing
+   * onto bgColor and budget-aware-encoded so the result fits the Cloudflare
+   * Queues 128 KB message cap (queue-kickoff path).
+   *
+   * Budget ladder — each rung re-encodes and returns if the base64 length is
+   * <= ANIMATE_INPUT_B64_CLIENT_MAX:
+   *   1. straight PNG of the composited canvas
+   *   2. posterize to 32 levels per channel (drop low 3 bits)
+   *   3. half-res nearest-neighbor round-trip + posterize
+   *   4. quarter-res nearest-neighbor round-trip + posterize
+   *   5. give up (caller surfaces a friendly error and aborts pre-debit)
+   *
+   * Also awaits img.decode() to kill the silent drawImage-on-undecoded-image
+   * race that could composite a flat bg-color square.
+   */
+  const convertToRgbBase64 = useCallback(async (): Promise<string | null> => {
     if (!characterDataUrl) return null;
 
     const img = new Image();
     img.src = characterDataUrl;
+    try {
+      await img.decode();
+    } catch {
+      useSpriteStore.getState().setGenerationError(
+        "Couldn't read your character image. Please re-upload it."
+      );
+      return null;
+    }
+
     const canvas = document.createElement('canvas');
     canvas.width = charWidth;
     canvas.height = charHeight;
@@ -510,7 +568,79 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     ctx.fillRect(0, 0, charWidth, charHeight);
     ctx.drawImage(img, 0, 0);
 
-    return canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
+    const encode = (): string =>
+      canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
+
+    // Posterize the canvas in place: r/g/b &= 0xF8 → 32 levels per channel.
+    // Alpha untouched. Cuts PNG entropy substantially for detailed photos.
+    const posterize = () => {
+      const data = ctx.getImageData(0, 0, charWidth, charHeight);
+      const px = data.data;
+      for (let i = 0; i < px.length; i += 4) {
+        px[i] = px[i] & 0xF8;
+        px[i + 1] = px[i + 1] & 0xF8;
+        px[i + 2] = px[i + 2] & 0xF8;
+      }
+      ctx.putImageData(data, 0, 0);
+    };
+
+    // Half/quarter-res nearest-neighbor round-trip: shrink to (w/divisor)
+    // with high-quality smoothing, then upscale back to native with nearest
+    // neighbor. Net effect: pixel-art-style detail collapse → much smaller
+    // PNG. Then posterize for an additional entropy win.
+    const collapse = (divisor: number) => {
+      const sw = Math.max(1, Math.floor(charWidth / divisor));
+      const sh = Math.max(1, Math.floor(charHeight / divisor));
+      const tmp = document.createElement('canvas');
+      tmp.width = sw;
+      tmp.height = sh;
+      const tctx = tmp.getContext('2d')!;
+      tctx.imageSmoothingEnabled = true;
+      tctx.imageSmoothingQuality = 'high';
+      tctx.drawImage(canvas, 0, 0, sw, sh);
+      ctx.clearRect(0, 0, charWidth, charHeight);
+      ctx.imageSmoothingEnabled = false;
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(0, 0, charWidth, charHeight);
+      ctx.drawImage(tmp, 0, 0, sw, sh, 0, 0, charWidth, charHeight);
+      posterize();
+    };
+
+    // Rung 1: straight PNG.
+    let out = encode();
+    if (out.length <= ANIMATE_INPUT_B64_CLIENT_MAX) {
+      console.debug('[animate encode]', { rung: 1, chars: out.length });
+      return out;
+    }
+
+    // Rung 2: posterize.
+    posterize();
+    out = encode();
+    if (out.length <= ANIMATE_INPUT_B64_CLIENT_MAX) {
+      console.debug('[animate encode]', { rung: 2, chars: out.length });
+      return out;
+    }
+
+    // Rung 3: half-res collapse + posterize.
+    collapse(2);
+    out = encode();
+    if (out.length <= ANIMATE_INPUT_B64_CLIENT_MAX) {
+      console.debug('[animate encode]', { rung: 3, chars: out.length });
+      return out;
+    }
+
+    // Rung 4: quarter-res collapse + posterize.
+    collapse(4);
+    out = encode();
+    if (out.length <= ANIMATE_INPUT_B64_CLIENT_MAX) {
+      console.debug('[animate encode]', { rung: 4, chars: out.length });
+      return out;
+    }
+
+    // Rung 5: give up — caller surfaces the friendly error and aborts before
+    // any network call (no debit ever happens).
+    console.debug('[animate encode]', { rung: 5, chars: out.length });
+    return null;
   }, [characterDataUrl, charWidth, charHeight, bgColor]);
 
   const handleGenerate = useCallback(async () => {
@@ -521,8 +651,18 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     if (clickedAt - lastGenerateAtRef.current < 1_000) return;
     lastGenerateAtRef.current = clickedAt;
 
-    const rgbBase64 = convertToRgbBase64();
-    if (!rgbBase64) return;
+    const rgbBase64 = await convertToRgbBase64();
+    if (!rgbBase64) {
+      // convertToRgbBase64 already set a specific error for the decode-failure
+      // path. The other null case is rung-5 "couldn't fit under the queue
+      // budget" — only surface that message if no error was set above.
+      if (!useSpriteStore.getState().generationError) {
+        setGenerationError(
+          `This image is too detailed to send at ${selectedResolution}x${selectedResolution}. Try the 128 resolution or a simpler image.`
+        );
+      }
+      return;
+    }
 
     setGenerating(true);
     setGeneratingAction(selectedAction);
@@ -743,7 +883,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
               Drop your pixel art character here
             </p>
             <p className="text-[10px] font-mono text-text-muted mb-3">
-              PNG only &middot; any size — we&apos;ll auto-crop and resize
+              PNG, JPG, or WebP &middot; any size, we&apos;ll auto-crop and resize
             </p>
             <Button
               variant="secondary"
@@ -761,7 +901,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".png"
+          accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif"
           onChange={handleFileUpload}
           className="hidden"
         />

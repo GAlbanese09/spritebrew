@@ -983,10 +983,10 @@ export default function PixelEditorBody({
 
   return (
     <div
-      className="h-full grid grid-rows-[auto_1fr] grid-cols-[56px_1fr_280px] [grid-template-areas:'header_header_header''toolbar_canvas_sidepanel'] bg-bg-primary"
+      className="h-full grid bg-bg-primary grid-rows-[auto_1fr_auto] grid-cols-1 [grid-template-areas:'header''canvas''bottombar'] md:grid-rows-[auto_1fr] md:grid-cols-[56px_1fr_280px] md:[grid-template-areas:'header_header_header''toolbar_canvas_sidepanel']"
     >
       {/* Header */}
-      <header className="[grid-area:header] flex items-center justify-between px-4 py-3 border-b border-border-default bg-bg-primary">
+      <header className="[grid-area:header] flex items-center justify-between px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] md:pt-3 border-b border-border-default bg-bg-primary">
         <h2 className="text-sm font-mono font-semibold text-text-primary">
           Pixel Editor
           <span className="ml-2 text-text-muted font-normal">
@@ -1024,14 +1024,16 @@ export default function PixelEditorBody({
         )}
       </header>
 
-      {/* Toolbar (left) */}
-      <aside className="[grid-area:toolbar] border-r border-border-default bg-bg-secondary overflow-y-auto [scrollbar-gutter:stable] p-2 flex flex-col gap-2">
+      {/* Toolbar — vertical rail on md+ (its original placement); horizontal
+          bottom bar on mobile (overflow-x scrolls if needed). Buttons grow to
+          a 44×44 touch target on mobile and revert to compact sizing on md. */}
+      <aside className="[grid-area:bottombar] flex flex-row items-center gap-2 overflow-x-auto border-t border-border-default bg-bg-secondary p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:[grid-area:toolbar] md:flex-col md:items-stretch md:overflow-x-visible md:overflow-y-auto md:[scrollbar-gutter:stable] md:border-t-0 md:border-r md:pb-2">
         {toolButtons.map(({ id, icon: Icon, label }) => (
           <button
             key={id}
             onClick={() => setTool(id)}
             title={label}
-            className={`p-2 rounded cursor-pointer transition-colors
+            className={`p-2 rounded cursor-pointer transition-colors min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0
               ${tool === id
                 ? 'bg-accent-amber text-bg-primary'
                 : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'
@@ -1041,19 +1043,30 @@ export default function PixelEditorBody({
           </button>
         ))}
 
-        <div className="w-full h-px bg-border-subtle my-1" />
+        {/* Mobile-only color picker. Sidepanel hosts the desktop equivalent;
+            this keeps color reachable now that the sidepanel hides below md.
+            Replaced by the slide-up palette sheet in Wave 2b-2. */}
+        <input
+          type="color"
+          value={color}
+          onChange={(e) => setColor(e.target.value)}
+          aria-label="Foreground color"
+          className="w-11 h-11 shrink-0 rounded border border-border-default cursor-pointer appearance-none md:hidden [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-sm"
+        />
 
-        <div className="text-[9px] font-mono text-text-muted uppercase tracking-wider text-center">
+        <div className="w-full h-px bg-border-subtle my-1 hidden md:block" />
+
+        <div className="text-[9px] font-mono text-text-muted uppercase tracking-wider text-center hidden md:block">
           Brush
         </div>
-        <div className="grid grid-cols-3 gap-1">
+        <div className="flex gap-1 md:grid md:grid-cols-3">
           {VALID_BRUSH_SIZES.map((size) => (
             <button
               key={size}
               onClick={() => setBrushSize(size)}
               aria-label={`Brush size ${size}px`}
               title={`Brush size ${size}px ( [ / ] )`}
-              className={`h-7 rounded text-[10px] font-mono cursor-pointer transition-colors
+              className={`h-11 w-11 shrink-0 md:h-7 md:w-auto rounded text-[10px] font-mono cursor-pointer transition-colors
                 ${brushSize === size
                   ? 'bg-accent-amber text-bg-primary'
                   : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
@@ -1064,13 +1077,13 @@ export default function PixelEditorBody({
           ))}
         </div>
 
-        <div className="w-full h-px bg-border-subtle my-1" />
+        <div className="w-full h-px bg-border-subtle my-1 hidden md:block" />
 
         <button
           onClick={undo}
           title="Undo (Ctrl+Z)"
           disabled={!canUndo}
-          className="p-2 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+          className="p-2 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0"
         >
           <Undo2 size={16} />
         </button>
@@ -1078,18 +1091,18 @@ export default function PixelEditorBody({
           onClick={redo}
           title="Redo (Ctrl+Shift+Z)"
           disabled={!canRedo}
-          className="p-2 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+          className="p-2 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0"
         >
           <Redo2 size={16} />
         </button>
 
-        <div className="w-full h-px bg-border-subtle my-1" />
+        <div className="w-full h-px bg-border-subtle my-1 hidden md:block" />
 
         <button
           onClick={revertToOriginal}
           title="Revert to original (undoable)"
           disabled={!isDirty}
-          className="p-2 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+          className="p-2 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0"
           aria-label="Revert to original"
         >
           <History size={16} />
@@ -1227,8 +1240,10 @@ export default function PixelEditorBody({
         </div>
       </main>
 
-      {/* Sidepanel (right): color + palette + future preview */}
-      <aside className="[grid-area:sidepanel] border-l border-border-default bg-bg-secondary overflow-y-auto [scrollbar-gutter:stable] p-3 flex flex-col gap-4">
+      {/* Sidepanel (right): color + palette + future preview. Hidden on
+          mobile (palette returns as the Wave 2b-2 slide-up sheet; color is
+          surfaced inline in the mobile bottom bar). */}
+      <aside className="[grid-area:sidepanel] hidden md:flex flex-col gap-4 border-l border-border-default bg-bg-secondary overflow-y-auto [scrollbar-gutter:stable] p-3">
         {/* Current color — single styled input acts as both swatch and picker. */}
         <div className="flex flex-col gap-2">
           <div className="text-[9px] font-mono text-text-muted uppercase tracking-wider">

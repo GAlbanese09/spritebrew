@@ -438,6 +438,26 @@ export default function PixelEditorBody({
     }
   }, [zoom]);
 
+  // Clamp committed pan so the canvas can't drift past sensible bounds:
+  // when the scaled canvas is smaller than the viewport on an axis, max=0 ->
+  // pan clamps to 0 -> flex-centered (recenters on zoom-out). When larger,
+  // pan is bounded so the canvas edge can't pass the viewport center (can't
+  // shove the canvas off-screen). Valid ONLY where the committed scale is 1
+  // (post-commit zoom + wheel-pan); NOT during a live pinch (scale != 1,
+  // where transform-origin 0,0 means pan=0 isn't "centered"). So we never
+  // call this from the live gesture-move branch — only from commit points.
+  const clampPan = useCallback(
+    (pan: { x: number; y: number }, zoomLevel: number) => {
+      const vp = containerRef.current?.getBoundingClientRect();
+      const { width, height } = useEditorStore.getState();
+      if (!vp || width === 0 || height === 0) return pan;
+      const maxX = Math.max(0, (width * zoomLevel - vp.width) / 2);
+      const maxY = Math.max(0, (height * zoomLevel - vp.height) / 2);
+      return { x: clamp(pan.x, -maxX, maxX), y: clamp(pan.y, -maxY, maxY) };
+    },
+    []
+  );
+
   // Single commit point for the wrapper transform + zoom state. Every
   // committer (gesture-end, wheel zoom, zoom buttons) routes through here so
   // the commit contract is honored in one place:
@@ -447,13 +467,14 @@ export default function PixelEditorBody({
   //   - If zoom is unchanged (idempotent setZoom skips re-render so the
   //     layout effect can't fire), write the transform directly and clear
   //     pendingTransformRef so no stale string carries into the next commit.
-  // panRef is always updated to the new pan so subsequent gestures pick up
-  // the current committed position.
+  // panRef is always updated to the (clamped) new pan so subsequent gestures
+  // pick up the current committed position.
   const commitZoomPan = useCallback(
     (nextZoom: number, nextPan: { x: number; y: number }) => {
       const clampedZoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
-      panRef.current = { x: nextPan.x, y: nextPan.y };
-      const transform = `translate3d(${nextPan.x}px, ${nextPan.y}px, 0)`;
+      const clampedPan = clampPan(nextPan, clampedZoom);
+      panRef.current = clampedPan;
+      const transform = `translate3d(${clampedPan.x}px, ${clampedPan.y}px, 0)`;
       if (clampedZoom === zoom) {
         if (stackRef.current) stackRef.current.style.transform = transform;
         pendingTransformRef.current = null;
@@ -462,40 +483,50 @@ export default function PixelEditorBody({
         setZoom(clampedZoom);
       }
     },
-    [zoom]
+    [zoom, clampPan]
   );
 
-  // Wave 2a desktop wheel zoom — only on ctrl/cmd+wheel (trackpad pinch on
-  // macOS surfaces as ctrlKey wheel). Plain wheel is untouched and still
-  // scrolls the container via overflow-auto. Anchored at cursor position so
-  // the canvas pixel under the cursor stays put across the zoom change.
+  // Wave 2a desktop wheel:
+  //   - ctrl/cmd+wheel = ZOOM, anchored at the cursor (trackpad pinch on
+  //     macOS surfaces as ctrlKey wheel).
+  //   - plain wheel / two-finger swipe = PAN (replaces the prior scroll-pan
+  //     since the viewport is now overflow-hidden). Bounded by clampPan.
   // Attached via addEventListener with { passive: false } because React's
   // synthetic onWheel is passive and preventDefault would no-op.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     const handler = (e: WheelEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
       e.preventDefault();
-      const s = Math.exp(-e.deltaY * 0.0015);
-      const newZoom = clamp(zoom * s, MIN_ZOOM, MAX_ZOOM);
-      if (newZoom === zoom) return;
-      const stackRect = stackRef.current?.getBoundingClientRect();
-      if (!stackRect) return;
-      const localCss = {
-        x: e.clientX - stackRect.left,
-        y: e.clientY - stackRect.top,
-      };
-      const sEff = newZoom / zoom;
-      const newPan = {
-        x: panRef.current.x + (1 - sEff) * localCss.x,
-        y: panRef.current.y + (1 - sEff) * localCss.y,
-      };
-      commitZoomPan(newZoom, newPan);
+      if (e.ctrlKey || e.metaKey) {
+        const s = Math.exp(-e.deltaY * 0.0015);
+        const newZoom = clamp(zoom * s, MIN_ZOOM, MAX_ZOOM);
+        if (newZoom === zoom) return;
+        const stackRect = stackRef.current?.getBoundingClientRect();
+        if (!stackRect) return;
+        const localCss = { x: e.clientX - stackRect.left, y: e.clientY - stackRect.top };
+        const sEff = newZoom / zoom;
+        const newPan = {
+          x: panRef.current.x + (1 - sEff) * localCss.x,
+          y: panRef.current.y + (1 - sEff) * localCss.y,
+        };
+        commitZoomPan(newZoom, newPan);
+      } else {
+        // Plain wheel / two-finger swipe = pan (clamped). No zoom change, so
+        // write the transform directly; no setZoom / pendingTransform needed.
+        const newPan = clampPan(
+          { x: panRef.current.x - e.deltaX, y: panRef.current.y - e.deltaY },
+          zoom
+        );
+        panRef.current = newPan;
+        if (stackRef.current) {
+          stackRef.current.style.transform = `translate3d(${newPan.x}px, ${newPan.y}px, 0)`;
+        }
+      }
     };
     container.addEventListener('wheel', handler, { passive: false });
     return () => container.removeEventListener('wheel', handler);
-  }, [zoom, commitZoomPan]);
+  }, [zoom, commitZoomPan, clampPan]);
 
   // Wave 2a getPixelCoords — accepts a {clientX, clientY} payload (so it
   // works with pointer / wheel / synthetic events) and derives the visual
@@ -1051,10 +1082,12 @@ export default function PixelEditorBody({
         </button>
       </aside>
 
-      {/* Canvas (center) */}
-      <main className="[grid-area:canvas] overflow-auto bg-bg-primary relative">
+      {/* Canvas (center) — a fixed clipping viewport. Pan is fully transform-
+          based now (the wheel handler pans on plain wheel), so we drop the
+          overflow-auto scroll plane. Controls float above as overlays. */}
+      <main className="[grid-area:canvas] overflow-hidden bg-bg-primary relative">
         {loadError && (
-          <div className="absolute inset-0 flex items-center justify-center p-8 z-10">
+          <div className="absolute inset-0 flex items-center justify-center p-8 z-20">
             <div className="max-w-md rounded-lg border border-red-500/30 bg-red-500/5 p-4 flex items-start gap-3">
               <AlertCircle size={18} className="text-red-400 flex-shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
@@ -1074,6 +1107,34 @@ export default function PixelEditorBody({
             </div>
           </div>
         )}
+        {/* Zoom controls — floating overlay above the canvas. Outside the
+            pointer-capturing container so button presses never reach the
+            gesture handlers (the closest() guard in handlePointerDown stays
+            as defense but isn't load-bearing anymore). Presets + continuous
+            readout. Pinch/wheel land on non-preset values (e.g. 7.3x), so
+            no button may be highlighted after a gesture; intentional. */}
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-2 py-1 rounded bg-bg-primary/80 backdrop-blur-sm border border-border-subtle">
+          <label className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
+            Zoom
+          </label>
+          {([4, 8, 12, 16] as const).map((z) => (
+            <button
+              key={z}
+              onClick={() => commitZoomPan(z, { x: 0, y: 0 })}
+              className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors
+                ${zoom === z
+                  ? 'bg-accent-amber text-bg-primary'
+                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
+                }`}
+            >
+              {z}x
+            </button>
+          ))}
+          <span className="text-[10px] font-mono text-text-muted tabular-nums" aria-live="polite">
+            {zoom.toFixed(1)}x
+          </span>
+        </div>
+
         <div
           ref={containerRef}
           onPointerDown={handlePointerDown}
@@ -1081,7 +1142,7 @@ export default function PixelEditorBody({
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
           onLostPointerCapture={handlePointerUp}
-          className="min-h-full flex flex-col items-center justify-center p-4 gap-4"
+          className="absolute inset-0 flex items-center justify-center"
           style={{
             // Wave 2a touch CSS: kill browser's default touch behaviors so
             // one-finger drags hit our pointer handlers instead of scrolling
@@ -1094,31 +1155,6 @@ export default function PixelEditorBody({
             WebkitTouchCallout: 'none',
           }}
         >
-          {/* Zoom controls — presets + continuous readout. Pinch/wheel land
-              on non-preset values (e.g. 7.3x), so no button may be highlighted
-              after a gesture; that's intentional and acceptable for 2a. */}
-          <div className="flex items-center gap-2">
-            <label className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
-              Zoom
-            </label>
-            {([4, 8, 12, 16] as const).map((z) => (
-              <button
-                key={z}
-                onClick={() => commitZoomPan(z, { x: 0, y: 0 })}
-                className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors
-                  ${zoom === z
-                    ? 'bg-accent-amber text-bg-primary'
-                    : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
-                  }`}
-              >
-                {z}x
-              </button>
-            ))}
-            <span className="text-[10px] font-mono text-text-muted tabular-nums" aria-live="polite">
-              {zoom.toFixed(1)}x
-            </span>
-          </div>
-
           {/* Canvas stack — image (bottom) → grid overlay (middle) → cursor
               footprint (top). DOM order = paint order. The image canvas has
               the transparency checkerboard as its CSS background, so any
@@ -1167,7 +1203,7 @@ export default function PixelEditorBody({
           {/* Brush-size toast */}
           {brushToast && (
             <div
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded bg-black/80 text-amber-300 text-xs font-mono pointer-events-none"
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 px-3 py-1.5 rounded bg-black/80 text-amber-300 text-xs font-mono pointer-events-none"
               role="status"
               aria-live="polite"
             >

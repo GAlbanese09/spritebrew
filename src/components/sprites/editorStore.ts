@@ -217,6 +217,11 @@ export interface PixelEditorState {
    * revert itself is undoable (pushes onto historyStack like a normal stroke).
    */
   revertToOriginal: () => void;
+  /** Discard an in-progress stroke: restore the pre-stroke snapshot.
+   *  A partial stroke's pixels are live in `pixels` but not yet in history
+   *  (endStroke hasn't fired), so restoring historyStack[historyIndex]
+   *  drops them. Used by gesture arbitration when a second finger lands. */
+  cancelStroke: () => void;
   setActiveTool: (tool: Tool) => void;
   setForegroundColor: (color: string) => void;
   setBrushSize: (size: BrushSize) => void;
@@ -555,6 +560,16 @@ export const useEditorStore = create<PixelEditorState>()(
         pixels: new Uint8ClampedArray(originalPixels),
         historyStack: nextStack,
         historyIndex: nextStack.length - 1,
+        lastDirtyRect: null, // wholesale replacement → full repaint
+      });
+    },
+
+    cancelStroke: () => {
+      const { historyStack, historyIndex, pixels } = get();
+      if (!pixels) return;
+      if (historyIndex < 0 || historyIndex >= historyStack.length) return;
+      set({
+        pixels: new Uint8ClampedArray(historyStack[historyIndex]),
         lastDirtyRect: null, // wholesale replacement → full repaint
       });
     },

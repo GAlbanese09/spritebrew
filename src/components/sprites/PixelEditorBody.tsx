@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Pencil, Eraser, Pipette, Undo2, Redo2, History, Save, X, ArrowLeft, Film, AlertCircle } from 'lucide-react';
@@ -26,6 +26,16 @@ import type { SpriteProjectSource } from '@/lib/spriteProject';
  *  <HotkeysProvider initiallyActiveScopes={['editor']}> lives in
  *  PixelEditor.tsx (modal) and app/editor/page.tsx (page route). */
 const EDITOR_HOTKEY_SCOPE = 'editor';
+
+// Wave 2a continuous-zoom range. Buttons remain as preset shortcuts inside
+// [4, 16], but pinch/wheel can land anywhere in [MIN_ZOOM, MAX_ZOOM] including
+// non-integer values.
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 32;
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}
 import { useSpriteStore } from '@/stores/spriteStore';
 import { extractPaletteFromImageData } from '@/lib/imagePalette';
 
@@ -106,6 +116,7 @@ export default function PixelEditorBody({
   const loadFrame = useEditorStore((s) => s.loadFrame);
   const beginStroke = useEditorStore((s) => s.beginStroke);
   const endStroke = useEditorStore((s) => s.endStroke);
+  const cancelStroke = useEditorStore((s) => s.cancelStroke);
   const paintPixel = useEditorStore((s) => s.paintPixel);
   const erasePixel = useEditorStore((s) => s.erasePixel);
   const paintLine = useEditorStore((s) => s.paintLine);
@@ -115,6 +126,37 @@ export default function PixelEditorBody({
   const redo = useEditorStore((s) => s.redo);
   const revertToOriginal = useEditorStore((s) => s.revertToOriginal);
   const reset = useEditorStore((s) => s.reset);
+
+  // Wave 2a refs for pointer-events arbitration + transform-based pan/zoom.
+  // containerRef hosts the pointer/wheel handlers (so a finger landing on
+  // padding still counts toward the gesture). stackRef is the canvas-stack
+  // wrapper that carries the transform during a pinch and the committed pan.
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const stackRef = useRef<HTMLDivElement | null>(null);
+  const panRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const gestureRef = useRef<{
+    startDist: number;
+    startMid: { x: number; y: number };
+    startPan: { x: number; y: number };
+    startZoom: number;
+    localCss: { x: number; y: number };
+    lastScale: number;
+    /** The two pointerIds that initiated this gesture (insertion order on
+     *  pointerdown→size===2). Identified explicitly so that a 3rd-finger
+     *  arrival followed by one of the originals lifting commits cleanly
+     *  rather than continuing with mismatched (B, C) geometry against an
+     *  (A, B) baseline. */
+    pointerIds: [number, number];
+  } | null>(null);
+  // True from the moment 2 pointers land until ALL pointers lift. Blocks the
+  // leftover finger from accidentally drawing after the user lifts one finger
+  // post-pinch (spec arbitration rule 4).
+  const gestureSessionRef = useRef<boolean>(false);
+  // Set by a committer (gesture-end or wheel) to the post-commit transform
+  // string. The useLayoutEffect keyed on [zoom] writes it AFTER React has
+  // applied the new canvas CSS size but BEFORE paint — same frame, no flicker.
+  const pendingTransformRef = useRef<string | null>(null);
 
   // Dimension-guardrail error path (Fix #5). If the loaded image exceeds
   // EDITOR_MAX_DIMENSION / EDITOR_MAX_PIXELS, the load effect bails out before
@@ -136,10 +178,21 @@ export default function PixelEditorBody({
   const [cursorVisible, setCursorVisible] = useState(false);
   const cursorRafRef = useRef<number | null>(null);
 
-  // Fit-to-viewport zoom on dim changes.
+  // Fit-to-viewport zoom on dim changes. Wave 2a resets the committed pan +
+  // writes a (0,0) translate transform directly so a fresh frame opens at
+  // its natural (flex-centered) position rather than carrying over the prior
+  // frame's pan/pinch state. We also clear pendingTransformRef so any stale
+  // string staged by a concurrent gesture commit can't leak through the
+  // next zoom change (defensive — handles a narrow race where a gesture
+  // commits in the same render cycle as a frame change).
   useEffect(() => {
     const maxEditorPx = Math.min(window.innerWidth - 200, window.innerHeight - 200, 640);
     const idealZoom = Math.floor(maxEditorPx / Math.max(frameWidth, frameHeight));
+    panRef.current = { x: 0, y: 0 };
+    pendingTransformRef.current = null;
+    if (stackRef.current) {
+      stackRef.current.style.transform = 'translate3d(0px, 0px, 0)';
+    }
     setZoom(Math.max(4, Math.min(16, idealZoom)));
   }, [frameWidth, frameHeight]);
 
@@ -306,6 +359,10 @@ export default function PixelEditorBody({
     const ctx = oc.getContext('2d')!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
+    // Wave 2a: sub-4x grids render as gray mush — skip the loop and leave
+    // the overlay cleared. The image itself is the visual reference at low
+    // zoom; the grid only earns its keep at pixel-art-editing zooms.
+    if (zoom < 4) return;
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
     ctx.lineWidth = 1;
     // CSS-logical space (the DPR transform handles HiDPI).
@@ -348,8 +405,13 @@ export default function PixelEditorBody({
     return unsub;
   }, [renderCanvasesFull, patchDirtyRect, drawGridOverlay]);
 
-  // Re-render on zoom change (image canvas's CSS size + overlay's full geometry).
-  useEffect(() => {
+  // Re-render on zoom change (image canvas's CSS size + overlay's full
+  // geometry). Wave 2a: this MUST be a layout effect so the canvas CSS size
+  // updates BEFORE paint and BEFORE the pendingTransformRef flush effect
+  // (declared after this one) writes the post-commit transform. Together,
+  // both updates land in the same pre-paint phase, eliminating the
+  // intermediate "old size + new no-scale transform" frame.
+  useLayoutEffect(() => {
     renderCanvasesFull();
     drawGridOverlay();
   }, [zoom, renderCanvasesFull, drawGridOverlay]);
@@ -362,16 +424,97 @@ export default function PixelEditorBody({
     return () => window.removeEventListener('resize', handler);
   }, [drawGridOverlay]);
 
+  // Wave 2a commit contract: when a gesture/wheel committer wants to atomic-
+  // ally swap the wrapper transform from `translate(p) scale(s)` to
+  // `translate(p')`, it stages the new transform string in pendingTransformRef
+  // and calls setZoom(newZoom). React commits the new zoom -> the zoom-change
+  // effects run renderCanvasesFull (resizing the canvas CSS to native*newZoom)
+  // -> THIS layout effect writes the staged transform. All in one frame
+  // before paint, so the user never sees an intermediate-state flicker.
+  useLayoutEffect(() => {
+    if (pendingTransformRef.current !== null && stackRef.current) {
+      stackRef.current.style.transform = pendingTransformRef.current;
+      pendingTransformRef.current = null;
+    }
+  }, [zoom]);
+
+  // Single commit point for the wrapper transform + zoom state. Every
+  // committer (gesture-end, wheel zoom, zoom buttons) routes through here so
+  // the commit contract is honored in one place:
+  //   - If zoom changes, stage the new transform string and call setZoom;
+  //     the [zoom]-keyed useLayoutEffect above flushes it AFTER the canvas
+  //     CSS size update in the same pre-paint phase (no flicker).
+  //   - If zoom is unchanged (idempotent setZoom skips re-render so the
+  //     layout effect can't fire), write the transform directly and clear
+  //     pendingTransformRef so no stale string carries into the next commit.
+  // panRef is always updated to the new pan so subsequent gestures pick up
+  // the current committed position.
+  const commitZoomPan = useCallback(
+    (nextZoom: number, nextPan: { x: number; y: number }) => {
+      const clampedZoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
+      panRef.current = { x: nextPan.x, y: nextPan.y };
+      const transform = `translate3d(${nextPan.x}px, ${nextPan.y}px, 0)`;
+      if (clampedZoom === zoom) {
+        if (stackRef.current) stackRef.current.style.transform = transform;
+        pendingTransformRef.current = null;
+      } else {
+        pendingTransformRef.current = transform;
+        setZoom(clampedZoom);
+      }
+    },
+    [zoom]
+  );
+
+  // Wave 2a desktop wheel zoom — only on ctrl/cmd+wheel (trackpad pinch on
+  // macOS surfaces as ctrlKey wheel). Plain wheel is untouched and still
+  // scrolls the container via overflow-auto. Anchored at cursor position so
+  // the canvas pixel under the cursor stays put across the zoom change.
+  // Attached via addEventListener with { passive: false } because React's
+  // synthetic onWheel is passive and preventDefault would no-op.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const handler = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const s = Math.exp(-e.deltaY * 0.0015);
+      const newZoom = clamp(zoom * s, MIN_ZOOM, MAX_ZOOM);
+      if (newZoom === zoom) return;
+      const stackRect = stackRef.current?.getBoundingClientRect();
+      if (!stackRect) return;
+      const localCss = {
+        x: e.clientX - stackRect.left,
+        y: e.clientY - stackRect.top,
+      };
+      const sEff = newZoom / zoom;
+      const newPan = {
+        x: panRef.current.x + (1 - sEff) * localCss.x,
+        y: panRef.current.y + (1 - sEff) * localCss.y,
+      };
+      commitZoomPan(newZoom, newPan);
+    };
+    container.addEventListener('wheel', handler, { passive: false });
+    return () => container.removeEventListener('wheel', handler);
+  }, [zoom, commitZoomPan]);
+
+  // Wave 2a getPixelCoords — accepts a {clientX, clientY} payload (so it
+  // works with pointer / wheel / synthetic events) and derives the visual
+  // scale FROM THE RECT, not from the React zoom state. This single change
+  // makes every tool correct under any pan/zoom/pinch state (spec AD-2).
+  // canvas.width is native pixels; rect.width is current CSS pixels under
+  // whatever transform chain sits above the canvas.
   const getPixelCoords = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
+    (e: { clientX: number; clientY: number }) => {
       const canvas = editorCanvasRef.current;
       if (!canvas) return null;
       const rect = canvas.getBoundingClientRect();
-      const x = Math.floor((e.clientX - rect.left) / zoom);
-      const y = Math.floor((e.clientY - rect.top) / zoom);
+      const scale = rect.width / Math.max(1, canvas.width);
+      if (scale <= 0) return null;
+      const x = Math.floor((e.clientX - rect.left) / scale);
+      const y = Math.floor((e.clientY - rect.top) / scale);
       return { x, y };
     },
-    [zoom]
+    []
   );
 
   const applyAt = useCallback(
@@ -405,86 +548,273 @@ export default function PixelEditorBody({
     [tool, color, paintLine, eraseLine]
   );
 
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      const coords = getPixelCoords(e);
-      if (!coords) return;
-      if (tool !== 'eyedropper') beginStroke();
-      setIsDrawing(true);
-      // Fresh stroke — no previous cell to interpolate from.
-      prevCellRef.current = null;
-      applyAt(coords.x, coords.y);
-      // After the initial stamp, seed prev so the next pointermove can
-      // Bresenham-interpolate from here. Eyedropper is one-shot; no prev.
-      if (tool !== 'eyedropper') {
-        prevCellRef.current = coords;
-      }
-    },
-    [getPixelCoords, tool, beginStroke, applyAt]
-  );
-
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      const rect = editorCanvasRef.current?.getBoundingClientRect();
-      if (rect) {
-        const cellX = Math.floor((e.clientX - rect.left) / zoom);
-        const cellY = Math.floor((e.clientY - rect.top) / zoom);
-        const half = Math.floor(brushSize / 2);
-        const ox = (cellX - half) * zoom;
-        const oy = (cellY - half) * zoom;
-        if (cursorRafRef.current !== null) cancelAnimationFrame(cursorRafRef.current);
-        cursorRafRef.current = requestAnimationFrame(() => {
-          setCursorX(ox);
-          setCursorY(oy);
-        });
-      }
-
-      if (!isDrawing || tool === 'eyedropper') return;
-      const coords = getPixelCoords(e);
-      if (!coords) return;
-
-      const prev = prevCellRef.current;
-      if (prev && (prev.x !== coords.x || prev.y !== coords.y)) {
-        // Interpolate to close per-event gaps on fast strokes. Bresenham
-        // walks each cell from prev→current; the line bbox covers the whole
-        // segment so the patch render captures every stamp in one update.
-        applyLine(prev.x, prev.y, coords.x, coords.y);
-      } else if (!prev) {
-        // Defensive — shouldn't happen given handleMouseDown seeds prev,
-        // but fall back to a single stamp so the user's input isn't lost.
-        applyAt(coords.x, coords.y);
-      }
-      // Same cell as prev → no-op (no stamp, no render).
-      prevCellRef.current = coords;
-    },
-    [isDrawing, tool, brushSize, zoom, getPixelCoords, applyAt, applyLine]
-  );
-
-  const handleMouseUp = useCallback(() => {
-    if (isDrawing && tool !== 'eyedropper') {
-      endStroke();
-      // Wave 1c: minimal correctness backstop. The grid + checkerboard live
-      // on separate layers and weren't touched by the patch path, so the old
-      // full-chrome redraw is unnecessary (it caused a visible flash). A
-      // single putImageData of the canonical buffer is cheap and zoom-
-      // independent — guards against any sub-pixel drift between the per-
-      // event patches and the store's final buffer state.
-      const ec = editorCanvasRef.current;
-      const { pixels, width, height } = useEditorStore.getState();
-      if (ec && pixels && width > 0 && height > 0 && ec.width === width && ec.height === height) {
-        const ctx = ec.getContext('2d')!;
-        ctx.putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0);
-      }
+  // Mouse-cursor brush footprint overlay. RAF-coalesced so rapid mouse moves
+  // produce at most one setState per frame. Hides when the mouse is outside
+  // canvas bounds. Touch/pen pointers do NOT call this — fingers occlude the
+  // footprint and there's nothing to show.
+  //
+  // canvas.getBoundingClientRect() includes ALL parent transforms (the
+  // wrapper's pan/zoom via stackRef), so scale = rect.width / canvas.width
+  // is the EFFECTIVE on-screen scale. cellX/cellY are correct canvas-pixel
+  // indices, and the cursor offset (cellX - half) * scale lands at the right
+  // CSS-pixel position within the (pre-transform) wrapper, where the cursor
+  // div is a child — the wrapper's transform then carries it to the final
+  // screen position. Same technique as getPixelCoords (Wave 2a spec AD-2).
+  const updateCursorForMouse = useCallback((clientX: number, clientY: number) => {
+    const canvas = editorCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scale = rect.width / Math.max(1, canvas.width);
+    if (scale <= 0) return;
+    const cellX = Math.floor((clientX - rect.left) / scale);
+    const cellY = Math.floor((clientY - rect.top) / scale);
+    if (cellX < 0 || cellX >= canvas.width || cellY < 0 || cellY >= canvas.height) {
+      setCursorVisible(false);
+      return;
     }
-    setIsDrawing(false);
-    prevCellRef.current = null;
-  }, [isDrawing, tool, endStroke]);
+    setCursorVisible(true);
+    const half = Math.floor(brushSize / 2);
+    const ox = (cellX - half) * scale;
+    const oy = (cellY - half) * scale;
+    if (cursorRafRef.current !== null) cancelAnimationFrame(cursorRafRef.current);
+    cursorRafRef.current = requestAnimationFrame(() => {
+      setCursorX(ox);
+      setCursorY(oy);
+    });
+  }, [brushSize]);
 
-  const handleMouseEnter = useCallback(() => setCursorVisible(true), []);
-  const handleMouseLeaveCanvas = useCallback(() => {
-    setCursorVisible(false);
-    handleMouseUp();
-  }, [handleMouseUp]);
+  // Wave 2a pointer handlers — replace the prior mouse handlers entirely.
+  // Bound on the CONTAINER (the flex div) so fingers on the padding still
+  // count toward a pinch; setPointerCapture routes all subsequent moves to
+  // us regardless of where the pointer ends up.
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const container = containerRef.current;
+      if (!container) return;
+      try {
+        container.setPointerCapture(e.pointerId);
+      } catch {
+        // Some browsers throw if pointerId isn't currently captureable; ignore.
+      }
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const size = pointersRef.current.size;
+
+      if (size === 1 && !gestureSessionRef.current) {
+        // Drawing branch — but only if the press landed on the canvas.
+        const coords = getPixelCoords(e);
+        if (!coords) return;
+        const canvas = editorCanvasRef.current;
+        if (!canvas) return;
+        if (coords.x < 0 || coords.x >= canvas.width || coords.y < 0 || coords.y >= canvas.height) {
+          // Inside container but outside canvas (padding/zoom-controls row).
+          // Don't start a stroke; the pointer is still captured so a pinch
+          // started here would still work.
+          return;
+        }
+        if (tool !== 'eyedropper') beginStroke();
+        setIsDrawing(true);
+        prevCellRef.current = null;
+        applyAt(coords.x, coords.y);
+        if (tool !== 'eyedropper') {
+          prevCellRef.current = coords;
+        }
+      } else if (size === 2) {
+        // Second pointer landed — kill any drawing in progress, start gesture.
+        // cancelStroke restores the pre-stroke snapshot from history so the
+        // partial stroke is invisible (spec AD-4).
+        if (isDrawing) {
+          cancelStroke();
+          setIsDrawing(false);
+          prevCellRef.current = null;
+        }
+        gestureSessionRef.current = true;
+        const ids = Array.from(pointersRef.current.keys());
+        const p0Id = ids[0];
+        const p1Id = ids[1];
+        const p0 = pointersRef.current.get(p0Id)!;
+        const p1 = pointersRef.current.get(p1Id)!;
+        const startMid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+        const startDist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+        const stackRect = stackRef.current?.getBoundingClientRect();
+        const localCss = stackRect
+          ? { x: startMid.x - stackRect.left, y: startMid.y - stackRect.top }
+          : { x: 0, y: 0 };
+        gestureRef.current = {
+          startDist: Math.max(1, startDist), // avoid div-by-zero on coincident touches
+          startMid,
+          startPan: { x: panRef.current.x, y: panRef.current.y },
+          startZoom: zoom,
+          localCss,
+          lastScale: 1,
+          pointerIds: [p0Id, p1Id],
+        };
+      }
+      // size > 2: ignore extra pointers (still captured/tracked, but no behavior).
+    },
+    [tool, beginStroke, isDrawing, applyAt, cancelStroke, getPixelCoords, zoom]
+  );
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!pointersRef.current.has(e.pointerId)) return;
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const size = pointersRef.current.size;
+      const g = gestureRef.current;
+
+      if (g && size >= 2) {
+        // Active pinch/pan — compute geometry from the SAME two pointer ids
+        // that initiated the gesture, not the two oldest currently tracked.
+        // If a 3rd finger joined and then one of the originals lifted, the
+        // Map iteration order would otherwise hand us the wrong pair against
+        // the baseline (startDist / startMid). If either original is gone,
+        // bail; pointerup will commit the gesture cleanly.
+        const p0 = pointersRef.current.get(g.pointerIds[0]);
+        const p1 = pointersRef.current.get(g.pointerIds[1]);
+        if (!p0 || !p1) return;
+        const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+        const dist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+        const rawS = dist / g.startDist;
+        const minS = MIN_ZOOM / g.startZoom;
+        const maxS = MAX_ZOOM / g.startZoom;
+        const s = clamp(rawS, minS, maxS);
+        const newPan = {
+          x: g.startPan.x + (mid.x - g.startMid.x) + (1 - s) * g.localCss.x,
+          y: g.startPan.y + (mid.y - g.startMid.y) + (1 - s) * g.localCss.y,
+        };
+        if (stackRef.current) {
+          stackRef.current.style.transform = `translate3d(${newPan.x}px, ${newPan.y}px, 0) scale(${s})`;
+        }
+        g.lastScale = s;
+        panRef.current = newPan;
+        return;
+      }
+
+      if (isDrawing && size === 1 && tool !== 'eyedropper') {
+        // Mid-stroke move — Bresenham interpolation, same shape as the old
+        // handleMouseMove. Also update mouse cursor footprint if applicable.
+        if (e.pointerType === 'mouse') {
+          updateCursorForMouse(e.clientX, e.clientY);
+        }
+        const coords = getPixelCoords(e);
+        if (!coords) return;
+        const prev = prevCellRef.current;
+        if (prev && (prev.x !== coords.x || prev.y !== coords.y)) {
+          applyLine(prev.x, prev.y, coords.x, coords.y);
+        } else if (!prev) {
+          applyAt(coords.x, coords.y);
+        }
+        prevCellRef.current = coords;
+        return;
+      }
+
+      // Not drawing, no gesture — just update cursor footprint for mouse hover.
+      if (e.pointerType === 'mouse' && size <= 1) {
+        updateCursorForMouse(e.clientX, e.clientY);
+      }
+    },
+    [isDrawing, tool, getPixelCoords, applyAt, applyLine, updateCursorForMouse]
+  );
+
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      // Double-fire guard: W3C says when releasePointerCapture is called
+      // inside pointerup, the browser ALSO fires lostpointercapture — and
+      // we've wired both to this same handler. The second call would
+      // double-execute endStroke (pushing a duplicate history entry).
+      // Bail if the pointer is already gone from our tracker.
+      if (!pointersRef.current.has(e.pointerId)) return;
+      pointersRef.current.delete(e.pointerId);
+      const container = containerRef.current;
+      try {
+        container?.releasePointerCapture(e.pointerId);
+      } catch {
+        // Capture may already be implicitly released; ignore.
+      }
+      const size = pointersRef.current.size;
+      const g = gestureRef.current;
+
+      // Commit the gesture either when size drops below 2 OR when one of the
+      // gesture's original pointer ids is gone (3rd finger arrived, then an
+      // original lifted while size remains >= 2). The latter prevents
+      // continuing with wrong-pair geometry against the original baseline.
+      const gestureOriginalLost =
+        g && (!pointersRef.current.has(g.pointerIds[0]) || !pointersRef.current.has(g.pointerIds[1]));
+
+      if (g && (size < 2 || gestureOriginalLost)) {
+        commitZoomPan(g.startZoom * g.lastScale, panRef.current);
+        gestureRef.current = null;
+        // gestureSessionRef stays true until size === 0 (spec rule 4).
+      } else if (isDrawing && size === 0) {
+        if (tool !== 'eyedropper') {
+          endStroke();
+          // Wave 1c correctness backstop — putImageData full buffer to the
+          // visible canvas, in case per-event patches drifted from the store's
+          // final state.
+          const ec = editorCanvasRef.current;
+          const { pixels, width, height } = useEditorStore.getState();
+          if (
+            ec && pixels && width > 0 && height > 0 &&
+            ec.width === width && ec.height === height
+          ) {
+            const ctx = ec.getContext('2d')!;
+            ctx.putImageData(
+              new ImageData(new Uint8ClampedArray(pixels), width, height),
+              0, 0,
+            );
+          }
+        }
+        setIsDrawing(false);
+        prevCellRef.current = null;
+      }
+
+      if (size === 0) {
+        gestureSessionRef.current = false;
+      }
+
+      // Mouse: recompute visibility (we may have ended outside canvas bounds).
+      if (e.pointerType === 'mouse') {
+        updateCursorForMouse(e.clientX, e.clientY);
+      }
+    },
+    [isDrawing, tool, endStroke, updateCursorForMouse, commitZoomPan]
+  );
+
+  const handlePointerCancel = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      // Match handlePointerUp's guard against double-fire — if we already
+      // processed this id, bail.
+      if (!pointersRef.current.has(e.pointerId)) return;
+      pointersRef.current.delete(e.pointerId);
+      try {
+        containerRef.current?.releasePointerCapture(e.pointerId);
+      } catch { /* ignore */ }
+      // OS stole the gesture — don't commit a half-stroke.
+      if (isDrawing) {
+        cancelStroke();
+        setIsDrawing(false);
+        prevCellRef.current = null;
+      }
+      // Only abandon the gesture if the cancellation actually terminates it
+      // — i.e., we've dropped below 2 pointers OR one of the gesture's
+      // original pointer ids is now gone. Cancelling a 3rd-finger palm-touch
+      // while a 2-finger pinch is ongoing must NOT kill the active pinch.
+      const g = gestureRef.current;
+      const size = pointersRef.current.size;
+      const gestureOriginalLost =
+        g && (!pointersRef.current.has(g.pointerIds[0]) || !pointersRef.current.has(g.pointerIds[1]));
+      if (g && (size < 2 || gestureOriginalLost)) {
+        // Abandon the in-progress gesture without committing zoom changes.
+        // The wrapper transform stays at its last imperatively-written value
+        // until the next gesture or zoom commit — acceptable for 2a.
+        gestureRef.current = null;
+      }
+      if (size === 0) {
+        gestureSessionRef.current = false;
+      }
+    },
+    [isDrawing, cancelStroke]
+  );
 
   // Serialize current store pixels to a PNG dataURL.
   const renderToDataUrl = useCallback((): string | null => {
@@ -736,8 +1066,29 @@ export default function PixelEditorBody({
             </div>
           </div>
         )}
-        <div className="min-h-full flex flex-col items-center justify-center p-4 gap-4">
-          {/* Zoom controls (Wave 2 replaces with react-zoom-pan-pinch) */}
+        <div
+          ref={containerRef}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
+          onLostPointerCapture={handlePointerUp}
+          className="min-h-full flex flex-col items-center justify-center p-4 gap-4"
+          style={{
+            // Wave 2a touch CSS: kill browser's default touch behaviors so
+            // one-finger drags hit our pointer handlers instead of scrolling
+            // the page, two-finger gestures don't trigger pinch-zoom of the
+            // whole page, and iOS's long-press magnifier / text-selection
+            // popup don't fight with drawing.
+            touchAction: 'none',
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+            WebkitTouchCallout: 'none',
+          }}
+        >
+          {/* Zoom controls — presets + continuous readout. Pinch/wheel land
+              on non-preset values (e.g. 7.3x), so no button may be highlighted
+              after a gesture; that's intentional and acceptable for 2a. */}
           <div className="flex items-center gap-2">
             <label className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
               Zoom
@@ -745,7 +1096,7 @@ export default function PixelEditorBody({
             {([4, 8, 12, 16] as const).map((z) => (
               <button
                 key={z}
-                onClick={() => setZoom(z)}
+                onClick={() => commitZoomPan(z, { x: 0, y: 0 })}
                 className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors
                   ${zoom === z
                     ? 'bg-accent-amber text-bg-primary'
@@ -755,21 +1106,21 @@ export default function PixelEditorBody({
                 {z}x
               </button>
             ))}
+            <span className="text-[10px] font-mono text-text-muted tabular-nums" aria-live="polite">
+              {zoom.toFixed(1)}x
+            </span>
           </div>
 
           {/* Canvas stack — image (bottom) → grid overlay (middle) → cursor
               footprint (top). DOM order = paint order. The image canvas has
               the transparency checkerboard as its CSS background, so any
               alpha-0 region (eraser strokes, transparent project canvases)
-              reveals it through the canvas — no in-canvas tile fill needed. */}
-          <div className="relative">
+              reveals it through the canvas — no in-canvas tile fill needed.
+              The wrapper carries the pan/pinch transform (transform-origin
+              0 0 — see commit contract in the layout effect). */}
+          <div ref={stackRef} className="relative" style={{ transformOrigin: '0 0' }}>
             <canvas
               ref={editorCanvasRef}
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              onMouseEnter={handleMouseEnter}
-              onMouseLeave={handleMouseLeaveCanvas}
               className="block"
               style={{
                 imageRendering: 'pixelated',

@@ -590,6 +590,16 @@ export default function PixelEditorBody({
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
+      // Skip presses that land on an interactive control inside the container
+      // (zoom buttons, etc.). Calling setPointerCapture on the container
+      // would retarget the matching pointerup off the button and suppress
+      // its synthetic click. The canvas and padding are not interactive
+      // elements, so drawing + gesture-start on the canvas/padding still
+      // route through this handler.
+      const targetEl = e.target as HTMLElement | null;
+      if (targetEl?.closest('button, input, a, select, textarea, [role="button"]')) {
+        return;
+      }
       const container = containerRef.current;
       if (!container) return;
       try {
@@ -657,6 +667,13 @@ export default function PixelEditorBody({
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
+      // Cursor footprint tracking — runs BEFORE the capture guard so plain
+      // mouse hover (uncaptured pointermove on the container) still updates
+      // the brush outline. Skipped during an active pinch (the wrapper is
+      // mid-transform; an in-flight overlay position would be misleading).
+      if (e.pointerType === 'mouse' && !gestureRef.current) {
+        updateCursorForMouse(e.clientX, e.clientY);
+      }
       if (!pointersRef.current.has(e.pointerId)) return;
       pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
       const size = pointersRef.current.size;
@@ -691,11 +708,8 @@ export default function PixelEditorBody({
       }
 
       if (isDrawing && size === 1 && tool !== 'eyedropper') {
-        // Mid-stroke move — Bresenham interpolation, same shape as the old
-        // handleMouseMove. Also update mouse cursor footprint if applicable.
-        if (e.pointerType === 'mouse') {
-          updateCursorForMouse(e.clientX, e.clientY);
-        }
+        // Mid-stroke move — Bresenham interpolation. Cursor footprint was
+        // already updated at the top of this function.
         const coords = getPixelCoords(e);
         if (!coords) return;
         const prev = prevCellRef.current;
@@ -705,12 +719,6 @@ export default function PixelEditorBody({
           applyAt(coords.x, coords.y);
         }
         prevCellRef.current = coords;
-        return;
-      }
-
-      // Not drawing, no gesture — just update cursor footprint for mouse hover.
-      if (e.pointerType === 'mouse' && size <= 1) {
-        updateCursorForMouse(e.clientX, e.clientY);
       }
     },
     [isDrawing, tool, getPixelCoords, applyAt, applyLine, updateCursorForMouse]

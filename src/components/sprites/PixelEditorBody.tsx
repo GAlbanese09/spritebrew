@@ -781,7 +781,21 @@ export default function PixelEditorBody({
         g && (!pointersRef.current.has(g.pointerIds[0]) || !pointersRef.current.has(g.pointerIds[1]));
 
       if (g && (size < 2 || gestureOriginalLost)) {
-        commitZoomPan(g.startZoom * g.lastScale, panRef.current);
+        const newZoom = g.startZoom * g.lastScale;
+        // Flex-shift correction. The canvas stack is flex-centered, so its
+        // layout origin moves by dims*(newZoom - startZoom)/2 when the
+        // committed zoom changes. panRef holds the live pan in the START
+        // zoom's centered frame; re-express it in the NEW zoom's centered
+        // frame so the commit lands exactly where the live pinch left it
+        // (otherwise it snaps toward center on release — the "pinch
+        // recenter" bug). Pure pan (newZoom === startZoom) => correction is
+        // 0. commitZoomPan then clamps the result.
+        const { width, height } = useEditorStore.getState();
+        const correctedPan = {
+          x: panRef.current.x + (width * (newZoom - g.startZoom)) / 2,
+          y: panRef.current.y + (height * (newZoom - g.startZoom)) / 2,
+        };
+        commitZoomPan(newZoom, correctedPan);
         gestureRef.current = null;
         // gestureSessionRef stays true until size === 0 (spec rule 4).
       } else if (isDrawing && size === 0) {

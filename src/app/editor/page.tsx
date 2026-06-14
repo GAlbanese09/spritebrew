@@ -147,22 +147,31 @@ export default function EditorPage() {
     // HotkeysProvider scopes the editor's hotkeys to the 'editor' scope so
     // they don't fire while a text input (project name, gallery search, etc.)
     // is focused. Matches the modal-mode provider in PixelEditor.tsx.
+    //
+    // The h-dvh wrapper gives PixelEditorBody's `h-full` a definite parent
+    // so the mobile single-column grid's `1fr` canvas row resolves to real
+    // pixels instead of collapsing to zero (the canvas children are
+    // absolutely positioned and don't contribute intrinsic height). The
+    // modal layout gets the same effect via Dialog.Panel's own h-dvh.
+    // h-dvh (not h-screen) avoids iOS Safari's URL-bar 100vh trap.
     <HotkeysProvider initiallyActiveScopes={['editor']}>
-      <PixelEditorBody
-        frameDataUrl={pending.dataUrl}
-        frameWidth={pending.width}
-        frameHeight={pending.height}
-        onSave={() => {
-          // Page-mode Save is a PNG download, handled inside PixelEditorBody.
-          // This callback is unused in page layout but kept for prop parity.
-        }}
-        onDismiss={() => {
-          reset();
-          setPending(null);
-        }}
-        layout="page"
-        source={pending.source}
-      />
+      <div className="h-dvh overflow-hidden">
+        <PixelEditorBody
+          frameDataUrl={pending.dataUrl}
+          frameWidth={pending.width}
+          frameHeight={pending.height}
+          onSave={() => {
+            // Page-mode Save is a PNG download, handled inside PixelEditorBody.
+            // This callback is unused in page layout but kept for prop parity.
+          }}
+          onDismiss={() => {
+            reset();
+            setPending(null);
+          }}
+          layout="page"
+          source={pending.source}
+        />
+      </div>
     </HotkeysProvider>
   );
 }

@@ -438,21 +438,24 @@ export default function PixelEditorBody({
     }
   }, [zoom]);
 
-  // Clamp committed pan so the canvas can't drift past sensible bounds:
-  // when the scaled canvas is smaller than the viewport on an axis, max=0 ->
-  // pan clamps to 0 -> flex-centered (recenters on zoom-out). When larger,
-  // pan is bounded so the canvas edge can't pass the viewport center (can't
-  // shove the canvas off-screen). Valid ONLY where the committed scale is 1
-  // (post-commit zoom + wheel-pan); NOT during a live pinch (scale != 1,
-  // where transform-origin 0,0 means pan=0 isn't "centered"). So we never
-  // call this from the live gesture-move branch — only from commit points.
+  // Bound the committed pan to the viewport.
+  //   Canvas LARGER than viewport on an axis: bound so the canvas still covers
+  //     the viewport (edge can't pass center) — can't shove it off-screen.
+  //   Canvas SMALLER (fits): let it slide within the viewport (stay fully
+  //     visible) so you can pan to a feature near an edge, instead of locking
+  //     it dead-center. |W*zoom - vp| handles both with one expression.
+  //   Behavior note: zoom-OUT no longer auto-recenters via gesture (it stays
+  //     where you left it, bounded); the zoom BUTTONS still recenter (pan {0,0}).
+  // Valid ONLY where the committed scale is 1 (post-commit zoom + wheel-pan);
+  //   NOT during a live pinch (scale != 1, transform-origin 0,0 → pan=0 isn't
+  //   "centered"). Never called from the live gesture-move branch.
   const clampPan = useCallback(
     (pan: { x: number; y: number }, zoomLevel: number) => {
       const vp = containerRef.current?.getBoundingClientRect();
       const { width, height } = useEditorStore.getState();
       if (!vp || width === 0 || height === 0) return pan;
-      const maxX = Math.max(0, (width * zoomLevel - vp.width) / 2);
-      const maxY = Math.max(0, (height * zoomLevel - vp.height) / 2);
+      const maxX = Math.abs(width * zoomLevel - vp.width) / 2;
+      const maxY = Math.abs(height * zoomLevel - vp.height) / 2;
       return { x: clamp(pan.x, -maxX, maxX), y: clamp(pan.y, -maxY, maxY) };
     },
     []

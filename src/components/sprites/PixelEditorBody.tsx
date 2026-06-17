@@ -183,23 +183,46 @@ export default function PixelEditorBody({
   const [cursorVisible, setCursorVisible] = useState(false);
   const cursorRafRef = useRef<number | null>(null);
 
-  // Fit-to-viewport zoom on dim changes. Wave 2a resets the committed pan +
-  // writes a (0,0) translate transform directly so a fresh frame opens at
-  // its natural (flex-centered) position rather than carrying over the prior
-  // frame's pan/pinch state. We also clear pendingTransformRef so any stale
-  // string staged by a concurrent gesture commit can't leak through the
-  // next zoom change (defensive — handles a narrow race where a gesture
+  // Fixed-origin model: the pan (canvas top-left offset from the container
+  // top-left, transform-origin 0,0) that visually centers the canvas at a
+  // given zoom. This is what flex centering used to do for free. Uses the
+  // props dims (which equal the loaded canvas's native dims). Falls back to
+  // {0,0} (canvas at container top-left) if the viewport isn't measured yet.
+  const centerPan = useCallback(
+    (zoomLevel: number) => {
+      const vp = containerRef.current?.getBoundingClientRect();
+      if (!vp) return { x: 0, y: 0 };
+      return {
+        x: (vp.width - frameWidth * zoomLevel) / 2,
+        y: (vp.height - frameHeight * zoomLevel) / 2,
+      };
+    },
+    [frameWidth, frameHeight]
+  );
+
+  // Fit-to-viewport zoom on dim changes. Resets the committed pan to the
+  // fixed-origin centering offset for the new zoom + writes that translate
+  // directly so a fresh frame opens centered rather than carrying over the
+  // prior frame's pan/pinch state. We also clear pendingTransformRef so any
+  // stale string staged by a concurrent gesture commit can't leak through
+  // the next zoom change (defensive — handles a narrow race where a gesture
   // commits in the same render cycle as a frame change).
   useEffect(() => {
     const maxEditorPx = Math.min(window.innerWidth - 200, window.innerHeight - 200, 640);
     const idealZoom = Math.floor(maxEditorPx / Math.max(frameWidth, frameHeight));
-    panRef.current = { x: 0, y: 0 };
+    const nextZoom = Math.max(4, Math.min(16, idealZoom));
+    // Fixed-origin: seed the centering pan explicitly (flex no longer does it).
+    // The transform is a pure translate (independent of the canvas CSS size),
+    // so writing it directly is correct even across the zoom-driven CSS resize;
+    // a frame load repaints wholesale anyway, so there is no flicker window.
+    const c = centerPan(nextZoom);
+    panRef.current = c;
     pendingTransformRef.current = null;
     if (stackRef.current) {
-      stackRef.current.style.transform = 'translate3d(0px, 0px, 0)';
+      stackRef.current.style.transform = `translate3d(${c.x}px, ${c.y}px, 0)`;
     }
-    setZoom(Math.max(4, Math.min(16, idealZoom)));
-  }, [frameWidth, frameHeight]);
+    setZoom(nextZoom);
+  }, [frameWidth, frameHeight, centerPan]);
 
   // Load frame pixels into the store + extract palette. Reset on unmount so
   // the next editor open gets a clean slate.
@@ -463,25 +486,25 @@ export default function PixelEditorBody({
     }
   }, [zoom]);
 
-  // Bound the committed pan to the viewport.
-  //   Canvas LARGER than viewport on an axis: bound so the canvas still covers
-  //     the viewport (edge can't pass center) — can't shove it off-screen.
-  //   Canvas SMALLER (fits): let it slide within the viewport (stay fully
-  //     visible) so you can pan to a feature near an edge, instead of locking
-  //     it dead-center. |W*zoom - vp| handles both with one expression.
-  //   Behavior note: zoom-OUT no longer auto-recenters via gesture (it stays
-  //     where you left it, bounded); the zoom BUTTONS still recenter (pan {0,0}).
-  // Valid ONLY where the committed scale is 1 (post-commit zoom + wheel-pan);
-  //   NOT during a live pinch (scale != 1, transform-origin 0,0 → pan=0 isn't
-  //   "centered"). Never called from the live gesture-move branch.
+  // Fixed-origin pan clamp. pan is the canvas top-left offset from the
+  // container top-left (transform-origin 0,0, no flex centering).
+  //   Canvas LARGER than the viewport on an axis: it must still cover the
+  //     viewport, so its top-left sits in [vp - dims*zoom, 0] (both <= 0).
+  //     Cannot open a gap on the leading edge.
+  //   Canvas SMALLER (fits): it may slide but stay fully visible, so its
+  //     top-left sits in [0, vp - dims*zoom] (both >= 0).
+  // min/max against 0 selects the correct interval for either case.
   const clampPan = useCallback(
     (pan: { x: number; y: number }, zoomLevel: number) => {
       const vp = containerRef.current?.getBoundingClientRect();
       const { width, height } = useEditorStore.getState();
       if (!vp || width === 0 || height === 0) return pan;
-      const maxX = Math.abs(width * zoomLevel - vp.width) / 2;
-      const maxY = Math.abs(height * zoomLevel - vp.height) / 2;
-      return { x: clamp(pan.x, -maxX, maxX), y: clamp(pan.y, -maxY, maxY) };
+      const restX = vp.width - width * zoomLevel;
+      const restY = vp.height - height * zoomLevel;
+      return {
+        x: clamp(pan.x, Math.min(0, restX), Math.max(0, restX)),
+        y: clamp(pan.y, Math.min(0, restY), Math.max(0, restY)),
+      };
     },
     []
   );
@@ -513,6 +536,19 @@ export default function PixelEditorBody({
     },
     [zoom, clampPan]
   );
+
+  // Fixed-origin model lost flex's free re-centering on viewport resize.
+  // Re-clamp the committed pan to the new viewport so the canvas can't strand
+  // off-screen after a rotate or an iOS toolbar show/hide. Guarded so it never
+  // stomps an in-flight pinch. commitZoomPan with the unchanged zoom re-clamps
+  // panRef and rewrites the transform directly.
+  useEffect(() => {
+    const handler = () => {
+      if (!gestureRef.current) commitZoomPan(zoom, panRef.current);
+    };
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, [zoom, commitZoomPan]);
 
   // Wave 2a desktop wheel:
   //   - ctrl/cmd+wheel = ZOOM, anchored at the cursor (trackpad pinch on
@@ -810,20 +846,14 @@ export default function PixelEditorBody({
 
       if (g && (size < 2 || gestureOriginalLost)) {
         const newZoom = g.startZoom * g.lastScale;
-        // Flex-shift correction. The canvas stack is flex-centered, so its
-        // layout origin moves by dims*(newZoom - startZoom)/2 when the
-        // committed zoom changes. panRef holds the live pan in the START
-        // zoom's centered frame; re-express it in the NEW zoom's centered
-        // frame so the commit lands exactly where the live pinch left it
-        // (otherwise it snaps toward center on release — the "pinch
-        // recenter" bug). Pure pan (newZoom === startZoom) => correction is
-        // 0. commitZoomPan then clamps the result.
-        const { width, height } = useEditorStore.getState();
-        const correctedPan = {
-          x: panRef.current.x + (width * (newZoom - g.startZoom)) / 2,
-          y: panRef.current.y + (height * (newZoom - g.startZoom)) / 2,
-        };
-        commitZoomPan(newZoom, correctedPan);
+        // Fixed-origin: transform-origin is 0,0 and the stack is NOT flex-centered,
+        // so baking newZoom into the canvas CSS size grows it from the same fixed
+        // top-left the live pinch scaled around. panRef already holds the visually
+        // correct translate in that frame, so it commits directly with NO correction.
+        // (Verified: the focal native pixel is identical before and after commit.
+        // Do NOT reintroduce a dims*(newZoom - startZoom)/2 term; that only existed
+        // to compensate for flex centering, which no longer exists.)
+        commitZoomPan(newZoom, panRef.current);
         gestureRef.current = null;
         // gestureSessionRef stays true until size === 0 (spec rule 4).
       } else if (isDrawing && size === 0) {
@@ -1183,7 +1213,7 @@ export default function PixelEditorBody({
           {([4, 8, 12, 16] as const).map((z) => (
             <button
               key={z}
-              onClick={() => commitZoomPan(z, { x: 0, y: 0 })}
+              onClick={() => commitZoomPan(z, centerPan(z))}
               className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors
                 ${zoom === z
                   ? 'bg-accent-amber text-bg-primary'
@@ -1205,7 +1235,7 @@ export default function PixelEditorBody({
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
           onLostPointerCapture={handlePointerUp}
-          className="absolute inset-0 flex items-center justify-center"
+          className="absolute inset-0"
           style={{
             // Wave 2a touch CSS: kill browser's default touch behaviors so
             // one-finger drags hit our pointer handlers instead of scrolling

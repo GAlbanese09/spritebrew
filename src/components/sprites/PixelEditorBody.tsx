@@ -1231,7 +1231,10 @@ export default function PixelEditorBody({
               className="block"
               style={{
                 imageRendering: 'pixelated',
-                cursor: 'none',
+                // Eyedropper tool gets its own cursor (lucide pipette SVG,
+                // hotspot at the tip 2,22). Pencil/eraser keep cursor:none
+                // so the brush-footprint overlay below is the only indicator.
+                cursor: tool === 'eyedropper' ? "url('/cursors/eyedropper.svg') 2 22, crosshair" : 'none',
                 // Wave 1c CSS checkerboard. Fixed 16px screen tile (8px
                 // squares) — intentional look change from the prior zoom-
                 // scaled in-canvas fill.
@@ -1258,7 +1261,7 @@ export default function PixelEditorBody({
                 width: brushSize * zoom,
                 height: brushSize * zoom,
                 transform: `translate(${cursorX}px, ${cursorY}px)`,
-                display: cursorVisible ? 'block' : 'none',
+                display: cursorVisible && tool !== 'eyedropper' ? 'block' : 'none',
               }}
             />
           </div>

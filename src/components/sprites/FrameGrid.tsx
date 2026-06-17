@@ -143,7 +143,7 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
                   e.stopPropagation();
                   setEditingFrameId(frame.id);
                 }}
-                className="absolute top-1.5 right-1.5 w-5 h-5 hidden group-hover:flex items-center justify-center rounded
+                className="absolute top-1.5 right-1.5 w-5 h-5 flex md:hidden md:group-hover:flex items-center justify-center rounded
                   bg-bg-primary/80 border border-border-default
                   text-text-muted hover:text-accent-amber hover:bg-bg-primary cursor-pointer"
                 title="Edit pixel"

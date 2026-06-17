@@ -790,15 +790,21 @@ export default function PixelEditorBody({
         const minS = MIN_ZOOM / g.startZoom;
         const maxS = MAX_ZOOM / g.startZoom;
         const s = clamp(rawS, minS, maxS);
-        const newPan = {
+        const rawPan = {
           x: g.startPan.x + (mid.x - g.startMid.x) + (1 - s) * g.localCss.x,
           y: g.startPan.y + (mid.y - g.startMid.y) + (1 - s) * g.localCss.y,
         };
+        // Clamp live against the CURRENT effective zoom (startZoom * s), not the
+        // committed zoom. Clamping every frame (rather than only at commit) trades a
+        // hard snap-on-release for a soft give at the edges during the gesture: the
+        // live bounds and the committed bounds now agree, so lifting your fingers no
+        // longer yanks the canvas into range.
+        const clamped = clampPan(rawPan, g.startZoom * s);
         if (stackRef.current) {
-          stackRef.current.style.transform = `translate3d(${newPan.x}px, ${newPan.y}px, 0) scale(${s})`;
+          stackRef.current.style.transform = `translate3d(${clamped.x}px, ${clamped.y}px, 0) scale(${s})`;
         }
         g.lastScale = s;
-        panRef.current = newPan;
+        panRef.current = clamped;
         return;
       }
 
@@ -816,7 +822,7 @@ export default function PixelEditorBody({
         prevCellRef.current = coords;
       }
     },
-    [isDrawing, tool, getPixelCoords, applyAt, applyLine, updateCursorForMouse]
+    [isDrawing, tool, getPixelCoords, applyAt, applyLine, updateCursorForMouse, clampPan]
   );
 
   const handlePointerUp = useCallback(

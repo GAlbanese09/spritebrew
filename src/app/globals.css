@@ -8,14 +8,13 @@
   --app-vh: 100dvh;
 }
 
-/* Tailwind v4 custom utility for the editor shell height. Pins min/max so the
-   shell can't grow past the measured viewport (the core symptom: a stale 100dvh
-   shell taller than what's actually visible after an iOS rotation, pushing the
-   bottom bar below the fold). */
+/* Tailwind v4 custom utility for the editor shell height. Height-only — the
+   wrapper already has overflow-hidden + a definite height, so content can't
+   grow it; pinning min/max would leak past responsive height overrides like
+   the modal's md:h-[90vh] (which overrides height only), forcing the desktop
+   modal to full height. */
 @utility h-app-vh {
   height: var(--app-vh, 100dvh);
-  min-height: var(--app-vh, 100dvh);
-  max-height: var(--app-vh, 100dvh);
 }
 
 /* ── Theme tokens ── */

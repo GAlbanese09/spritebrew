@@ -1,5 +1,23 @@
 @import "tailwindcss";
 
+/* ── Editor viewport custom property ── */
+/* Driven at runtime by <ViewportVars /> from visualViewport.height; falls back
+   to 100dvh on first paint and when JS hasn't measured yet. Runtime state (not
+   a design token), so it lives in :root rather than @theme. */
+:root {
+  --app-vh: 100dvh;
+}
+
+/* Tailwind v4 custom utility for the editor shell height. Pins min/max so the
+   shell can't grow past the measured viewport (the core symptom: a stale 100dvh
+   shell taller than what's actually visible after an iOS rotation, pushing the
+   bottom bar below the fold). */
+@utility h-app-vh {
+  height: var(--app-vh, 100dvh);
+  min-height: var(--app-vh, 100dvh);
+  max-height: var(--app-vh, 100dvh);
+}
+
 /* ── Theme tokens ── */
 :root {
   --bg-primary: #121010;

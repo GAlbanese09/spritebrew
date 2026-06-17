@@ -38,6 +38,7 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 import { useSpriteStore } from '@/stores/spriteStore';
 import { extractPaletteFromImageData } from '@/lib/imagePalette';
+import { ViewportVars } from './ViewportVars';
 
 /**
  * Chrome-free Pixel Editor body. Hosts all the Wave 1 logic (store wiring,
@@ -985,8 +986,10 @@ export default function PixelEditorBody({
   ];
 
   return (
+    <>
+    <ViewportVars />
     <div
-      className="h-full grid bg-bg-primary grid-rows-[auto_1fr_auto] grid-cols-1 [grid-template-areas:'header''canvas''bottombar'] md:grid-rows-[auto_1fr] md:grid-cols-[56px_1fr_280px] md:[grid-template-areas:'header_header_header''toolbar_canvas_sidepanel']"
+      className="h-full grid bg-bg-primary grid-rows-[auto_minmax(0,1fr)_auto] grid-cols-1 [grid-template-areas:'header''canvas''bottombar'] md:grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[56px_1fr_280px] md:[grid-template-areas:'header_header_header''toolbar_canvas_sidepanel']"
     >
       {/* Header */}
       <header className="[grid-area:header] flex items-center justify-between px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] md:pt-3 border-b border-border-default bg-bg-primary">
@@ -1114,8 +1117,11 @@ export default function PixelEditorBody({
 
       {/* Canvas (center) — a fixed clipping viewport. Pan is fully transform-
           based now (the wheel handler pans on plain wheel), so we drop the
-          overflow-auto scroll plane. Controls float above as overlays. */}
-      <main className="[grid-area:canvas] overflow-hidden bg-bg-primary relative">
+          overflow-auto scroll plane. Controls float above as overlays.
+          min-h-0/min-w-0 lets the grid track shrink to its assigned size —
+          without these, the absolutely-positioned canvas region would create
+          intrinsic min-size pressure and push the track past 1fr. */}
+      <main className="[grid-area:canvas] overflow-hidden bg-bg-primary relative min-h-0 min-w-0">
         {loadError && (
           <div className="absolute inset-0 flex items-center justify-center p-8 z-20">
             <div className="max-w-md rounded-lg border border-red-500/30 bg-red-500/5 p-4 flex items-start gap-3">
@@ -1335,5 +1341,6 @@ export default function PixelEditorBody({
         )}
       </aside>
     </div>
+    </>
   );
 }

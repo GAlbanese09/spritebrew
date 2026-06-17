@@ -155,7 +155,7 @@ export default function EditorPage() {
     // modal layout gets the same effect via Dialog.Panel's own h-dvh.
     // h-dvh (not h-screen) avoids iOS Safari's URL-bar 100vh trap.
     <HotkeysProvider initiallyActiveScopes={['editor']}>
-      <div className="h-dvh overflow-hidden">
+      <div className="h-app-vh overflow-hidden">
         <PixelEditorBody
           frameDataUrl={pending.dataUrl}
           frameWidth={pending.width}

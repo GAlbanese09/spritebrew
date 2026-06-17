@@ -26,6 +26,9 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
+  // viewportFit: 'cover' makes env(safe-area-inset-*) work — the editor's
+  // mobile header/bottom bar use top/bottom insets for notch + home-indicator.
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({

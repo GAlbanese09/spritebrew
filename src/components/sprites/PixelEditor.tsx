@@ -70,7 +70,7 @@ export default function PixelEditor({
       <Dialog open onClose={attemptDismiss} className="relative z-[100]">
         <div className="fixed inset-0 bg-black/70" aria-hidden="true" />
         <div className="fixed inset-0 flex items-center justify-center p-0 md:p-4">
-          <Dialog.Panel className="bg-bg-primary overflow-hidden shadow-2xl h-dvh w-screen rounded-none border-0 md:h-[90vh] md:w-[min(1200px,95vw)] md:rounded-xl md:border md:border-border-default">
+          <Dialog.Panel className="bg-bg-primary overflow-hidden shadow-2xl h-app-vh w-screen rounded-none border-0 md:h-[90vh] md:w-[min(1200px,95vw)] md:rounded-xl md:border md:border-border-default">
             <PixelEditorBody
               frameDataUrl={frameDataUrl}
               frameWidth={frameWidth}

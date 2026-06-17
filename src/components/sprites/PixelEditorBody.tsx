@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Pencil, Eraser, Pipette, Undo2, Redo2, History, Save, X, ArrowLeft, Film, AlertCircle } from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { Dialog } from '@headlessui/react';
 import Button from '@/components/ui/Button';
 import {
   useEditorStore,
@@ -439,6 +438,16 @@ export default function PixelEditorBody({
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
   }, []);
+
+  // Escape closes the mobile Colors sheet (parity with the old Dialog).
+  useEffect(() => {
+    if (!sheetOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSheetOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [sheetOpen]);
 
   // Wave 2a commit contract: when a gesture/wheel committer wants to atomic-
   // ally swap the wrapper transform from `translate(p) scale(s)` to
@@ -1360,77 +1369,81 @@ export default function PixelEditorBody({
       </aside>
     </div>
 
-    {/* Mobile Colors sheet (Wave 2b-2). Slide-up bottom sheet hosting the
-        color picker + palette, so both are reachable on a phone where the
-        sidepanel is hidden. Mobile only: the trigger is md:hidden, and the
-        close-on-md effect dismisses it if the viewport reaches md+.
-        HeadlessUI handles focus, Esc, and backdrop; nested inside the modal
-        Dialog in modal mode (HeadlessUI's stack closes the topmost first). */}
-    <Dialog open={sheetOpen} onClose={() => setSheetOpen(false)} className="relative z-[105]">
-      <div className="fixed inset-0 bg-black/50" aria-hidden="true" />
-      <div className="fixed inset-x-0 bottom-0 flex justify-center">
-        <Dialog.Panel
-          transition
-          className="w-full bg-bg-secondary border-t border-border-default rounded-t-2xl shadow-2xl px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] flex flex-col gap-4
-            transition duration-200 ease-out data-[closed]:translate-y-full"
+    {/* Mobile Colors sheet — plain inline overlay (NOT a HeadlessUI Dialog).
+        In the sheet-frame flow the editor is itself a Dialog; a nested Dialog
+        portals to <body>, outside the editor's panel, so the editor's outside-
+        click guard fired on sheet taps (spurious unsaved-changes prompt + dead
+        canvas). This overlay renders inline, stays inside the editor panel's
+        DOM, and has no Dialog to collide with. Backdrop tap and Done close it;
+        Escape closes it via the keydown effect. Always mounted so it can slide;
+        pointer-events are gated off when closed so it never blocks the canvas,
+        and md:hidden keeps it off desktop entirely. */}
+    <div
+      aria-hidden={!sheetOpen}
+      onClick={() => setSheetOpen(false)}
+      className={`fixed inset-0 z-[105] bg-black/50 transition-opacity duration-200 md:hidden ${
+        sheetOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+      }`}
+    />
+    <div
+      role="dialog"
+      aria-label="Colors"
+      aria-hidden={!sheetOpen}
+      className={`fixed inset-x-0 bottom-0 z-[106] md:hidden flex flex-col gap-4 bg-bg-secondary border-t border-border-default rounded-t-2xl shadow-2xl px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] transition-transform duration-200 ease-out ${
+        sheetOpen ? 'translate-y-0' : 'translate-y-full pointer-events-none'
+      }`}
+    >
+      {/* drag handle */}
+      <div className="mx-auto h-1 w-10 rounded-full bg-border-default" />
+
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-mono font-semibold text-text-primary">Colors</span>
+        <button
+          type="button"
+          onClick={() => setSheetOpen(false)}
+          className="text-xs font-mono text-accent-amber hover:text-accent-amber-strong cursor-pointer px-2 py-1"
         >
-          {/* drag handle */}
-          <div className="mx-auto h-1 w-10 rounded-full bg-border-default" />
-
-          <div className="flex items-center justify-between">
-            <Dialog.Title className="text-sm font-mono font-semibold text-text-primary">
-              Colors
-            </Dialog.Title>
-            <button
-              type="button"
-              onClick={() => setSheetOpen(false)}
-              className="text-xs font-mono text-accent-amber hover:text-accent-amber-strong cursor-pointer px-2 py-1"
-            >
-              Done
-            </button>
-          </div>
-
-          {/* Custom color picker (native) */}
-          <div className="flex items-center gap-3">
-            <input
-              type="color"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              aria-label="Foreground color"
-              className="w-12 h-12 rounded border border-border-default cursor-pointer appearance-none [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-sm"
-            />
-            <span className="text-xs font-mono text-text-muted">Tap to pick a custom color</span>
-          </div>
-
-          {/* Palette */}
-          <div className="flex flex-col gap-2">
-            <div className="text-[9px] font-mono text-text-muted uppercase tracking-wider">
-              Palette
-            </div>
-            {palette.length === 0 ? (
-              <p className="text-[11px] font-mono text-text-muted italic leading-relaxed">
-                Colors from your source image appear here when you upload one.
-              </p>
-            ) : (
-              <div className="grid grid-cols-6 gap-2">
-                {palette.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => { setColor(c); setTool('pencil'); setSheetOpen(false); }}
-                    className={`aspect-square w-full rounded-sm border cursor-pointer ${
-                      color === c ? 'border-accent-amber ring-1 ring-accent-amber' : 'border-border-subtle'
-                    }`}
-                    style={{ backgroundColor: c }}
-                    title={c}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        </Dialog.Panel>
+          Done
+        </button>
       </div>
-    </Dialog>
+
+      {/* Custom color picker (native) */}
+      <div className="flex items-center gap-3">
+        <input
+          type="color"
+          value={color}
+          onChange={(e) => setColor(e.target.value)}
+          aria-label="Foreground color"
+          className="w-12 h-12 rounded border border-border-default cursor-pointer appearance-none [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-sm"
+        />
+        <span className="text-xs font-mono text-text-muted">Tap to pick a custom color</span>
+      </div>
+
+      {/* Palette */}
+      <div className="flex flex-col gap-2">
+        <div className="text-[9px] font-mono text-text-muted uppercase tracking-wider">Palette</div>
+        {palette.length === 0 ? (
+          <p className="text-[11px] font-mono text-text-muted italic leading-relaxed">
+            Colors from your source image appear here when you upload one.
+          </p>
+        ) : (
+          <div className="grid grid-cols-6 gap-2">
+            {palette.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => { setColor(c); setTool('pencil'); setSheetOpen(false); }}
+                className={`aspect-square w-full rounded-sm border cursor-pointer ${
+                  color === c ? 'border-accent-amber ring-1 ring-accent-amber' : 'border-border-subtle'
+                }`}
+                style={{ backgroundColor: c }}
+                title={c}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
     </>
   );
 }

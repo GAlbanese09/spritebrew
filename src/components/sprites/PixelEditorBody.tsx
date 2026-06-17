@@ -992,28 +992,28 @@ export default function PixelEditorBody({
       className="h-full grid bg-bg-primary grid-rows-[auto_minmax(0,1fr)_auto] grid-cols-1 [grid-template-areas:'header''canvas''bottombar'] md:grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[56px_1fr_280px] md:[grid-template-areas:'header_header_header''toolbar_canvas_sidepanel']"
     >
       {/* Header */}
-      <header className="[grid-area:header] flex items-center justify-between px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] md:pt-3 border-b border-border-default bg-bg-primary">
-        <h2 className="text-sm font-mono font-semibold text-text-primary">
-          Pixel Editor
-          <span className="ml-2 text-text-muted font-normal">
-            {frameWidth}x{frameHeight}
+      <header className="[grid-area:header] flex items-center justify-between gap-2 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] md:pt-3 border-b border-border-default bg-bg-primary">
+        <h2 className="flex-1 min-w-0 truncate text-sm font-mono font-semibold text-text-primary">
+          <span className="hidden md:inline">Pixel Editor</span>
+          <span className="text-text-muted font-normal md:ml-2">
+            {frameWidth} × {frameHeight}
           </span>
         </h2>
 
         {layout === 'modal' ? (
           <button
             onClick={onDismiss}
-            className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"
+            className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer shrink-0"
             aria-label="Close editor"
           >
             <X size={16} />
           </button>
         ) : (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <Link href="/editor" onClick={onDismiss}>
               <Button variant="ghost" size="sm">
                 <ArrowLeft size={14} />
-                Back
+                <span className="sr-only md:not-sr-only">Back</span>
               </Button>
             </Link>
             {layout === 'page' && (
@@ -1024,7 +1024,8 @@ export default function PixelEditorBody({
             )}
             <Button variant="primary" size="sm" onClick={doSaveAsDownload}>
               <Save size={14} />
-              Save (download PNG)
+              <span className="md:hidden">PNG</span>
+              <span className="hidden md:inline">Save (download PNG)</span>
             </Button>
           </div>
         )}

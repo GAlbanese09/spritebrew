@@ -995,7 +995,7 @@ export default function PixelEditorBody({
       <header className="[grid-area:header] flex items-center justify-between gap-2 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] md:pt-3 border-b border-border-default bg-bg-primary">
         <h2 className="flex-1 min-w-0 truncate text-sm font-mono font-semibold text-text-primary">
           <span className="hidden md:inline">Pixel Editor</span>
-          <span className="text-text-muted font-normal md:ml-2">
+          <span className="sr-only md:not-sr-only md:ml-2 text-text-muted font-normal">
             {frameWidth} × {frameHeight}
           </span>
         </h2>

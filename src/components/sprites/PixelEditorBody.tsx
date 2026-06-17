@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Pencil, Eraser, Pipette, Undo2, Redo2, History, Save, X, ArrowLeft, Film, AlertCircle } from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
+import { Dialog } from '@headlessui/react';
 import Button from '@/components/ui/Button';
 import {
   useEditorStore,
@@ -168,6 +169,10 @@ export default function PixelEditorBody({
   const [zoom, setZoom] = useState(8);
   const [isDrawing, setIsDrawing] = useState(false);
   const [palette, setPalette] = useState<string[]>([]);
+  // Mobile-only Colors sheet (Wave 2b-2). Hosts the color picker + palette
+  // on phones; never opens at md+ (the close-on-md effect dismisses if the
+  // viewport reaches desktop width via rotation).
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   // Transient toast for keyboard-driven brush-size changes.
   const [brushToast, setBrushToast] = useState<string | null>(null);
@@ -424,6 +429,16 @@ export default function PixelEditorBody({
     window.addEventListener('resize', handler);
     return () => window.removeEventListener('resize', handler);
   }, [drawGridOverlay]);
+
+  // Close the mobile Colors sheet if the viewport grows to md+ (e.g. rotate
+  // to landscape), where the desktop sidepanel takes over and an open sheet
+  // would be a stranded overlay.
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)');
+    const handler = () => { if (mq.matches) setSheetOpen(false); };
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
 
   // Wave 2a commit contract: when a gesture/wheel committer wants to atomic-
   // ally swap the wrapper transform from `translate(p) scale(s)` to
@@ -1050,16 +1065,18 @@ export default function PixelEditorBody({
           </button>
         ))}
 
-        {/* Mobile-only color picker. Sidepanel hosts the desktop equivalent;
-            this keeps color reachable now that the sidepanel hides below md.
-            Replaced by the slide-up palette sheet in Wave 2b-2. */}
-        <input
-          type="color"
-          value={color}
-          onChange={(e) => setColor(e.target.value)}
-          aria-label="Foreground color"
-          className="w-11 h-11 shrink-0 rounded border border-border-default cursor-pointer appearance-none md:hidden [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-sm"
-        />
+        {/* Mobile-only Colors trigger — opens the slide-up sheet (color +
+            palette). Shows the current color. The desktop equivalent lives
+            in the sidepanel (hidden below md). */}
+        <button
+          type="button"
+          onClick={() => setSheetOpen(true)}
+          aria-label="Colors"
+          title="Colors"
+          className="w-11 h-11 shrink-0 rounded border border-border-default cursor-pointer md:hidden p-1"
+        >
+          <span className="block w-full h-full rounded-sm" style={{ backgroundColor: color }} />
+        </button>
 
         <div className="w-full h-px bg-border-subtle my-1 hidden md:block" />
 
@@ -1342,6 +1359,78 @@ export default function PixelEditorBody({
         )}
       </aside>
     </div>
+
+    {/* Mobile Colors sheet (Wave 2b-2). Slide-up bottom sheet hosting the
+        color picker + palette, so both are reachable on a phone where the
+        sidepanel is hidden. Mobile only: the trigger is md:hidden, and the
+        close-on-md effect dismisses it if the viewport reaches md+.
+        HeadlessUI handles focus, Esc, and backdrop; nested inside the modal
+        Dialog in modal mode (HeadlessUI's stack closes the topmost first). */}
+    <Dialog open={sheetOpen} onClose={() => setSheetOpen(false)} className="relative z-[105]">
+      <div className="fixed inset-0 bg-black/50" aria-hidden="true" />
+      <div className="fixed inset-x-0 bottom-0 flex justify-center">
+        <Dialog.Panel
+          transition
+          className="w-full bg-bg-secondary border-t border-border-default rounded-t-2xl shadow-2xl px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] flex flex-col gap-4
+            transition duration-200 ease-out data-[closed]:translate-y-full"
+        >
+          {/* drag handle */}
+          <div className="mx-auto h-1 w-10 rounded-full bg-border-default" />
+
+          <div className="flex items-center justify-between">
+            <Dialog.Title className="text-sm font-mono font-semibold text-text-primary">
+              Colors
+            </Dialog.Title>
+            <button
+              type="button"
+              onClick={() => setSheetOpen(false)}
+              className="text-xs font-mono text-accent-amber hover:text-accent-amber-strong cursor-pointer px-2 py-1"
+            >
+              Done
+            </button>
+          </div>
+
+          {/* Custom color picker (native) */}
+          <div className="flex items-center gap-3">
+            <input
+              type="color"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              aria-label="Foreground color"
+              className="w-12 h-12 rounded border border-border-default cursor-pointer appearance-none [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-sm"
+            />
+            <span className="text-xs font-mono text-text-muted">Tap to pick a custom color</span>
+          </div>
+
+          {/* Palette */}
+          <div className="flex flex-col gap-2">
+            <div className="text-[9px] font-mono text-text-muted uppercase tracking-wider">
+              Palette
+            </div>
+            {palette.length === 0 ? (
+              <p className="text-[11px] font-mono text-text-muted italic leading-relaxed">
+                Colors from your source image appear here when you upload one.
+              </p>
+            ) : (
+              <div className="grid grid-cols-6 gap-2">
+                {palette.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => { setColor(c); setTool('pencil'); setSheetOpen(false); }}
+                    className={`aspect-square w-full rounded-sm border cursor-pointer ${
+                      color === c ? 'border-accent-amber ring-1 ring-accent-amber' : 'border-border-subtle'
+                    }`}
+                    style={{ backgroundColor: c }}
+                    title={c}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </Dialog.Panel>
+      </div>
+    </Dialog>
     </>
   );
 }

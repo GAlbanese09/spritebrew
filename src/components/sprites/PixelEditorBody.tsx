@@ -40,6 +40,8 @@ import { useSpriteStore } from '@/stores/spriteStore';
 import { extractPaletteFromImageData } from '@/lib/imagePalette';
 import { ViewportVars } from './ViewportVars';
 import { useEditorRecovery } from './useEditorRecovery';
+import { isDevHost } from '@/lib/isDevHost';
+import { devRecoverySelfTest } from '@/lib/editorRecovery';
 
 /** Module-scope so the dev self-test runs at most once per page load, even
  *  if the editor body remounts (e.g. Strict Mode double-invoke in dev). */
@@ -1013,20 +1015,16 @@ export default function PixelEditorBody({
     };
   }, []);
 
-  // Dev-only round-trip self-test for the recovery store. Dynamic import keeps
-  // the test code out of the prod bundle; the module-scope flag ensures we run
-  // once per page load even across remounts. Uses its own isolated draftId.
+  // Dev-only round-trip self-test for the recovery store. Hostname-gated
+  // (NODE_ENV is 'production' on dev.spritebrew.pages.dev too — Cloudflare
+  // Pages builds every deployment with `next build`). Module-scope flag
+  // ensures we run once per page load even across Strict Mode remounts.
   useEffect(() => {
-    if (process.env.NODE_ENV === 'production' || recoverySelfTestRan) return;
+    if (!isDevHost() || recoverySelfTestRan) return;
     recoverySelfTestRan = true;
-    let cancelled = false;
-    void import('@/lib/editorRecovery').then(({ devRecoverySelfTest }) => {
-      if (cancelled) return;
-      void devRecoverySelfTest().then((pass) => {
-        console.log(`[editorRecovery] self-test: ${pass ? 'PASS' : 'FAIL'}`);
-      });
-    });
-    return () => { cancelled = true; };
+    void devRecoverySelfTest()
+      .then((pass) => console.log(`[editorRecovery] self-test: ${pass ? 'PASS' : 'FAIL'}`))
+      .catch((err) => console.warn('[editorRecovery] self-test threw', err));
   }, []);
 
 

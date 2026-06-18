@@ -9,6 +9,7 @@ import {
   type SaveReason,
 } from '@/lib/editorRecovery';
 import type { SpriteProjectV1 } from '@/lib/spriteProject';
+import { isDevHost } from '@/lib/isDevHost';
 
 const PAGE_DRAFT_KEY = 'page:scratch';
 const DEBOUNCE_MS = 1000;
@@ -87,7 +88,7 @@ export function useEditorRecovery({
         await store.saveDraft({ projectKey, project: snap.project, bytes: snap.bytes, reason });
         if (!persistRequested) { persistRequested = true; void requestPersistentStorage(); }
       } catch (err) {
-        if (process.env.NODE_ENV !== 'production') console.warn('[editorRecovery] save failed', err);
+        if (isDevHost()) console.warn('[editorRecovery] save failed', err);
       } finally {
         saving = false;
         if (resaveQueued && !disposed) { resaveQueued = false; scheduleSave(); }
@@ -118,7 +119,7 @@ export function useEditorRecovery({
       if (disposed) return;
       available = ok;
       if (!ok) {
-        if (process.env.NODE_ENV !== 'production') console.warn('[editorRecovery] unavailable in this browser context');
+        if (isDevHost()) console.warn('[editorRecovery] unavailable in this browser context');
         return;
       }
       if (useEditorStore.getState().historyIndex > 0) scheduleSave();

@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.5.13';
+export const CURRENT_VERSION = '0.6.0';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,20 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.6.0 — Mobile Editing & Edit Recovery (Jun 18, 2026) ──
+  {
+    releaseLabel: 'JUN 18, 2026 — MOBILE EDITING AND EDIT RECOVERY',
+    emoji: '📱',
+    title: 'Edit on your phone',
+    description:
+      'The pixel editor now works with touch. Draw with your finger, pinch to zoom and pan, and the layout adapts to phone screens, so you no longer need a desktop to edit sprites.',
+  },
+  {
+    emoji: '🔄',
+    title: 'Edit recovery',
+    description:
+      'Close or refresh the editor by accident? We will now offer to bring your last in-progress sprite back, so you can pick up where you left off.',
+  },
   // ── 0.5.13 — Animate & Preview Polish (Jun 2, 2026) ──
   {
     releaseLabel: 'JUN 2, 2026 — ANIMATE & PREVIEW POLISH',

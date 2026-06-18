@@ -39,6 +39,11 @@ function clamp(v: number, lo: number, hi: number): number {
 import { useSpriteStore } from '@/stores/spriteStore';
 import { extractPaletteFromImageData } from '@/lib/imagePalette';
 import { ViewportVars } from './ViewportVars';
+import { useEditorRecovery } from './useEditorRecovery';
+
+/** Module-scope so the dev self-test runs at most once per page load, even
+ *  if the editor body remounts (e.g. Strict Mode double-invoke in dev). */
+let recoverySelfTestRan = false;
 
 /**
  * Chrome-free Pixel Editor body. Hosts all the Wave 1 logic (store wiring,
@@ -168,6 +173,12 @@ export default function PixelEditorBody({
   const [zoom, setZoom] = useState(8);
   const [isDrawing, setIsDrawing] = useState(false);
   const [palette, setPalette] = useState<string[]>([]);
+
+  // Stage 2 crash-recovery capture. Active in page mode only; modal mount
+  // path is Stage 3+. Reads the live palette at save time via the closure so
+  // the saved envelope includes it (toProject emits an empty palette).
+  useEditorRecovery({ enabled: layout === 'page', getPalette: () => palette });
+
   // Mobile-only Colors sheet (Wave 2b-2). Hosts the color picker + palette
   // on phones; never opens at md+ (the close-on-md effect dismisses if the
   // viewport reaches desktop width via rotation).
@@ -1000,6 +1011,22 @@ export default function PixelEditorBody({
         brushToastTimerRef.current = null;
       }
     };
+  }, []);
+
+  // Dev-only round-trip self-test for the recovery store. Dynamic import keeps
+  // the test code out of the prod bundle; the module-scope flag ensures we run
+  // once per page load even across remounts. Uses its own isolated draftId.
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'production' || recoverySelfTestRan) return;
+    recoverySelfTestRan = true;
+    let cancelled = false;
+    void import('@/lib/editorRecovery').then(({ devRecoverySelfTest }) => {
+      if (cancelled) return;
+      void devRecoverySelfTest().then((pass) => {
+        console.log(`[editorRecovery] self-test: ${pass ? 'PASS' : 'FAIL'}`);
+      });
+    });
+    return () => { cancelled = true; };
   }, []);
 
 

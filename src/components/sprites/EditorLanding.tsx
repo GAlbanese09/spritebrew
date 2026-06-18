@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { UploadCloud, FilePlus, FolderOpen, Image as ImageIcon, AlertCircle } from 'lucide-react';
+import { UploadCloud, FilePlus, FolderOpen, Image as ImageIcon, AlertCircle, RotateCcw } from 'lucide-react';
 import UploadZone from './UploadZone';
 import Button from '@/components/ui/Button';
 import {
@@ -9,6 +9,7 @@ import {
   editorDimsRejectionMessage,
 } from '@/components/sprites/editorStore';
 import type { SpriteProjectSource } from '@/lib/spriteProject';
+import type { RecoveryCandidate } from '@/lib/editorRecovery';
 
 /**
  * Landing UI for the /editor route. Lets the user choose how to start
@@ -36,9 +37,35 @@ interface EditorLandingProps {
     height: number,
     source?: SpriteProjectSource,
   ) => void;
+  /** Stage 3: a recoverable page-mode draft, or null/undefined if none.
+   *  When set, a restore banner renders above the start cards. */
+  recoveryCandidate?: RecoveryCandidate | null;
+  /** Restore the draft (parent reads bytes and mounts the body in restore mode). */
+  onRestoreDraft?: () => void;
+  /** Discard the draft (parent deletes it from IndexedDB). */
+  onDiscardDraft?: () => void;
 }
 
-export default function EditorLanding({ onProjectReady }: EditorLandingProps) {
+/** Relative-time formatter for the restore banner. Cheap, no Intl — the
+ *  banner just needs "just now" / "5 minutes ago" / "2 hours ago" / "1 day
+ *  ago" granularity. */
+function formatDraftAge(ts: number): string {
+  const secs = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (secs < 60) return 'just now';
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hour${hrs === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+export default function EditorLanding({
+  onProjectReady,
+  recoveryCandidate,
+  onRestoreDraft,
+  onDiscardDraft,
+}: EditorLandingProps) {
   const [size, setSize] = useState<SizePreset>(32);
   // Fix #5: editor-specific dimension guardrail at the upload ingestion point.
   // UploadZone itself stays generic (the /upload slicer route uses it with
@@ -69,6 +96,31 @@ export default function EditorLanding({ onProjectReady }: EditorLandingProps) {
   return (
     <div className="h-full overflow-auto p-8">
       <div className="max-w-4xl mx-auto">
+        {recoveryCandidate && (
+          <div className="mb-6 rounded-lg border border-accent-amber bg-bg-surface p-4 flex items-start gap-3">
+            <RotateCcw size={18} className="text-accent-amber flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-mono font-semibold text-text-primary mb-1">
+                Recover your last edit?
+              </p>
+              <p className="text-[11px] font-mono text-text-secondary leading-relaxed">
+                A {recoveryCandidate.manifest.summary.width}×{recoveryCandidate.manifest.summary.height} draft
+                from {formatDraftAge(recoveryCandidate.manifest.updatedAt)} is saved on this device.
+              </p>
+              <div className="flex items-center gap-2 mt-3">
+                <Button variant="primary" size="sm" onClick={onRestoreDraft}>
+                  Restore
+                </Button>
+                <button
+                  onClick={onDiscardDraft}
+                  className="text-[11px] font-mono text-text-muted hover:text-text-primary cursor-pointer px-2 py-1"
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <h1 className="font-display text-sm text-accent-amber mb-2">Pixel Editor</h1>
         <p className="text-sm font-mono text-text-secondary mb-8">
           Start a new project or upload an image to edit pixel by pixel.

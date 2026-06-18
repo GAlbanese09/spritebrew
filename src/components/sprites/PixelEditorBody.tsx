@@ -16,7 +16,7 @@ import {
   type Tool,
   type DirtyRect,
 } from './editorStore';
-import type { SpriteProjectSource } from '@/lib/spriteProject';
+import type { SpriteProjectSource, SpriteProjectV1 } from '@/lib/spriteProject';
 
 /** Scope key for editor hotkeys — keeps brush-size / undo / redo bindings
  *  isolated to the editor subtree so they don't fire when a text input
@@ -78,6 +78,22 @@ interface PixelEditorBodyProps {
    * left undefined.
    */
   source?: SpriteProjectSource;
+  /**
+   * Stage 3 crash-recovery restore. When present, the mount-load effect
+   * materializes this recovered draft via loadProject (preserving the full
+   * envelope: name, source, frameId, palette) instead of decoding frameDataUrl.
+   * Page mode only, mount-stable (the body remounts for a restore, so this is
+   * read once on mount). Omitted on the normal image-load path.
+   */
+  restore?: { envelope: SpriteProjectV1; bytes: Uint8ClampedArray };
+  /**
+   * Stage 3 escape hatch for the corrupt-restore loop: when loadProject
+   * fails on a recovered envelope, the only natural action (Go back) would
+   * land back on the banner offering the same broken draft. Wiring this in
+   * surfaces a second "Discard draft" button in the loadError UI so the user
+   * isn't stuck looping. Only meaningful when `restore` is set.
+   */
+  onDiscardDraft?: () => void;
 }
 
 export default function PixelEditorBody({
@@ -88,6 +104,8 @@ export default function PixelEditorBody({
   onDismiss,
   layout,
   source,
+  restore,
+  onDiscardDraft,
 }: PixelEditorBodyProps) {
   const editorCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -122,6 +140,7 @@ export default function PixelEditorBody({
   const setPendingAnimatorSkipBgRemoval = useSpriteStore((s) => s.setPendingAnimatorSkipBgRemoval);
 
   const loadFrame = useEditorStore((s) => s.loadFrame);
+  const loadProject = useEditorStore((s) => s.loadProject);
   const beginStroke = useEditorStore((s) => s.beginStroke);
   const endStroke = useEditorStore((s) => s.endStroke);
   const cancelStroke = useEditorStore((s) => s.cancelStroke);
@@ -226,6 +245,24 @@ export default function PixelEditorBody({
   // store and the browser can release the underlying File/Blob reference.
   useEffect(() => {
     setLoadError(null);
+
+    // Stage 3 restore: a recovered draft carries the full envelope (name,
+    // source, frameId, palette) plus raw bytes, so it must go through
+    // loadProject, NOT the dataUrl -> loadFrame path, which rebuilds a fresh
+    // project (new frameId, empty palette) and would drop the envelope.
+    // loadProject re-validates the envelope and cross-checks the byte length,
+    // so a corrupt restore fails closed into the loadError UI.
+    if (restore) {
+      const ok = loadProject(restore.envelope, restore.bytes);
+      if (!ok) {
+        setLoadError('That recovery draft could not be restored.');
+      } else {
+        // toProject() emits an empty palette, so the controller merged the
+        // live palette into the envelope at save time; seed it back here.
+        setPalette(restore.envelope.color.palette);
+      }
+      return () => { reset(); };
+    }
 
     // Pre-flight check on the props' declared dimensions.
     if (!dimsWithinEditorLimits(frameWidth, frameHeight)) {
@@ -1185,12 +1222,27 @@ export default function PixelEditorBody({
                 <p className="text-[11px] font-mono text-text-secondary leading-relaxed">
                   {loadError}
                 </p>
-                <button
-                  onClick={onDismiss}
-                  className="mt-3 text-[10px] font-mono text-accent-amber hover:text-accent-amber-strong cursor-pointer underline"
-                >
-                  Go back
-                </button>
+                <div className="mt-3 flex items-center gap-3">
+                  <button
+                    onClick={onDismiss}
+                    className="text-[10px] font-mono text-accent-amber hover:text-accent-amber-strong cursor-pointer underline"
+                  >
+                    Go back
+                  </button>
+                  {/* Stage 3 corrupt-restore escape: only shown when this
+                      body is mounted from a restore AND a discard callback
+                      was wired through. Without it, "Go back" leads to the
+                      landing banner offering the same broken draft — an
+                      infinite loop with only the banner's Discard as exit. */}
+                  {restore && onDiscardDraft && (
+                    <button
+                      onClick={onDiscardDraft}
+                      className="text-[10px] font-mono text-text-muted hover:text-text-primary cursor-pointer underline"
+                    >
+                      Discard draft
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>

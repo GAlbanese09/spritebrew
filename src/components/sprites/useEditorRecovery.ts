@@ -11,7 +11,10 @@ import {
 import type { SpriteProjectV1 } from '@/lib/spriteProject';
 import { isDevHost } from '@/lib/isDevHost';
 
-const PAGE_DRAFT_KEY = 'page:scratch';
+/** Stable projectKey for the singleton page-mode scratch draft. Exported so
+ *  the /editor landing's recovery probe + restore/discard handlers reference
+ *  the same key as the controller's save path — one source of truth. */
+export const PAGE_SCRATCH_KEY = 'page:scratch';
 const DEBOUNCE_MS = 1000;
 const MAX_WAIT_MS = 10000;
 
@@ -27,7 +30,7 @@ interface UseEditorRecoveryOptions {
 export function useEditorRecovery({
   enabled,
   getPalette,
-  projectKey = PAGE_DRAFT_KEY,
+  projectKey = PAGE_SCRATCH_KEY,
 }: UseEditorRecoveryOptions): void {
   // Latest palette-getter in a ref so the long-lived subscription and
   // lifecycle handlers read the current palette without being rebuilt on

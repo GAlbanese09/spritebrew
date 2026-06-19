@@ -6,6 +6,11 @@
    a design token), so it lives in :root rather than @theme. */
 :root {
   --app-vh: 100dvh;
+  /* Single source of truth for the app Header's height — read by Header.tsx
+     (h-[var(--header-height)]) and by the h-editor-page utility below so the
+     /editor route can size itself to "visible viewport minus header" without
+     diverging from the header's actual rendered height. */
+  --header-height: 4rem;
 }
 
 /* Tailwind v4 custom utility for the editor shell height. Height-only — the
@@ -15,6 +20,14 @@
    modal to full height. */
 @utility h-app-vh {
   height: var(--app-vh, 100dvh);
+}
+
+/* Visible viewport minus the app Header. Used by the full-page /editor route
+   so its h-full grid fills exactly the area below the Header — without this,
+   h-app-vh + the Header would total > viewport, AppShell's <main> would scroll,
+   and on mobile portrait the editor's bottom toolbar lands below the fold. */
+@utility h-editor-page {
+  height: calc(var(--app-vh, 100dvh) - var(--header-height, 4rem));
 }
 
 /* ── Theme tokens ── */

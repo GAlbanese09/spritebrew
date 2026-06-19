@@ -23,7 +23,7 @@ export default function Header({ onMenuClick }: HeaderProps) {
   const title = PAGE_TITLES[pathname] ?? 'SpriteBrew';
 
   return (
-    <header className="flex items-center gap-4 border-b border-border-default bg-bg-secondary/50 px-6 py-4 backdrop-blur-sm">
+    <header className="flex h-[var(--header-height)] items-center gap-4 border-b border-border-default bg-bg-secondary/50 px-6 backdrop-blur-sm">
       <button
         onClick={onMenuClick}
         className="lg:hidden p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"

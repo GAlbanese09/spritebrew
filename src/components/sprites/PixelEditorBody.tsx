@@ -42,6 +42,7 @@ import { ViewportVars } from './ViewportVars';
 import { useEditorRecovery } from './useEditorRecovery';
 import { isDevHost } from '@/lib/isDevHost';
 import { devRecoverySelfTest } from '@/lib/editorRecovery';
+import { pixelsToPngDataUrl } from '@/lib/editorImage';
 
 /** Module-scope so the dev self-test runs at most once per page load, even
  *  if the editor body remounts (e.g. Strict Mode double-invoke in dev). */
@@ -94,6 +95,16 @@ interface PixelEditorBodyProps {
    * isn't stuck looping. Only meaningful when `restore` is set.
    */
   onDiscardDraft?: () => void;
+  /**
+   * Direct close path used ONLY by the explicit modal Save button. The
+   * normal onDismiss routes through the wrapper's attemptDismiss which
+   * re-checks isDirty and (correctly) re-pops the confirm dialog — but
+   * after an explicit Save, the user just expressed intent to keep their
+   * work, so re-prompting them with "Unsaved changes?" reads as a bug.
+   * Wrapper supplies this as onClose (bypasses confirm). doSaveAndDismiss
+   * prefers it; falls back to onDismiss when omitted (page mode, etc).
+   */
+  onSaveClose?: () => void;
 }
 
 export default function PixelEditorBody({
@@ -106,6 +117,7 @@ export default function PixelEditorBody({
   source,
   restore,
   onDiscardDraft,
+  onSaveClose,
 }: PixelEditorBodyProps) {
   const editorCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -951,20 +963,23 @@ export default function PixelEditorBody({
   const renderToDataUrl = useCallback((): string | null => {
     const { pixels, width, height } = useEditorStore.getState();
     if (!pixels) return null;
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d')!;
-    ctx.putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0);
-    return canvas.toDataURL('image/png');
+    return pixelsToPngDataUrl(pixels, width, height);
   }, []);
 
   // Modal-mode Save: callback + dismiss (parent handles flow).
+  //
+  // The dismiss path is deliberately the wrapper-supplied onSaveClose (NOT
+  // onDismiss) so the explicit Save button bypasses attemptDismiss's
+  // isDirty check. Without this, doSaveAndDismiss → onDismiss → attemptDismiss
+  // re-reads historyIndex (still > 0 — save doesn't reset it) and re-pops
+  // the "Unsaved changes?" confirm right after the user just clicked Save.
+  // Fallback to onDismiss when the wrapper omits onSaveClose — page mode's
+  // Save button doesn't exist today, but the fallback keeps the contract safe.
   const doSaveAndDismiss = useCallback(() => {
     const dataUrl = renderToDataUrl();
     if (dataUrl) onSave(dataUrl);
-    onDismiss();
-  }, [renderToDataUrl, onSave, onDismiss]);
+    (onSaveClose ?? onDismiss)();
+  }, [renderToDataUrl, onSave, onSaveClose, onDismiss]);
 
   // Send-to-Animator (page-mode only). Snapshot the canvas synchronously
   // BEFORE any state change or navigation. The dataUrl is a JS string copy

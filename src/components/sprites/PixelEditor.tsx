@@ -6,6 +6,7 @@ import { HotkeysProvider } from 'react-hotkeys-hook';
 import PixelEditorBody from './PixelEditorBody';
 import { useEditorStore, selectIsDirty } from './editorStore';
 import type { SpriteProjectSource } from '@/lib/spriteProject';
+import { pixelsToPngDataUrl } from '@/lib/editorImage';
 
 /**
  * Modal-mode wrapper around <PixelEditorBody>. Preserves the existing
@@ -46,17 +47,12 @@ export default function PixelEditor({
   }, [onClose]);
 
   // Save-and-close from the confirm dialog: serialize current store pixels
-  // to a PNG dataURL, fire onSave, then onClose. Duplicates Body's
-  // renderToDataUrl trivially — keeps the wrapper self-contained.
+  // to a PNG dataURL, fire onSave, then onClose. Shares the pixelsToPngDataUrl
+  // helper with PixelEditorBody so the recipe lives in one place.
   const saveAndCloseFromConfirm = useCallback(() => {
     const { pixels, width, height } = useEditorStore.getState();
     if (pixels) {
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d')!;
-      ctx.putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0);
-      onSave(canvas.toDataURL('image/png'));
+      onSave(pixelsToPngDataUrl(pixels, width, height));
     }
     onClose();
   }, [onSave, onClose]);
@@ -77,6 +73,7 @@ export default function PixelEditor({
               frameHeight={frameHeight}
               onSave={onSave}
               onDismiss={attemptDismiss}
+              onSaveClose={onClose}
               layout="modal"
               source={source}
             />

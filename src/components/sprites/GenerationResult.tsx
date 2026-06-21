@@ -8,6 +8,7 @@ import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import BrewingLoader from './BrewingLoader';
+import PixelEditor from './PixelEditor';
 import { loadImage, removeBackgroundColor } from '@/lib/spriteUtils';
 import {
   loadHistory,
@@ -42,7 +43,6 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
-  const setPendingEditorHandoff = useSpriteStore((s) => s.setPendingEditorHandoff);
   const setPendingAnimatorHandoff = useSpriteStore((s) => s.setPendingAnimatorHandoff);
   const setPendingAnimatorSkipBgRemoval = useSpriteStore((s) => s.setPendingAnimatorSkipBgRemoval);
 
@@ -71,6 +71,15 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const [bgTolerance, setBgTolerance] = useState(10);
   const [detectedBgColor, setDetectedBgColor] = useState<{ r: number; g: number; b: number } | null>(null);
   const [bgRemovalError, setBgRemovalError] = useState<string | null>(null);
+
+  // Editor modal state. Held as a snapshot of {url, w, h} captured at click
+  // time rather than reactive state, because the [generatedImageDataUrl]
+  // reset effect at line 85-91 zeros naturalDims whenever the store URL
+  // changes — and pre-emptively staging the bg-removed variant in the store
+  // would zero our dims mid-modal, crashing the editor into a 0×0 error.
+  // Snapshot-on-open is also the right shape for any other event that could
+  // change the working image while the editor is open. Null = closed.
+  const [editorSnapshot, setEditorSnapshot] = useState<{ url: string; w: number; h: number } | null>(null);
 
   // Load history on mount and whenever a new generation arrives or user changes
   useEffect(() => {
@@ -135,15 +144,31 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   }, [router, bgRemovalActive, bgRemovedDataUrl, setGeneratedImage]);
 
   const handleSendToEditor = useCallback(() => {
-    // Honor bg-removal toggle the same way Send to Slicer does — push the
-    // transparent variant into the store before the handoff so the editor
-    // receives what the user is currently seeing.
-    if (bgRemovalActive && bgRemovedDataUrl) {
-      setGeneratedImage(bgRemovedDataUrl, bgRemovedDataUrl);
-    }
-    setPendingEditorHandoff(true);
-    router.push('/editor');
-  }, [router, bgRemovalActive, bgRemovedDataUrl, setGeneratedImage, setPendingEditorHandoff]);
+    // Guard against clicking before <img onLoad> has populated naturalDims
+    // (resets to {0,0} on every new generation). The modal would otherwise
+    // mount with frameWidth/Height = 0 and PixelEditorBody's pre-flight
+    // would refuse the load.
+    if (!naturalDims.w || !naturalDims.h) return;
+    const url = displayImageDataUrl;
+    if (!url) return;
+    // Snapshot bytes + dims at click time. We deliberately do NOT pre-stage
+    // the bg-removed variant in the store: setGeneratedImage triggers the
+    // [generatedImageDataUrl] reset effect, which zeros naturalDims and
+    // crashes the modal mid-mount with a 0×0 error. The snapshot is what
+    // the editor reads from now, so the store can wait until Save commits
+    // the EDITED bytes (which is what we actually want downstream anyway).
+    setEditorSnapshot({ url, w: naturalDims.w, h: naturalDims.h });
+  }, [naturalDims.w, naturalDims.h, displayImageDataUrl]);
+
+  // Editor Save: write the cleaned image back as the working generated image.
+  // The result card re-renders with the edited pixels, and every downstream
+  // action (Animate, Send to Slicer, Download) automatically uses the edit.
+  // Mirrors CharacterAutoPrep.handleEditorSave's "edited becomes the base"
+  // contract.
+  const handleEditorSave = useCallback((editedDataUrl: string) => {
+    setGeneratedImage(editedDataUrl, editedDataUrl);
+    setEditorSnapshot(null);
+  }, [setGeneratedImage]);
 
   const handleSendToAnimator = useCallback(() => {
     // Honor bg-removal toggle the same way Send to Editor / Send to Slicer do.
@@ -547,6 +572,24 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
             ))}
           </div>
         </div>
+      )}
+
+      {/* Pixel Editor modal — opens in-place over the result card. Reads
+          from editorSnapshot (a click-time capture of {url, w, h}) rather
+          than reactive state, so the [generatedImageDataUrl] reset effect
+          can't zero the dims mid-mount and crash the editor into a 0×0
+          error. Save writes the cleaned image back to generatedImageDataUrl
+          via handleEditorSave, so every downstream action (Animate, Slicer,
+          Download) picks it up automatically. */}
+      {editorSnapshot && (
+        <PixelEditor
+          frameDataUrl={editorSnapshot.url}
+          frameWidth={editorSnapshot.w}
+          frameHeight={editorSnapshot.h}
+          onSave={handleEditorSave}
+          onClose={() => setEditorSnapshot(null)}
+          source={{ kind: 'generation' }}
+        />
       )}
     </div>
   );

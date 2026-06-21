@@ -1,7 +1,17 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(git checkout *)",
+      "Bash(npx tsc *)",
+      "Bash(echo \"TSC_EXIT=$?\")",
+      "Bash(git commit -m ' *)",
+      "Bash(npm run *)",
+      "Bash(git add *)",
+      "Bash(git -C \"C:/Users/Alban/OneDrive/_Me/1_GitHub/Projects/AI/Pixel Art AI Sprite Sheet Generator/SpriteBrew\" log --oneline -20)",
+      "Bash(git -C \"C:/Users/Alban/OneDrive/_Me/1_GitHub/Projects/AI/Pixel Art AI Sprite Sheet Generator/SpriteBrew\" log --all --oneline -25)",
+      "Bash(git -C \"C:/Users/Alban/OneDrive/_Me/1_GitHub/Projects/AI/Pixel Art AI Sprite Sheet Generator/SpriteBrew\" status)",
+      "Bash(git -C \"C:/Users/Alban/OneDrive/_Me/1_GitHub/Projects/AI/Pixel Art AI Sprite Sheet Generator/SpriteBrew\" branch --show-current)"
     ]
   }
 }

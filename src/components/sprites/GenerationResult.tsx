@@ -80,6 +80,9 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   // Snapshot-on-open is also the right shape for any other event that could
   // change the working image while the editor is open. Null = closed.
   const [editorSnapshot, setEditorSnapshot] = useState<{ url: string; w: number; h: number } | null>(null);
+  // Brief "preparing" flag during the click-time decode. Disables the button
+  // so a fast double-tap can't fire two decodes/snapshots in flight.
+  const [openingEditor, setOpeningEditor] = useState(false);
 
   // Load history on mount and whenever a new generation arrives or user changes
   useEffect(() => {
@@ -143,22 +146,39 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     router.push('/upload');
   }, [router, bgRemovalActive, bgRemovedDataUrl, setGeneratedImage]);
 
-  const handleSendToEditor = useCallback(() => {
-    // Guard against clicking before <img onLoad> has populated naturalDims
-    // (resets to {0,0} on every new generation). The modal would otherwise
-    // mount with frameWidth/Height = 0 and PixelEditorBody's pre-flight
-    // would refuse the load.
-    if (!naturalDims.w || !naturalDims.h) return;
-    const url = displayImageDataUrl;
-    if (!url) return;
+  const handleSendToEditor = useCallback(async () => {
     // Snapshot bytes + dims at click time. We deliberately do NOT pre-stage
     // the bg-removed variant in the store: setGeneratedImage triggers the
     // [generatedImageDataUrl] reset effect, which zeros naturalDims and
     // crashes the modal mid-mount with a 0×0 error. The snapshot is what
     // the editor reads from now, so the store can wait until Save commits
     // the EDITED bytes (which is what we actually want downstream anyway).
-    setEditorSnapshot({ url, w: naturalDims.w, h: naturalDims.h });
-  }, [naturalDims.w, naturalDims.h, displayImageDataUrl]);
+    //
+    // Mobile-race fix: naturalDims is repopulated asynchronously by the
+    // visible result <img>'s onLoad. It's also reset to {0,0} on every new
+    // generatedImageDataUrl (incl. our own handleEditorSave round-trip).
+    // On mobile the decode window between "new src committed" and "onLoad
+    // fired" is wide enough that a tap can land while dims are still zero.
+    // Decode on demand here so the click is never blocked by the async
+    // population path. Fast path: if dims are already populated, no decode.
+    const url = displayImageDataUrl;
+    if (!url) return;
+    setOpeningEditor(true);
+    try {
+      let { w, h } = naturalDims;
+      if (!w || !h) {
+        const img = new Image();
+        img.src = url;
+        try { await img.decode(); } catch { return; }
+        w = img.naturalWidth;
+        h = img.naturalHeight;
+        if (!w || !h) return;
+      }
+      setEditorSnapshot({ url, w, h });
+    } finally {
+      setOpeningEditor(false);
+    }
+  }, [naturalDims, displayImageDataUrl]);
 
   // Editor Save: write the cleaned image back as the working generated image.
   // The result card re-renders with the edited pixels, and every downstream
@@ -505,7 +525,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           <Scissors size={14} />
           Send to Slicer
         </Button>
-        <Button variant="secondary" size="md" onClick={handleSendToEditor}>
+        <Button variant="secondary" size="md" onClick={handleSendToEditor} disabled={openingEditor}>
           <Pencil size={14} />
           Send to Editor
         </Button>

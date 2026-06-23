@@ -49,9 +49,13 @@ export default function PixelEditor({
   // Save-and-close from the confirm dialog: serialize current store pixels
   // to a PNG dataURL, fire onSave, then onClose. Shares the pixelsToPngDataUrl
   // helper with PixelEditorBody so the recipe lives in one place.
+  // Skip onSave when there are no committed edits (historyIndex === 0): a
+  // dirty-via-hasAttemptedEdit session (e.g. an iOS-cancelled stroke) has
+  // byte-identical pixels, and pushing them downstream falsely trips "Edited"
+  // state. Still close in that case.
   const saveAndCloseFromConfirm = useCallback(() => {
-    const { pixels, width, height } = useEditorStore.getState();
-    if (pixels) {
+    const { pixels, width, height, historyIndex } = useEditorStore.getState();
+    if (historyIndex > 0 && pixels) {
       onSave(pixelsToPngDataUrl(pixels, width, height));
     }
     onClose();
@@ -65,13 +69,20 @@ export default function PixelEditor({
     <HotkeysProvider initiallyActiveScopes={['editor']}>
       <Dialog open onClose={attemptDismiss} className="relative z-[100]">
         <div className="fixed inset-0 bg-black/70" aria-hidden="true" />
-        {/* items-start on mobile pins the panel to the top of the visible
-            viewport so the bottombar (toolbar) lands just above the iOS URL
-            bar / home indicator. With items-center, the layout-viewport-sized
-            wrapper centered the visible-viewport-sized panel inside itself,
-            pushing the bottombar under the URL bar after a rotate. md+ keeps
-            the 90vh panel centered as before. */}
-        <div className="fixed inset-0 flex items-start justify-center p-0 md:items-center md:p-4">
+        {/* Size the centering wrapper to the VISIBLE viewport, not the layout
+            viewport. `fixed inset-0` is the layout viewport, which under
+            viewport-fit: cover extends behind the iOS URL bar / chrome — so
+            items-start pinned the panel to a top that sits behind the URL bar
+            (landscape: header Save clipped; portrait: scroll to reach Save).
+            top:var(--app-top) + height:var(--app-vh) (published by ViewportVars
+            from visualViewport.offsetTop/height) anchor items-start to the
+            visible top and land the bottombar at the visible bottom. On desktop
+            --app-top is 0 and --app-vh is the full height, so md:items-center
+            md:p-4 keeps the 90vh dialog centered exactly as before. */}
+        <div
+          className="fixed inset-x-0 flex items-start justify-center p-0 md:items-center md:p-4"
+          style={{ top: 'var(--app-top, 0px)', height: 'var(--app-vh, 100dvh)' }}
+        >
           <Dialog.Panel className="bg-bg-primary overflow-hidden shadow-2xl h-app-vh w-screen rounded-none border-0 md:h-[90vh] md:w-[min(1200px,95vw)] md:rounded-xl md:border md:border-border-default">
             <PixelEditorBody
               frameDataUrl={frameDataUrl}

@@ -267,6 +267,25 @@ function applyBrushSquare(
   }
 }
 
+/**
+ * True when `pixels` byte-matches the loaded baseline. Lets undo/redo clear
+ * hasAttemptedEdit only on a genuine return to the original load — not on a
+ * bare history index that merely happens to be 0 after the 50-entry buffer
+ * shifts. Returns false when the baseline is unknown (fail toward "dirty",
+ * never toward silently clean). Early-exit loop; cheap at editor sizes.
+ */
+function pixelsMatchOriginal(
+  pixels: Uint8ClampedArray,
+  originalPixels: Uint8ClampedArray | null
+): boolean {
+  if (originalPixels == null) return false;
+  if (pixels.length !== originalPixels.length) return false;
+  for (let i = 0; i < pixels.length; i++) {
+    if (pixels[i] !== originalPixels[i]) return false;
+  }
+  return true;
+}
+
 export const useEditorStore = create<PixelEditorState>()(
   subscribeWithSelector((set, get) => ({
     // Document fields (Wave 1b)
@@ -537,24 +556,34 @@ export const useEditorStore = create<PixelEditorState>()(
     },
 
     undo: () => {
-      const { historyStack, historyIndex } = get();
+      const { historyStack, historyIndex, originalPixels } = get();
       if (historyIndex <= 0) return;
       const newIndex = historyIndex - 1;
+      const restored = new Uint8ClampedArray(historyStack[newIndex]);
       set({
         historyIndex: newIndex,
-        pixels: new Uint8ClampedArray(historyStack[newIndex]),
+        pixels: restored,
         lastDirtyRect: null, // wholesale pixel replacement → full repaint
+        // Clear the attempted-edit flag only when the canvas truly equals the
+        // loaded baseline. After history overflow (>50 strokes) index 0 is a
+        // mid-edit snapshot, not the load — so a bare newIndex===0 check would
+        // make an edited canvas read clean and skip the dismiss confirm. Fail
+        // toward "dirty" if the baseline is unknown.
+        ...(pixelsMatchOriginal(restored, originalPixels) ? { hasAttemptedEdit: false } : {}),
       });
     },
 
     redo: () => {
-      const { historyStack, historyIndex } = get();
+      const { historyStack, historyIndex, originalPixels } = get();
       if (historyIndex >= historyStack.length - 1) return;
       const newIndex = historyIndex + 1;
+      const restored = new Uint8ClampedArray(historyStack[newIndex]);
       set({
         historyIndex: newIndex,
-        pixels: new Uint8ClampedArray(historyStack[newIndex]),
+        pixels: restored,
         lastDirtyRect: null, // wholesale pixel replacement → full repaint
+        // Same baseline-equality rule as undo (see comment there).
+        ...(pixelsMatchOriginal(restored, originalPixels) ? { hasAttemptedEdit: false } : {}),
       });
     },
 
@@ -581,6 +610,8 @@ export const useEditorStore = create<PixelEditorState>()(
         historyStack: nextStack,
         historyIndex: nextStack.length - 1,
         lastDirtyRect: null, // wholesale replacement → full repaint
+        // Pixels are back at the loaded baseline; drop the attempted-edit flag.
+        hasAttemptedEdit: false,
       });
     },
 

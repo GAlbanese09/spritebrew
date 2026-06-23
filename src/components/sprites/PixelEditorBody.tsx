@@ -976,8 +976,14 @@ export default function PixelEditorBody({
   // Fallback to onDismiss when the wrapper omits onSaveClose — page mode's
   // Save button doesn't exist today, but the fallback keeps the contract safe.
   const doSaveAndDismiss = useCallback(() => {
-    const dataUrl = renderToDataUrl();
-    if (dataUrl) onSave(dataUrl);
+    // Skip onSave when there are no committed edits (historyIndex === 0): the
+    // pixels are byte-identical to load (e.g. a pinch-cancelled stroke left the
+    // session dirty only via hasAttemptedEdit), and pushing them downstream
+    // falsely flips "Edited" state. Still close either way.
+    if (useEditorStore.getState().historyIndex > 0) {
+      const dataUrl = renderToDataUrl();
+      if (dataUrl) onSave(dataUrl);
+    }
     (onSaveClose ?? onDismiss)();
   }, [renderToDataUrl, onSave, onSaveClose, onDismiss]);
 
@@ -1115,7 +1121,7 @@ export default function PixelEditorBody({
             </Button>
             <button
               onClick={onDismiss}
-              className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer shrink-0"
+              className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer shrink-0 min-h-11 min-w-11 flex items-center justify-center md:min-h-0 md:min-w-0"
               aria-label="Close editor"
             >
               <X size={16} />

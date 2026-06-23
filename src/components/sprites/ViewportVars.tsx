@@ -16,7 +16,9 @@ export function ViewportVars() {
     const setVar = () => {
       const vv = window.visualViewport;
       const h = Math.floor(vv?.height ?? window.innerHeight);
+      const top = Math.floor(vv?.offsetTop ?? 0);
       document.documentElement.style.setProperty('--app-vh', `${h}px`);
+      document.documentElement.style.setProperty('--app-top', `${top}px`);
     };
     const schedule = () => {
       cancelAnimationFrame(raf);

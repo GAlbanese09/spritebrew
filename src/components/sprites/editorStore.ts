@@ -140,6 +140,15 @@ export interface PixelEditorState {
   historyIndex: number; // -1 = empty, 0 = initial state, 1+ = edits
 
   /**
+   * Flips true on the first paint-pointer-down (see beginStroke) and survives
+   * cancelStroke. Only loadProject / reset clear it. Lets selectIsDirty stay
+   * true even when iOS interrupts the only stroke a user has attempted —
+   * cancelStroke unwinds historyIndex back to 0, which would otherwise read
+   * as "clean" and let the unsaved-changes confirm be silently skipped.
+   */
+  hasAttemptedEdit: boolean;
+
+  /**
    * Loaded-frame baseline, captured by loadFrame and independent of the
    * history stack. Survives history overflow so "Revert to original" remains
    * possible after >50 strokes. Cleared by reset() between frame loads.
@@ -272,6 +281,7 @@ export const useEditorStore = create<PixelEditorState>()(
     historyStack: [],
     historyIndex: -1,
     originalPixels: null,
+    hasAttemptedEdit: false,
     activeTool: 'pencil',
     foregroundColor: '#d4871c',
     brushSize: 1,
@@ -331,6 +341,7 @@ export const useEditorStore = create<PixelEditorState>()(
         historyStack: [historySeed],
         historyIndex: 0,
         originalPixels: baselineCopy,
+        hasAttemptedEdit: false, // fresh load — no edit attempts yet
         foregroundColor: p.color.foreground,
         lastDirtyRect: null, // full repaint needed for a fresh frame
       });
@@ -420,10 +431,19 @@ export const useEditorStore = create<PixelEditorState>()(
     },
 
     beginStroke: () => {
-      const { historyStack, historyIndex } = get();
+      const { historyStack, historyIndex, hasAttemptedEdit } = get();
+      // Flip hasAttemptedEdit on the FIRST paint-pointer-down. Survives a
+      // subsequent cancelStroke (gesture interrupt / pointercancel) so the
+      // unsaved-changes confirm fires on dismiss even when iOS unwound the
+      // only stroke. Cleared only by loadProject / reset.
+      const next: Partial<PixelEditorState> = {};
       if (historyIndex < historyStack.length - 1) {
-        set({ historyStack: historyStack.slice(0, historyIndex + 1) });
+        next.historyStack = historyStack.slice(0, historyIndex + 1);
       }
+      if (!hasAttemptedEdit) {
+        next.hasAttemptedEdit = true;
+      }
+      if (Object.keys(next).length > 0) set(next);
     },
 
     endStroke: () => {
@@ -590,6 +610,7 @@ export const useEditorStore = create<PixelEditorState>()(
         historyStack: [],
         historyIndex: -1,
         originalPixels: null,
+        hasAttemptedEdit: false,
         activeTool: 'pencil',
         foregroundColor: '#d4871c',
         brushSize: 1,
@@ -599,7 +620,11 @@ export const useEditorStore = create<PixelEditorState>()(
 );
 
 // Derived selectors — pass to useEditorStore(selector) to subscribe.
-export const selectIsDirty = (s: PixelEditorState) => s.historyIndex > 0;
+// Dirty = committed history past initial OR user has attempted a paint (even
+// if iOS cancelled the stroke before endStroke could commit). Keeps the
+// unsaved-changes confirm from being silently bypassed on dismiss.
+export const selectIsDirty = (s: PixelEditorState) =>
+  s.historyIndex > 0 || s.hasAttemptedEdit;
 export const selectCanUndo = (s: PixelEditorState) => s.historyIndex > 0;
 export const selectCanRedo = (s: PixelEditorState) =>
   s.historyIndex >= 0 && s.historyIndex < s.historyStack.length - 1;

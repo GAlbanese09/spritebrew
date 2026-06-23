@@ -65,7 +65,13 @@ export default function PixelEditor({
     <HotkeysProvider initiallyActiveScopes={['editor']}>
       <Dialog open onClose={attemptDismiss} className="relative z-[100]">
         <div className="fixed inset-0 bg-black/70" aria-hidden="true" />
-        <div className="fixed inset-0 flex items-center justify-center p-0 md:p-4">
+        {/* items-start on mobile pins the panel to the top of the visible
+            viewport so the bottombar (toolbar) lands just above the iOS URL
+            bar / home indicator. With items-center, the layout-viewport-sized
+            wrapper centered the visible-viewport-sized panel inside itself,
+            pushing the bottombar under the URL bar after a rotate. md+ keeps
+            the 90vh panel centered as before. */}
+        <div className="fixed inset-0 flex items-start justify-center p-0 md:items-center md:p-4">
           <Dialog.Panel className="bg-bg-primary overflow-hidden shadow-2xl h-app-vh w-screen rounded-none border-0 md:h-[90vh] md:w-[min(1200px,95vw)] md:rounded-xl md:border md:border-border-default">
             <PixelEditorBody
               frameDataUrl={frameDataUrl}

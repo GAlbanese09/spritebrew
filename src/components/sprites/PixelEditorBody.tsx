@@ -1102,13 +1102,25 @@ export default function PixelEditorBody({
         </h2>
 
         {layout === 'modal' ? (
-          <button
-            onClick={onDismiss}
-            className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer shrink-0"
-            aria-label="Close editor"
-          >
-            <X size={16} />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Primary Save in the always-visible header — replaces the
+                sidepanel footer Save, which lived under `hidden md:flex`
+                and was inaccessible on mobile. Routes through the same
+                doSaveAndDismiss path (onSave + onSaveClose ?? onDismiss),
+                so the post-Save close still bypasses attemptDismiss's
+                dirty re-check. */}
+            <Button variant="primary" size="sm" onClick={doSaveAndDismiss}>
+              <Save size={14} />
+              Save
+            </Button>
+            <button
+              onClick={onDismiss}
+              className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer shrink-0"
+              aria-label="Close editor"
+            >
+              <X size={16} />
+            </button>
+          </div>
         ) : (
           <div className="flex items-center gap-2 shrink-0">
             <Link href="/editor" onClick={onDismiss}>
@@ -1447,20 +1459,10 @@ export default function PixelEditorBody({
 
         {/* Animation preview — Phase 4 */}
 
-        {/* Modal footer slot: Cancel / Save sits inline at the bottom of the
-            sidepanel only in modal mode. Page mode puts Save in the header,
-            so this block is hidden there. */}
-        {layout === 'modal' && (
-          <div className="mt-auto pt-3 border-t border-border-subtle flex flex-col gap-2">
-            <Button variant="primary" size="sm" onClick={doSaveAndDismiss}>
-              <Save size={14} />
-              Save
-            </Button>
-            <Button variant="ghost" size="sm" onClick={onDismiss}>
-              Cancel
-            </Button>
-          </div>
-        )}
+        {/* Save/Cancel formerly lived here; moved to the header on all widths
+            so mobile (where this sidepanel is `hidden md:flex`) has a
+            reachable Save. The header X serves as Cancel (routes through
+            attemptDismiss → confirm). */}
       </aside>
     </div>
 

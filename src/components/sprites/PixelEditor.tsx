@@ -83,7 +83,7 @@ export default function PixelEditor({
           className="fixed inset-x-0 flex items-start justify-center p-0 md:items-center md:p-4"
           style={{ top: 'var(--app-top, 0px)', height: 'var(--app-vh, 100dvh)' }}
         >
-          <Dialog.Panel className="bg-bg-primary overflow-hidden shadow-2xl h-app-vh w-screen rounded-none border-0 md:h-[90vh] md:w-[min(1200px,95vw)] md:rounded-xl md:border md:border-border-default">
+          <Dialog.Panel className="bg-bg-primary overflow-hidden overscroll-none shadow-2xl h-app-vh w-screen rounded-none border-0 md:h-[90vh] md:w-[min(1200px,95vw)] md:rounded-xl md:border md:border-border-default">
             <PixelEditorBody
               frameDataUrl={frameDataUrl}
               frameWidth={frameWidth}

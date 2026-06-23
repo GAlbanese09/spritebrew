@@ -98,6 +98,11 @@ body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-mono);
+  /* Suppress iOS Safari pull-to-refresh app-wide. Page scroll lives in
+     AppShell's <main>, not on <body>, and no SpriteBrew feature relies on
+     the refresh gesture — but it WAS silently destroying editor work when
+     a drag-in-the-modal chained out to the document. */
+  overscroll-behavior-y: contain;
 }
 
 /* Pixel-perfect rendering for all images.

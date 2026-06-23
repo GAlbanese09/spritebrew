@@ -10,6 +10,7 @@ import {
   useEditorStore,
   selectCanUndo,
   selectCanRedo,
+  selectIsDirty,
   VALID_BRUSH_SIZES,
   dimsWithinEditorLimits,
   editorDimsRejectionMessage,
@@ -139,6 +140,11 @@ export default function PixelEditorBody({
   const brushSize = useEditorStore((s) => s.brushSize);
   const setBrushSize = useEditorStore((s) => s.setBrushSize);
   const isDirty = useEditorStore((s) => s.historyIndex > 0);
+  // Broader dirty signal (historyIndex > 0 || hasAttemptedEdit) — used ONLY
+  // by the beforeunload guard so an iOS-cancelled-stroke session still
+  // prompts on reload/close. Revert button keeps the narrower isDirty above
+  // since reverting a non-committed state would push a no-op history entry.
+  const isDirtyForGuard = useEditorStore(selectIsDirty);
   const canUndo = useEditorStore(selectCanUndo);
   const canRedo = useEditorStore(selectCanRedo);
 
@@ -1019,15 +1025,18 @@ export default function PixelEditorBody({
 
   // beforeunload guard — fires in BOTH layouts. Wave 1 invariant: register
   // only while dirty so a clean editor session doesn't pollute navigation.
+  // Keyed on the BROADER selectIsDirty so an iOS-cancelled-stroke session
+  // (historyIndex unwound to 0 but hasAttemptedEdit still true) also prompts
+  // on reload — same gap hasAttemptedEdit closed for the dismiss confirm.
   useEffect(() => {
-    if (!isDirty) return;
+    if (!isDirtyForGuard) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       return '';
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
-  }, [isDirty]);
+  }, [isDirtyForGuard]);
 
   // Hotkeys — same Wave 1 + Day-9 useKey/splitKey fixes.
   const cycleBrushSize = useCallback(

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useLayoutEffect } from 'react';
 
 // Drives --app-vh from the visual viewport so the editor shell height matches
 // what's actually visible on iOS Safari. 100dvh alone is throttled and goes
@@ -10,7 +10,7 @@ import { useEffect } from 'react';
 const RESYNC_DELAYS = [50, 250, 500, 1000] as const;
 
 export function ViewportVars() {
-  useEffect(() => {
+  useLayoutEffect(() => {
     let raf = 0;
     let timers: number[] = [];
     const setVar = () => {
@@ -29,7 +29,12 @@ export function ViewportVars() {
       timers.forEach(clearTimeout);
       timers = RESYNC_DELAYS.map((d) => window.setTimeout(schedule, d));
     };
-    setVar();
+    // Use the same staggered settle chain that the rotate path uses, not a
+    // one-shot read. iOS doesn't report a settled visualViewport.offsetTop at
+    // the instant a fixed modal mounts; resync() schedules an immediate rAF
+    // write plus 50/250/500/1000ms re-reads so the vars converge to correct
+    // within ~50ms — no user gesture required.
+    resync();
     const vv = window.visualViewport;
     window.addEventListener('resize', resync, { passive: true });
     window.addEventListener('orientationchange', resync, { passive: true });

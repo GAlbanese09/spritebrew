@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Pencil, Eraser, Pipette, Undo2, Redo2, History, Save, X, ArrowLeft, Film, AlertCircle } from 'lucide-react';
+import { Pencil, Eraser, Pipette, Undo2, Redo2, History, Save, X, ArrowLeft, Film, AlertCircle, Download } from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import Button from '@/components/ui/Button';
 import {
@@ -1011,7 +1011,8 @@ export default function PixelEditorBody({
     router.push('/generate');
   }, [renderToDataUrl, setGeneratedImage, setOriginalCharacter, setPendingAnimatorSkipBgRemoval, setPendingAnimatorHandoff, router]);
 
-  // Page-mode Save: PNG download via <a download>. Editor stays open.
+  // PNG download via <a download>. Editor stays open. Backs page-mode Save
+  // and the modal header's Download ("keep a copy") action.
   const doSaveAsDownload = useCallback(() => {
     const dataUrl = renderToDataUrl();
     if (!dataUrl) return;
@@ -1118,6 +1119,18 @@ export default function PixelEditorBody({
 
         {layout === 'modal' ? (
           <div className="flex items-center gap-2 shrink-0">
+            {/* "Keep a copy" — backs the modal header with the same
+                doSaveAsDownload that page mode uses. Primary Save sitting
+                between Download and X keeps the two icon buttons from
+                being mistaken for each other. */}
+            <button
+              onClick={doSaveAsDownload}
+              className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer shrink-0 min-h-11 min-w-11 flex items-center justify-center md:min-h-0 md:min-w-0"
+              aria-label="Download a copy (PNG)"
+              title="Download a copy (PNG)"
+            >
+              <Download size={16} />
+            </button>
             {/* Primary Save in the always-visible header — replaces the
                 sidepanel footer Save, which lived under `hidden md:flex`
                 and was inaccessible on mobile. Routes through the same

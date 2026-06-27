@@ -8,7 +8,6 @@ import GenerationForm from '@/components/sprites/GenerationForm';
 import AnimateForm from '@/components/sprites/AnimateForm';
 import GenerationResult from '@/components/sprites/GenerationResult';
 import { addToHistory, type SlicerHints } from '@/lib/generationHistory';
-import { UpstreamStatusBanner } from '@/components/sprites/UpstreamStatusBanner';
 import { useSpriteStore } from '@/stores/spriteStore';
 
 const EARLY_ACCESS_DISMISS_KEY = 'spritebrew_early_access_dismissed';
@@ -245,8 +244,6 @@ export default function GeneratePage() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <UpstreamStatusBanner />
-
       {/* Header */}
       <div>
         <h1 className="font-display text-sm text-accent-amber mb-2">AI Generate</h1>

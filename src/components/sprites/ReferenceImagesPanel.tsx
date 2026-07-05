@@ -232,14 +232,25 @@ export default function ReferenceImagesPanel({
                   alt={`Reference ${i + 1}`}
                   className="pixel-art-render w-full h-full object-contain"
                 />
+                {/* Two-layer hit-target split: the outer <button> is a
+                    44×44 tap area on mobile (min-h-11 min-w-11) with the
+                    visible circle-badge nested as an inner <span> anchored
+                    to the top-right of that hit area. On md+, min-h-0/min-w-0
+                    collapses the button to the badge's natural size and
+                    top-1/right-1 restores the desktop visual verbatim.
+                    Kept inside the card (top-0 right-0) so overflow-hidden
+                    on the parent doesn't clip the hit area. */}
                 <button
                   type="button"
                   onClick={() => onRemove(i)}
-                  className="absolute top-1 right-1 rounded-full bg-bg-primary/90 hover:bg-red-500/90
-                    text-text-primary p-0.5 cursor-pointer opacity-90 hover:opacity-100 transition-colors"
+                  className="absolute top-0 right-0 z-10 flex items-start justify-end cursor-pointer
+                    min-h-11 min-w-11 md:min-h-0 md:min-w-0
+                    md:top-1 md:right-1 md:items-center md:justify-center"
                   aria-label={`Remove reference ${i + 1}`}
                 >
-                  <X size={10} />
+                  <span className="flex items-center justify-center rounded-full bg-bg-primary/90 hover:bg-red-500/90 text-text-primary p-0.5 opacity-90 hover:opacity-100 transition-colors">
+                    <X size={10} />
+                  </span>
                 </button>
               </div>
             ))}

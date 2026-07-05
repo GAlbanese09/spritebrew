@@ -39,7 +39,6 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 import { useSpriteStore } from '@/stores/spriteStore';
 import { extractPaletteFromImageData } from '@/lib/imagePalette';
-import { ViewportVars } from './ViewportVars';
 import { useEditorRecovery } from './useEditorRecovery';
 import { isDevHost } from '@/lib/isDevHost';
 import { devRecoverySelfTest } from '@/lib/editorRecovery';
@@ -1104,7 +1103,6 @@ export default function PixelEditorBody({
 
   return (
     <>
-    <ViewportVars />
     <div
       className="h-full grid bg-bg-primary grid-rows-[auto_minmax(0,1fr)_auto] grid-cols-1 [grid-template-areas:'header''canvas''bottombar'] md:grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[56px_1fr_280px] md:[grid-template-areas:'header_header_header''toolbar_canvas_sidepanel']"
     >

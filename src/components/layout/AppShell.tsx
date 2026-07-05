@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import RewardModal from '@/components/rewards/RewardModal';
+import { ViewportVars } from '@/components/sprites/ViewportVars';
 
 interface AppShellProps {
   children: ReactNode;
@@ -29,7 +30,15 @@ export default function AppShell({ children }: AppShellProps) {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-app-vh overflow-hidden">
+      {/* Single app-wide instance of the visible-viewport publisher. Writes
+          --app-vh / --app-top to document.documentElement from visualViewport
+          so every fixed-positioned surface (editor modal, sticky bars, etc.)
+          can anchor to the real visible viewport on iOS Safari instead of the
+          layout viewport (which includes URL bar / notch zones). Hoisted here
+          from PixelEditorBody so the vars are populated well before any modal
+          opens. Landing route bypasses AppShell entirely and doesn't need it. */}
+      <ViewportVars />
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className="flex flex-1 flex-col lg:ml-[var(--sidebar-width)]">

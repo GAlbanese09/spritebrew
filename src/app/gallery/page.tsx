@@ -495,10 +495,16 @@ function GalleryCard({ entry, imageUrl, onDownload, onSendToSlicer, onDelete }: 
           )}
         </Badge>
 
-        {/* Delete button (hover-revealed) */}
+        {/* Delete button — visible by default on touch, hover-revealed on
+            fine pointers. Base `opacity-100` is the touch state; `pointer-fine`
+            variants flip it back to opacity-0 unless the card is hovered.
+            focus-visible keeps keyboard reveal. min-h-11 min-w-11 gives the
+            44px tap area on mobile; md:min-h-0 md:min-w-0 restores the compact
+            desktop visual. flex-centered so the icon stays centered when the
+            mobile floor makes the button taller. */}
         <button
           onClick={onDelete}
-          className="absolute top-2 right-2 z-10 p-1.5 bg-bg-primary/80 hover:bg-bg-primary rounded opacity-0 group-hover:opacity-100 transition-opacity"
+          className="absolute top-2 right-2 z-10 p-1.5 bg-bg-primary/80 hover:bg-bg-primary rounded flex items-center justify-center min-h-11 min-w-11 md:min-h-0 md:min-w-0 opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
           aria-label="Delete"
         >
           <Trash2 size={14} className="text-text-secondary" />

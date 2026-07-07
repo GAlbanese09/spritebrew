@@ -363,21 +363,32 @@ export default function SpriteDetector({
         </div>
       )}
 
-      {/* Canvas overlay */}
+      {/* Wave M2.1: canvas card is always mounted (previously nested inside
+          the !detecting && detected.length > 0 conditional) so
+          useCanvasFitScale's ref attaches on the first render. Without this,
+          the hook's useLayoutEffect ran with a null ref and never re-attached
+          the ResizeObserver — the wrapper stayed unmeasured forever and the
+          scale fell back to legacy maxWidth (600). The empty bordered card is
+          briefly visible during detection; the sibling "Detecting sprites..."
+          banner above covers user feedback. The canvas child stays
+          conditional so no spurious canvas element renders when empty. */}
+      <div
+        ref={previewWrapperRef}
+        className="rounded-lg border border-border-default bg-bg-elevated p-3 flex justify-center overflow-auto"
+      >
+        {!detecting && detected.length > 0 && (
+          <canvas
+            ref={canvasRef}
+            onClick={handleCanvasClick}
+            className="block cursor-pointer"
+            style={{ imageRendering: 'pixelated' }}
+          />
+        )}
+      </div>
+
+      {/* Canvas overlay's siblings — remain conditional. */}
       {!detecting && detected.length > 0 && (
         <>
-          <div
-            ref={previewWrapperRef}
-            className="rounded-lg border border-border-default bg-bg-elevated p-3 flex justify-center overflow-auto"
-          >
-            <canvas
-              ref={canvasRef}
-              onClick={handleCanvasClick}
-              className="block cursor-pointer"
-              style={{ imageRendering: 'pixelated' }}
-            />
-          </div>
-
           {/* Sprite list summary */}
           <div className="flex items-center justify-between">
             <p className="text-[10px] font-mono text-text-muted">

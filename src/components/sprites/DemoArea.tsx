@@ -365,7 +365,14 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
       // horizontal swipe doesn't leak). Movement input is polled from
       // keysRef.current (see game loop + touch D-pad below), not from canvas
       // pointer events, so this doesn't degrade controls.
-      cv.style.touchAction = 'pan-y';
+      //
+      // Wave M2.1: use setProperty with `important` so Pixi cannot overwrite
+      // us on a later internal update. The direct `cv.style.touchAction =`
+      // assignment George saw the M2 build with was being clobbered — Pixi's
+      // EventSystem re-emits touch-action: none as part of some post-init
+      // paths, and a plain inline style loses that race. `!important` on an
+      // inline style wins against every non-!important assignment.
+      cv.style.setProperty('touch-action', 'pan-y', 'important');
       // Responsive display: take 100% of the (max-1280px) container width,
       // preserving 16:9 aspect ratio. Internal resolution stays at CANVAS_W × CANVAS_H.
       cv.style.width = '100%';

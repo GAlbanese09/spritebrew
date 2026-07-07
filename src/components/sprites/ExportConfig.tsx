@@ -152,13 +152,14 @@ export default function ExportConfig() {
         );
       }
 
-      // Wave M2: preview-area scale. Preserves the legacy max-width (400),
-      // max-height (300), and upscale-cap (4) terms; adds a container-width
-      // clamp so mobile-portrait doesn't paint past the wrapper's clientWidth.
-      // Falls back to the legacy shape before the first ResizeObserver reading.
+      // Wave M2 / M2.1: preview-area scale. Preserves the legacy max-width
+      // (400), max-height (300), and upscale-cap (4) terms; adds a container
+      // clamp so mobile-portrait doesn't paint past the wrapper's content
+      // width. useContainerWidth is guaranteed non-null (see hook's
+      // small-fallback contract), so no null branch is needed.
       const maxW = 400;
       const maxH = 300;
-      const effectiveMaxW = containerWidth !== null ? Math.min(maxW, containerWidth) : maxW;
+      const effectiveMaxW = Math.min(maxW, containerWidth);
       const scale = Math.min(effectiveMaxW / assembled.width, maxH / assembled.height, 4);
       const dispW = Math.floor(assembled.width * scale);
       const dispH = Math.floor(assembled.height * scale);

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Film, Gamepad2, UploadCloud } from 'lucide-react';
+import { ArrowRight, Film, Gamepad2, UploadCloud } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import AnimationPlayer from '@/components/sprites/AnimationPlayer';
 import DemoArea from '@/components/sprites/DemoArea';
@@ -79,6 +79,18 @@ export default function PreviewPage() {
           <div className="rounded-lg border border-border-default bg-bg-surface p-6">
             {tab === 'demo' && <DemoArea frameDataUrls={frameDataUrls} />}
             {tab === 'player' && <AnimationPlayer frameDataUrls={frameDataUrls} />}
+          </div>
+
+          {/* Continue to Export — the flow's final step. Mirrors the
+              "Continue to Preview" row on /upload so the user always has a
+              forward path instead of relying on the sidebar. */}
+          <div className="flex flex-wrap justify-end items-center gap-3">
+            <Link href="/export">
+              <Button size="lg">
+                Continue to Export
+                <ArrowRight size={16} />
+              </Button>
+            </Link>
           </div>
         </>
       )}

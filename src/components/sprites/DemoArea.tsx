@@ -11,7 +11,7 @@ import {
   TextureSource,
 } from 'pixi.js';
 import { DropShadowFilter } from 'pixi-filters';
-import { ChevronDown, ChevronUp, Eye, EyeOff, Maximize2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Eye, EyeOff, Maximize2, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Swords, Zap } from 'lucide-react';
 import { DEMO_CONTROLS } from '@/lib/constants';
 import { useSpriteStore } from '@/stores/spriteStore';
 import type { SpriteAnimation } from '@/lib/types';
@@ -358,6 +358,14 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
       const cv = app.canvas as HTMLCanvasElement;
       cv.style.imageRendering = 'pixelated';
       cv.style.display = 'block';
+      // Wave M2: Pixi v8's EventSystem sets touch-action: none on app.canvas,
+      // which kills native vertical page-scroll over the canvas — leaving the
+      // user with only narrow side gutters to scroll on mobile. pan-y restores
+      // vertical scroll while still absorbing horizontal gestures (so pinch or
+      // horizontal swipe doesn't leak). Movement input is polled from
+      // keysRef.current (see game loop + touch D-pad below), not from canvas
+      // pointer events, so this doesn't degrade controls.
+      cv.style.touchAction = 'pan-y';
       // Responsive display: take 100% of the (max-1280px) container width,
       // preserving 16:9 aspect ratio. Internal resolution stays at CANVAS_W × CANVAS_H.
       cv.style.width = '100%';
@@ -792,12 +800,20 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
     <div className="space-y-4">
       {/* Canvas container — responsive max-width with 16:9 aspect ratio.
           Internal canvas resolution stays at CANVAS_W × CANVAS_H; CSS scales
-          the display down on narrower viewports while preserving pixel art. */}
+          the display down on narrower viewports while preserving pixel art.
+          Wave M2: landscape cap. maxWidth also derives from the available
+          height (visible viewport minus 11rem for header/tabs/controls
+          reservation) times the CANVAS_W/CANVAS_H ratio, so a landscape phone
+          shows the whole canvas plus the toolbar without vertical overflow.
+          mx-auto centers it when narrower than its parent. */}
       <div
-        className={`relative rounded-lg border-2 overflow-hidden transition-colors w-full ${
+        className={`relative rounded-lg border-2 overflow-hidden transition-colors w-full mx-auto ${
           focused ? 'border-accent-amber glow-amber' : 'border-border-default'
         }`}
-        style={{ maxWidth: CANVAS_W, aspectRatio: `${CANVAS_W} / ${CANVAS_H}` }}
+        style={{
+          maxWidth: `min(${CANVAS_W}px, calc((var(--app-vh, 100dvh) - 11rem) * ${CANVAS_W / CANVAS_H}))`,
+          aspectRatio: `${CANVAS_W} / ${CANVAS_H}`,
+        }}
       >
         <div ref={containerRef} className="w-full h-full" />
 
@@ -832,6 +848,111 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           </div>
         )}
       </div>
+
+      {/* Wave M2: touch-only movement/action controls. Coarse-pointer devices
+          (phones, tablets) show the D-pad + action buttons; desktop hides them
+          entirely so the keyboard interface stays visually unchanged. Handlers
+          mutate keysRef.current / call triggerOneShot directly, so the window
+          keydown listener's `focused` gate is naturally bypassed for touch
+          without weakening it for real keyboards. All three release events
+          (up / leave / cancel) are wired — iOS pointercancel would otherwise
+          strand a direction (same lesson as the editor's cancelStroke). */}
+      {!showcaseMode && (
+        <div className="hidden pointer-coarse:flex items-center justify-between gap-4 select-none">
+          <div
+            className="grid grid-cols-3 grid-rows-3 gap-1"
+            style={{ touchAction: 'none' }}
+          >
+            <span />
+            <button
+              type="button"
+              aria-label="Move up"
+              className="min-h-11 min-w-11 flex items-center justify-center rounded bg-bg-elevated text-text-primary border border-border-default active:bg-accent-amber active:text-bg-primary cursor-pointer"
+              style={{ touchAction: 'none' }}
+              onPointerDown={(e) => { e.preventDefault(); keysRef.current.add('ArrowUp'); }}
+              onPointerUp={() => keysRef.current.delete('ArrowUp')}
+              onPointerLeave={() => keysRef.current.delete('ArrowUp')}
+              onPointerCancel={() => keysRef.current.delete('ArrowUp')}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <ArrowUp size={20} />
+            </button>
+            <span />
+            <button
+              type="button"
+              aria-label="Move left"
+              className="min-h-11 min-w-11 flex items-center justify-center rounded bg-bg-elevated text-text-primary border border-border-default active:bg-accent-amber active:text-bg-primary cursor-pointer"
+              style={{ touchAction: 'none' }}
+              onPointerDown={(e) => { e.preventDefault(); keysRef.current.add('ArrowLeft'); }}
+              onPointerUp={() => keysRef.current.delete('ArrowLeft')}
+              onPointerLeave={() => keysRef.current.delete('ArrowLeft')}
+              onPointerCancel={() => keysRef.current.delete('ArrowLeft')}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <ArrowLeft size={20} />
+            </button>
+            <span />
+            <button
+              type="button"
+              aria-label="Move right"
+              className="min-h-11 min-w-11 flex items-center justify-center rounded bg-bg-elevated text-text-primary border border-border-default active:bg-accent-amber active:text-bg-primary cursor-pointer"
+              style={{ touchAction: 'none' }}
+              onPointerDown={(e) => { e.preventDefault(); keysRef.current.add('ArrowRight'); }}
+              onPointerUp={() => keysRef.current.delete('ArrowRight')}
+              onPointerLeave={() => keysRef.current.delete('ArrowRight')}
+              onPointerCancel={() => keysRef.current.delete('ArrowRight')}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <ArrowRight size={20} />
+            </button>
+            <span />
+            <button
+              type="button"
+              aria-label="Move down"
+              className="min-h-11 min-w-11 flex items-center justify-center rounded bg-bg-elevated text-text-primary border border-border-default active:bg-accent-amber active:text-bg-primary cursor-pointer"
+              style={{ touchAction: 'none' }}
+              onPointerDown={(e) => { e.preventDefault(); keysRef.current.add('ArrowDown'); }}
+              onPointerUp={() => keysRef.current.delete('ArrowDown')}
+              onPointerLeave={() => keysRef.current.delete('ArrowDown')}
+              onPointerCancel={() => keysRef.current.delete('ArrowDown')}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <ArrowDown size={20} />
+            </button>
+            <span />
+          </div>
+          <div className="flex flex-col gap-2" style={{ touchAction: 'none' }}>
+            <button
+              type="button"
+              aria-label="Attack"
+              className="min-h-11 min-w-11 px-3 flex items-center justify-center gap-2 rounded bg-bg-elevated text-text-primary border border-border-default active:bg-accent-amber active:text-bg-primary cursor-pointer text-xs font-mono"
+              style={{ touchAction: 'none' }}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                if (!lockedRef.current) triggerOneShot('attacking');
+              }}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <Swords size={16} />
+              Attack
+            </button>
+            <button
+              type="button"
+              aria-label="Jump"
+              className="min-h-11 min-w-11 px-3 flex items-center justify-center gap-2 rounded bg-bg-elevated text-text-primary border border-border-default active:bg-accent-amber active:text-bg-primary cursor-pointer text-xs font-mono"
+              style={{ touchAction: 'none' }}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                if (!lockedRef.current) triggerOneShot('jumping');
+              }}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <Zap size={16} />
+              Jump
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Toolbar (background + scale + showcase) — hidden in showcase mode */}
       {!showcaseMode && (

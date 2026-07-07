@@ -12,6 +12,7 @@ import {
   type DetectedSprite,
 } from '@/lib/spriteUtils';
 import { SLICER_FRAME_PRESETS } from '@/lib/constants';
+import { useCanvasFitScale } from '@/lib/useCanvasFitScale';
 import Button from '@/components/ui/Button';
 
 // Square presets from the canonical preset list — used for target-size pills.
@@ -60,6 +61,11 @@ export default function SpriteDetector({
   onExtract,
 }: SpriteDetectorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Wave M2: measure the canvas wrapper's actual width so mobile-portrait
+  // (~270-300px) doesn't paint a 600px canvas that then needs horizontal
+  // scroll inside its overflow-auto wrapper. Legacy maxWidth: 600 preserves
+  // desktop pixel-identical output.
+  const previewWrapperRef = useRef<HTMLDivElement>(null);
   const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [detecting, setDetecting] = useState(false);
@@ -76,11 +82,10 @@ export default function SpriteDetector({
   const [targetW, setTargetW] = useState(64);
   const [targetH, setTargetH] = useState(64);
 
-  // Canvas display scale — cap the preview to 600px wide
-  const displayScale = useMemo(() => {
-    const maxW = 600;
-    return Math.min(maxW / imageWidth, 1);
-  }, [imageWidth]);
+  // Wave M2: container-aware fit-scale (was a fixed maxW = 600). Preserves
+  // desktop rendering via the maxWidth cap; clamps by the wrapper's
+  // clientWidth on mobile-portrait to keep the canvas inside its bounds.
+  const displayScale = useCanvasFitScale(imageWidth, previewWrapperRef, { maxWidth: 600 });
 
   const displayW = Math.floor(imageWidth * displayScale);
   const displayH = Math.floor(imageHeight * displayScale);
@@ -361,7 +366,10 @@ export default function SpriteDetector({
       {/* Canvas overlay */}
       {!detecting && detected.length > 0 && (
         <>
-          <div className="rounded-lg border border-border-default bg-bg-elevated p-3 flex justify-center overflow-auto">
+          <div
+            ref={previewWrapperRef}
+            className="rounded-lg border border-border-default bg-bg-elevated p-3 flex justify-center overflow-auto"
+          >
             <canvas
               ref={canvasRef}
               onClick={handleCanvasClick}

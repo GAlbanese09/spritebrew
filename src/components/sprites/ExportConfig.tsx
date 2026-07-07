@@ -25,6 +25,7 @@ import {
   resizeFrame,
 } from '@/lib/downloadUtils';
 import { loadImage } from '@/lib/spriteUtils';
+import { useContainerWidth } from '@/lib/useCanvasFitScale';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 
@@ -54,6 +55,10 @@ export default function ExportConfig() {
   const [warnings, setWarnings] = useState<string[]>([]);
 
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  // Wave M2: measure the preview wrapper's actual width so mobile-portrait
+  // (~270-300px) doesn't paint a 400px preview that then overflows.
+  const previewWrapperRef = useRef<HTMLDivElement>(null);
+  const containerWidth = useContainerWidth(previewWrapperRef);
 
   const fw = spriteSheet?.frameWidth ?? 32;
   const fh = spriteSheet?.frameHeight ?? 32;
@@ -147,10 +152,14 @@ export default function ExportConfig() {
         );
       }
 
-      // Scale to fit preview area
+      // Wave M2: preview-area scale. Preserves the legacy max-width (400),
+      // max-height (300), and upscale-cap (4) terms; adds a container-width
+      // clamp so mobile-portrait doesn't paint past the wrapper's clientWidth.
+      // Falls back to the legacy shape before the first ResizeObserver reading.
       const maxW = 400;
       const maxH = 300;
-      const scale = Math.min(maxW / assembled.width, maxH / assembled.height, 4);
+      const effectiveMaxW = containerWidth !== null ? Math.min(maxW, containerWidth) : maxW;
+      const scale = Math.min(effectiveMaxW / assembled.width, maxH / assembled.height, 4);
       const dispW = Math.floor(assembled.width * scale);
       const dispH = Math.floor(assembled.height * scale);
 
@@ -174,7 +183,7 @@ export default function ExportConfig() {
 
     draw();
     return () => { cancelled = true; };
-  }, [activeAnimations, frameDataUrls, selectedEngine, padding, powerOfTwo, resizeEnabled, resizeW, resizeH, fw, fh]);
+  }, [activeAnimations, frameDataUrls, selectedEngine, padding, powerOfTwo, resizeEnabled, resizeW, resizeH, fw, fh, containerWidth]);
 
   const handleExport = useCallback(async () => {
     setExporting(true);
@@ -474,7 +483,10 @@ export default function ExportConfig() {
         <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-3">
           Preview
         </label>
-        <div className="rounded-lg border border-border-default bg-bg-elevated p-4 flex justify-center overflow-auto">
+        <div
+          ref={previewWrapperRef}
+          className="rounded-lg border border-border-default bg-bg-elevated p-4 flex justify-center overflow-auto"
+        >
           <canvas
             ref={previewCanvasRef}
             className="pixel-art-render"

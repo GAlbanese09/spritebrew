@@ -5,6 +5,7 @@ import { Grid3X3, Scan, Scissors, AlertTriangle, Lock, X } from 'lucide-react';
 import { SLICER_FRAME_PRESETS } from '@/lib/constants';
 import { detectFrameGrid, loadImage, imageToCanvas } from '@/lib/spriteUtils';
 import { useSpriteStore } from '@/stores/spriteStore';
+import { useCanvasFitScale } from '@/lib/useCanvasFitScale';
 import Button from '@/components/ui/Button';
 
 interface SanityWarning {
@@ -53,6 +54,12 @@ export default function SlicerConfig({
   // in the store — purely a UI gate.
   const [overrideAnyAnimationLock, setOverrideAnyAnimationLock] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Wave M2: measure the canvas wrapper's actual width so mobile-portrait
+  // (~270-300px) doesn't paint a 600px canvas that then needs horizontal
+  // scroll inside its overflow-auto wrapper. Legacy maxWidth: 600 preserves
+  // desktop pixel-identical output.
+  const previewWrapperRef = useRef<HTMLDivElement>(null);
+  const previewScale = useCanvasFitScale(imageWidth, previewWrapperRef, { maxWidth: 600 });
 
   // Live frame count — uses safe Math.max(0, ...) so an oversized frame width
   // produces 0 columns instead of negative numbers.
@@ -148,9 +155,10 @@ export default function SlicerConfig({
 
     const img = new Image();
     img.onload = () => {
-      // Scale to fit within 600px width
-      const maxW = 600;
-      const scale = Math.min(maxW / imageWidth, 1);
+      // Wave M2: container-aware scale via useCanvasFitScale — clamped by the
+      // wrapper's clientWidth so mobile-portrait paints a canvas that fits
+      // its container instead of overflowing the overflow-auto wrapper.
+      const scale = previewScale;
       const displayW = Math.floor(imageWidth * scale);
       const displayH = Math.floor(imageHeight * scale);
 
@@ -194,7 +202,7 @@ export default function SlicerConfig({
       }
     };
     img.src = imageUrl;
-  }, [imageUrl, imageWidth, imageHeight, frameWidth, frameHeight, columns, rows, padding, offsetX, offsetY]);
+  }, [imageUrl, imageWidth, imageHeight, frameWidth, frameHeight, columns, rows, padding, offsetX, offsetY, previewScale]);
 
   const handleSlice = () => {
     onSlice({ frameWidth, frameHeight, columns, rows, padding, offsetX, offsetY });
@@ -426,7 +434,10 @@ export default function SlicerConfig({
         <label className="text-xs font-mono text-text-secondary uppercase tracking-wider mb-3 block">
           Preview
         </label>
-        <div className="rounded-lg border border-border-default bg-bg-elevated p-3 overflow-auto">
+        <div
+          ref={previewWrapperRef}
+          className="rounded-lg border border-border-default bg-bg-elevated p-3 overflow-auto"
+        >
           <canvas
             ref={canvasRef}
             className="block mx-auto pixel-art-render"
@@ -435,8 +446,10 @@ export default function SlicerConfig({
         </div>
       </div>
 
-      {/* Slice button — live frame count + zero-frame warning */}
-      <div className="flex items-center justify-between">
+      {/* Slice button — live frame count + zero-frame warning. flex-wrap
+          keeps the primary "Slice into Frames" button reachable on portrait
+          where the label + button together exceed the card content width. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
         {totalFrames === 0 ? (
           <p className="text-xs font-mono text-amber-400">
             0 frames &mdash; frame size doesn&apos;t fit your image

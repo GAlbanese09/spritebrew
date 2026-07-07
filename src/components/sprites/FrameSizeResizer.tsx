@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Grid3X3, Check, Scan, AlertCircle } from 'lucide-react';
 import { loadImage, imageToCanvas, resizePixelArt } from '@/lib/spriteUtils';
 import { SLICER_FRAME_PRESETS } from '@/lib/constants';
+import { useCanvasFitScale } from '@/lib/useCanvasFitScale';
 import Button from '@/components/ui/Button';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -272,6 +273,11 @@ export default function FrameSizeResizer({
   const [targetFrameH, setTargetFrameH] = useState(64);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Wave M2: measure the canvas wrapper's actual width so mobile-portrait
+  // doesn't paint a 400px canvas that then overflows its centered flex
+  // wrapper. Legacy maxWidth: 400 preserves desktop pixel-identical output.
+  const previewWrapperRef = useRef<HTMLDivElement>(null);
+  const previewScale = useCanvasFitScale(sourceWidth, previewWrapperRef, { maxWidth: 400 });
 
   // ── Current frame size (given the selected grid) ──
   const currentFrameW = Math.floor(sourceWidth / cols);
@@ -347,8 +353,8 @@ export default function FrameSizeResizer({
 
     const img = new Image();
     img.onload = () => {
-      const maxW = 400;
-      const scale = Math.min(maxW / sourceWidth, 1);
+      // Wave M2: container-aware scale via useCanvasFitScale.
+      const scale = previewScale;
       const displayW = Math.floor(sourceWidth * scale);
       const displayH = Math.floor(sourceHeight * scale);
 
@@ -377,7 +383,7 @@ export default function FrameSizeResizer({
       }
     };
     img.src = sourceDataUrl;
-  }, [sourceDataUrl, sourceWidth, sourceHeight, cols, rows]);
+  }, [sourceDataUrl, sourceWidth, sourceHeight, cols, rows, previewScale]);
 
   // ── Handlers ──
   const handleGridPreset = useCallback((c: number, r: number) => {
@@ -511,7 +517,10 @@ export default function FrameSizeResizer({
         </div>
 
         {/* Grid overlay preview */}
-        <div className="rounded-lg border border-border-default bg-bg-elevated p-3 flex justify-center">
+        <div
+          ref={previewWrapperRef}
+          className="rounded-lg border border-border-default bg-bg-elevated p-3 flex justify-center overflow-auto"
+        >
           <canvas
             ref={canvasRef}
             className="block"
@@ -617,8 +626,10 @@ export default function FrameSizeResizer({
         </div>
       </div>
 
-      {/* Actions */}
-      <div className="flex items-center justify-between gap-2 pt-2 border-t border-border-subtle">
+      {/* Actions — flex-wrap keeps the primary "Use as-is" / "Resize to WxH"
+          button reachable on portrait where the three buttons together exceed
+          the card content width. */}
+      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border-subtle">
         <div className="flex items-center gap-2">
           {onCancel && (
             <Button variant="ghost" size="sm" onClick={onCancel}>

@@ -852,14 +852,19 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       }
 
       // fix-a follow-up: despill chroma-fill residue on silhouette edges.
-      // Reads from reqCtx (populated at request time from refs above), same
-      // mechanism the poll handler uses via inFlightRef.current. Skipping
-      // the toggle-OFF case here keeps legacy sheets untouched; the
-      // corner-alpha gate inside despillIfTransparent is the second defense
-      // for the rare "RD returned opaque despite our request" case.
-      const dataUrl = reqCtx.transparentBg
-        ? await despillIfTransparent(data.imageUrl!, reqCtx.bgColor)
-        : data.imageUrl!;
+      // Called UNCONDITIONALLY on animate results: as of July 14 RD strips
+      // animation backgrounds server-side by default even when remove_bg
+      // isn't sent, so toggle-OFF sheets now come back transparent too —
+      // gating the despill on reqCtx.transparentBg would ship RD's raw
+      // matte with its dark chroma rim untouched. The two internal safety
+      // gates make unconditional calls safe: (1) despillIfTransparent's
+      // 4-corner alpha check no-ops on opaque sheets (a defensive path in
+      // case RD reverts and returns opaque again), and (2)
+      // despillChromaEdges no-ops on neutral fills (black/white/gray/other-
+      // hue). Semantics: the toggle now controls whether we EXPLICITLY
+      // request remove_bg (robust if RD reverts); cleanup runs against the
+      // actual sheet regardless.
+      const dataUrl = await despillIfTransparent(data.imageUrl!, reqCtx.bgColor);
 
       setGeneratedImage(dataUrl, dataUrl);
       setGenerationStyle(`any_animation_${reqCtx.action}`);
@@ -919,16 +924,20 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       return;
     }
     if (poll.status === 'success' && poll.result) {
-      // fix-a follow-up: same despill wire as the SSE path, using the
-      // request-time values captured in inFlightRef so a user's mid-poll
-      // toggle change doesn't misfeed the correction. Wrapped in an IIFE
-      // because useEffect callbacks can't be async themselves.
+      // fix-a follow-up: same despill wire as the SSE path. Called
+      // UNCONDITIONALLY on animate results (see the SSE branch's comment
+      // for the July 14 RD default-strip change and the two internal
+      // safety gates that make this safe on opaque sheets and neutral
+      // fills). reqCtx.bgColor is still request-time via inFlightRef so
+      // a mid-poll toggle change can't misfeed the correction; falls
+      // back to '#000000' if the ref is somehow null (mount-race
+      // guardrail — bgColor '#000000' classifies as neutral, so
+      // despillChromaEdges no-ops anyway). Wrapped in an IIFE because
+      // useEffect callbacks can't be async themselves.
       const rawDataUrl = `data:image/png;base64,${poll.result.resultBase64}`;
       const reqCtx = inFlightRef.current;
       (async () => {
-        const dataUrl = reqCtx?.transparentBg
-          ? await despillIfTransparent(rawDataUrl, reqCtx.bgColor)
-          : rawDataUrl;
+        const dataUrl = await despillIfTransparent(rawDataUrl, reqCtx?.bgColor ?? '#000000');
         setGeneratedImage(dataUrl, dataUrl);
         if (reqCtx) {
           setGenerationStyle(`any_animation_${reqCtx.action}`);

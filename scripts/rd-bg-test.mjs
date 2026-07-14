@@ -17,17 +17,28 @@
 // FALLBACK-MATRIX MODE — --fallback-matrix flag:
 //   Diagnoses the consumer's animation__any_animation fallback path against
 //   a specific 400 inference_failed observed in production tail after a 524
-//   on the primary rd_advanced_animation__* style. Prime suspect: the
-//   consumer's fallback body still carries frames_duration (the producer's
-//   inline runAnimate deletes it before the any_animation retry; the
-//   consumer port kept it). Two RD calls total (~$0.50):
+//   on the primary rd_advanced_animation__* style.
+//
+//   Single-path invocation (~$0.50, one 64px PNG): the frames_duration
+//   suspect. Two RD calls, C3 + C4:
 //     C3 (baseline): animation__any_animation, no frames_duration, no remove_bg.
 //     C4:            identical to C3 plus frames_duration: 16.
-//   Stops after C4 and prints a verdict line.
+//
+//   Two-path invocation (~$0.25, one 256px PNG as the SECOND positional):
+//   the large-shape suspect. C3/C4 skipped (already receipted). One RD call,
+//   C5, with the FAITHFUL production fallback shape:
+//     C5: animation__any_animation @ 256×256 + frames_duration: 8, using the
+//         SECOND path as input_image. animation__any_animation is
+//         documented as 64×64-locked in our RD research, so this tests
+//         whether the consumer's spread-based fallback can rescue a 256px
+//         primary attempt as-is.
+//
+//   Each mode prints a verdict line and stops.
 //
 // Run:
 //   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs ./path/to/opaque-character.png
-//   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --fallback-matrix ./path/to/opaque-character.png
+//   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --fallback-matrix ./path/to/64px.png
+//   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --fallback-matrix ./path/to/64px.png ./path/to/256px.png
 //
 // Input requirement: an OPAQUE RGB PNG (no alpha). RD rejects transparency on
 // input. To mirror production, use a character on a magenta backdrop, but any
@@ -47,14 +58,25 @@ if (!token) {
 
 const args = process.argv.slice(2);
 const fallbackMatrixMode = args.includes('--fallback-matrix');
-const inputPath = args.find((a) => !a.startsWith('--'));
+const positional = args.filter((a) => !a.startsWith('--'));
+const inputPath = positional[0];
+// Second positional path only meaningful in --fallback-matrix mode: when
+// present, C3/C4 are skipped (they've already been receipted at 64px) and
+// only C5 runs at 256px with THIS path as its input. Default mode ignores it.
+const inputPathC5 = positional[1];
 if (!inputPath) {
-  console.error('Usage: RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs [--fallback-matrix] <path-to-opaque.png>');
+  console.error('Usage: RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs [--fallback-matrix] <path-to-opaque.png> [<path-to-256px.png>]');
   process.exit(1);
 }
 
 const inputBytes = await readFile(resolvePath(inputPath));
 const inputB64 = inputBytes.toString('base64');
+
+// Second input (C5-only mode). Loaded on demand — a 256px sheet, distinct
+// from the 64px C3/C4 input. Bytes stay unread when this positional is absent.
+const inputB64C5 = inputPathC5
+  ? (await readFile(resolvePath(inputPathC5))).toString('base64')
+  : null;
 
 const basePayload = {
   prompt: 'walking character',
@@ -147,6 +169,38 @@ async function callFallback(label, payload) {
 }
 
 async function runFallbackMatrix() {
+  // C5-only mode: caller passed a second positional path. C3/C4 (64px shapes)
+  // have already returned 200 on file, so this run diagnoses the FAITHFUL
+  // large-shape the consumer's fallback actually sends in production —
+  // width/height 256 spread from the primary body into a style that our RD
+  // research documents as 64×64-locked.
+  if (inputB64C5) {
+    const c5Payload = {
+      prompt: 'walking character',
+      prompt_style: 'animation__any_animation',
+      width: 256,
+      height: 256,
+      num_images: 1,
+      return_spritesheet: true,
+      frames_duration: 8,
+      input_image: inputB64C5,
+    };
+    const c5 = await callFallback('C5 (any_animation @ 256px + frames_duration 8)', c5Payload);
+
+    let verdict;
+    if (c5.status === 400) {
+      verdict = 'CONFIRMED: fallback shape fails at 256px (deterministic); fallback cannot rescue large requests as-is';
+    } else if (c5.ok) {
+      verdict = '256px fallback shape OK; July 13 night was transient RD degradation';
+    } else {
+      verdict = `C5 failed with HTTP ${c5.status}; not a 400 rejection; no verdict`;
+    }
+    console.log(`VERDICT: ${verdict}`);
+    return;
+  }
+
+  // Single-path mode: C3/C4 as before. Byte-identical to the prior version.
+  //
   // C3: bare-minimum animation__any_animation body — no frames_duration, no
   // remove_bg. Everything else matches the shape the consumer's fallback
   // sends (return_spritesheet, num_images: 1, 64×64, input_image).

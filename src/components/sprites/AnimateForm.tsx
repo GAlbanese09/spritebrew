@@ -15,6 +15,7 @@ import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import CharacterAutoPrep from './CharacterAutoPrep';
+import { loadImage, imageToCanvas, despillChromaEdges } from '@/lib/spriteUtils';
 import {
   getTokenCost,
   getResolutionMode,
@@ -76,6 +77,41 @@ const BG_COLORS = [
   { id: 'green', label: 'Green', color: '#00ff00' },
   { id: 'magenta', label: 'Magenta', color: '#ff00ff' },
 ] as const;
+
+/**
+ * fix-a follow-up: decode → check-for-alpha → despill → re-encode.
+ * Called on the animate-result base64 the first time it lands on the client.
+ * Gates:
+ *   (a) the CALLER only invokes this when the request's transparentBg was ON
+ *   (b) here — corner sample; if all four corners are opaque, RD didn't
+ *       actually return a transparent sheet (unlikely given our remove_bg
+ *       request, but defensive) → return the input unchanged.
+ *   (c) fillHex is passed in from the caller's captured state.
+ * Silent-fail on decode errors → returns the input dataUrl. The despill is
+ * a quality-of-life step; a broken pass must never break the pipeline.
+ */
+async function despillIfTransparent(dataUrl: string, fillHex: string): Promise<string> {
+  try {
+    const img = await loadImage(dataUrl);
+    const canvas = imageToCanvas(img);
+    const W = canvas.width;
+    const H = canvas.height;
+    if (W === 0 || H === 0) return dataUrl;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return dataUrl;
+    // Corner alpha sample — cheap check to skip the full despill pass on
+    // opaque sheets (fix-a-legacy or an RD miss).
+    const a0 = ctx.getImageData(0, 0, 1, 1).data[3];
+    const a1 = ctx.getImageData(W - 1, 0, 1, 1).data[3];
+    const a2 = ctx.getImageData(0, H - 1, 1, 1).data[3];
+    const a3 = ctx.getImageData(W - 1, H - 1, 1, 1).data[3];
+    if (a0 === 255 && a1 === 255 && a2 === 255 && a3 === 255) return dataUrl;
+    despillChromaEdges(canvas, fillHex);
+    return canvas.toDataURL('image/png');
+  } catch {
+    return dataUrl;
+  }
+}
 
 interface AnimateFormProps {
   onGenerated: (dataUrl: string, prompt: string, style: string) => void;
@@ -142,7 +178,16 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
   // Captures click-time action/motion so the poll-success effect can write
   // history with the right context. Null on resume.
-  const inFlightRef = useRef<{ action: string; motionPrompt: string } | null>(null);
+  // fix-a follow-up: also capture the request-time transparentBg + bgColor
+  // so the despill step in the poll handler uses the values the RD job was
+  // ACTUALLY generated with, not whatever the form state is at
+  // poll-completion time (user may have toggled between click and result).
+  const inFlightRef = useRef<{
+    action: string;
+    motionPrompt: string;
+    transparentBg: boolean;
+    bgColor: string;
+  } | null>(null);
 
   // 1s click-debounce (one-render race window beyond isGenerating).
   const lastGenerateAtRef = useRef<number>(0);
@@ -189,6 +234,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   // so we don't have to schema-bump v1; loaded via a mount-only effect below
   // that reads the localStorage key directly.
   const [transparentBg, setTransparentBg] = useState(DEFAULT_TRANSPARENT_BG);
+  // Latest-value refs for transparentBg + bgColor. handleGenerate reads
+  // ONLY from these refs (not from the state bindings) so the callback's
+  // dep array doesn't need to list transparentBg / bgColor — which would
+  // recreate the callback on every toggle AND would make the SSE despill
+  // decision "current-at-result-time" instead of "current-at-request-time",
+  // reintroducing the mid-flight race. Refs stay stable across renders;
+  // the sync effects below keep .current in step with state.
+  const transparentBgRef = useRef(transparentBg);
+  const bgColorRef = useRef(bgColor);
   const [paddingEnabled, setPaddingEnabled] = useState(false);
   const [characterSizePct, setCharacterSizePct] = useState(75);
   const [selectedAction, setSelectedAction] = useState('walking');
@@ -315,6 +369,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       // Quota exceeded / localStorage disabled — silently drop.
     }
   }, [transparentBg]);
+
+  // Latest-value ref syncs for transparentBg + bgColor. handleGenerate
+  // captures {transparentBg, bgColor} into a reqCtx object at the top of
+  // the try block via these refs (see the fix-a-follow-up comment there);
+  // the values then flow to the request assembly, the inFlightRef handoff
+  // for the poll effect, and the SSE despill decision — all consistent
+  // and all "request-time" without adding state to the callback's deps.
+  useEffect(() => { transparentBgRef.current = transparentBg; }, [transparentBg]);
+  useEffect(() => { bgColorRef.current = bgColor; }, [bgColor]);
 
   // Auto-save (debounced 200ms) — writes the seven form-config fields on
   // every change. NOT included: character image, pendingDataUrl, handoff
@@ -724,9 +787,20 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setOriginalCharacter(characterDataUrl);
     poll.reset();
 
-    // Click-time context for the poll-success effect.
-    const capturedAction = selectedAction;
-    const capturedMotion = motionPrompt.trim();
+    // Click-time context for both branches (SSE and poll). transparentBg +
+    // bgColor come from refs — reading state bindings from the callback
+    // body would force them into the callback's dep array, which would
+    // (a) recreate the callback on every toggle, and (b) let the SSE
+    // despill decision drift to current-at-result-time and reintroduce the
+    // mid-flight toggle race. Snapshotting via refs into reqCtx keeps the
+    // request assembly, the inFlightRef handoff, and the SSE despill all
+    // reading the same request-time values.
+    const reqCtx = {
+      action: selectedAction,
+      motionPrompt: motionPrompt.trim(),
+      transparentBg: transparentBgRef.current,
+      bgColor: bgColorRef.current,
+    };
 
     let tookPollPath = false;
 
@@ -734,14 +808,14 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       const body: Payload = {
         mode: 'animate',
         inputImage: rgbBase64,
-        action: capturedAction,
+        action: reqCtx.action,
         width: selectedResolution,
         height: selectedResolution,
         framesDuration: frameCount,
       };
 
-      if (capturedMotion) {
-        body.motionPrompt = capturedMotion;
+      if (reqCtx.motionPrompt) {
+        body.motionPrompt = reqCtx.motionPrompt;
       }
 
       // Transparent-background request (fix a). RD honors remove_bg: true on
@@ -751,7 +825,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       // so no per-style gate is needed here — mirrors GenerationForm's
       // `if (removeBg && selectedStyle.supportsRemoveBg)` pattern with the
       // supportsRemoveBg check collapsed to always-true for this form.
-      if (transparentBg) {
+      if (reqCtx.transparentBg) {
         body.removeBg = true;
       }
 
@@ -764,7 +838,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
       if (result.mode === 'poll') {
         tookPollPath = true;
-        inFlightRef.current = { action: capturedAction, motionPrompt: capturedMotion };
+        inFlightRef.current = reqCtx;
         poll.startPolling(result.jobId, idempotencyKey, 'animate');
         return;
       }
@@ -777,12 +851,20 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         return;
       }
 
-      const dataUrl = data.imageUrl!;
+      // fix-a follow-up: despill chroma-fill residue on silhouette edges.
+      // Reads from reqCtx (populated at request time from refs above), same
+      // mechanism the poll handler uses via inFlightRef.current. Skipping
+      // the toggle-OFF case here keeps legacy sheets untouched; the
+      // corner-alpha gate inside despillIfTransparent is the second defense
+      // for the rare "RD returned opaque despite our request" case.
+      const dataUrl = reqCtx.transparentBg
+        ? await despillIfTransparent(data.imageUrl!, reqCtx.bgColor)
+        : data.imageUrl!;
 
       setGeneratedImage(dataUrl, dataUrl);
-      setGenerationStyle(`any_animation_${capturedAction}`);
+      setGenerationStyle(`any_animation_${reqCtx.action}`);
       await fetchBalance();
-      onGenerated(dataUrl, capturedMotion || capturedAction, `any_animation_${capturedAction}`);
+      onGenerated(dataUrl, reqCtx.motionPrompt || reqCtx.action, `any_animation_${reqCtx.action}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       const errObj = err as Error & {
@@ -837,22 +919,31 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       return;
     }
     if (poll.status === 'success' && poll.result) {
-      const dataUrl = `data:image/png;base64,${poll.result.resultBase64}`;
-      setGeneratedImage(dataUrl, dataUrl);
-      const ctx = inFlightRef.current;
-      if (ctx) {
-        setGenerationStyle(`any_animation_${ctx.action}`);
-        void fetchBalance();
-        onGenerated(
-          dataUrl,
-          ctx.motionPrompt || ctx.action,
-          `any_animation_${ctx.action}`
-        );
-        inFlightRef.current = null;
-      }
-      setGenerating(false);
-      setGeneratingAction(null);
-      poll.reset();
+      // fix-a follow-up: same despill wire as the SSE path, using the
+      // request-time values captured in inFlightRef so a user's mid-poll
+      // toggle change doesn't misfeed the correction. Wrapped in an IIFE
+      // because useEffect callbacks can't be async themselves.
+      const rawDataUrl = `data:image/png;base64,${poll.result.resultBase64}`;
+      const reqCtx = inFlightRef.current;
+      (async () => {
+        const dataUrl = reqCtx?.transparentBg
+          ? await despillIfTransparent(rawDataUrl, reqCtx.bgColor)
+          : rawDataUrl;
+        setGeneratedImage(dataUrl, dataUrl);
+        if (reqCtx) {
+          setGenerationStyle(`any_animation_${reqCtx.action}`);
+          void fetchBalance();
+          onGenerated(
+            dataUrl,
+            reqCtx.motionPrompt || reqCtx.action,
+            `any_animation_${reqCtx.action}`
+          );
+          inFlightRef.current = null;
+        }
+        setGenerating(false);
+        setGeneratingAction(null);
+        poll.reset();
+      })();
       return;
     }
     if (poll.status === 'error' || poll.status === 'abandoned') {

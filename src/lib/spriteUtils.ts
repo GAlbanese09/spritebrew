@@ -930,3 +930,126 @@ export function removeBackgroundColor(
   ctx.putImageData(imageData, 0, 0);
   return { dataUrl: canvas.toDataURL('image/png'), detectedColor: bg };
 }
+
+/**
+ * Chroma-edge despill for animate sheets that came back from RD with hard
+ * 1-bit alpha (Wave fix-a follow-up). Per-pixel analysis of a July 8 dev
+ * smoke sheet showed silhouette-ring pixels retain a small color cast from
+ * the pre-generation fill (~18% magenta-cast on ring 1, fading to the ~3%
+ * interior baseline by ring 2). This function sheds that cast in place —
+ * no alpha touched, no legitimate interior art touched.
+ *
+ * Fill classification:
+ *   - Magenta-family: R and B both ≥ G + 60 in the fill color.
+ *   - Green-family:   G ≥ max(R, B) + 60.
+ *   - Anything else (black, white, gray, other hues): return no-op —
+ *     nothing about a neutral fill leaves a chromatic cast to shed.
+ *
+ * Band selection: only opaque (alpha === 255) pixels within Chebyshev
+ * distance ≤ 2 of any fully-transparent pixel. Computed via two dilation
+ * passes over the transparency mask (each pass expands by one 8-neighbor
+ * ring). That's the physically-affected annulus; interior pixels never saw
+ * the fill so they carry no residue to shed.
+ *
+ * Luminance gate: only pixels with (0.299 R + 0.587 G + 0.114 B) ≤ 90 are
+ * touched. Protects legitimate pink skin and mauve shading that sits on
+ * silhouette edges — those readings are bright enough to survive the gate;
+ * the dark ring pixels that actually carry the cast are dim by construction
+ * (they're blends of dark art with dark magenta or green).
+ *
+ * Per-pixel correction:
+ *   - Magenta: excess = min(R, B) − G. If excess > 0, subtract from R and
+ *     B, leaving G untouched. Neutralizes any magenta component while
+ *     preserving whatever green content the pixel actually had.
+ *   - Green:   excess = G − max(R, B). If excess > 0, subtract from G.
+ *     Symmetric neutralization.
+ *
+ * Never touches alpha. Single ImageData read + putImageData write. Silent
+ * no-op on unparseable fillHex, on a zero-dim canvas, or on a canvas whose
+ * 2D context is unavailable.
+ */
+export function despillChromaEdges(canvas: HTMLCanvasElement, fillHex: string): void {
+  const m = /^#([0-9a-f]{6})$/i.exec(fillHex);
+  if (!m) return;
+  const fillR = parseInt(m[1].slice(0, 2), 16);
+  const fillG = parseInt(m[1].slice(2, 4), 16);
+  const fillB = parseInt(m[1].slice(4, 6), 16);
+
+  const magenta = fillR >= fillG + 60 && fillB >= fillG + 60;
+  const green = fillG >= Math.max(fillR, fillB) + 60;
+  if (!magenta && !green) return;
+
+  const W = canvas.width;
+  const H = canvas.height;
+  if (W === 0 || H === 0) return;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const imgData = ctx.getImageData(0, 0, W, H);
+  const px = imgData.data;
+
+  // Transparency mask: 1 = fully transparent, 0 = opaque or partial.
+  // (RD returns hard 1-bit alpha; partials shouldn't exist, but treating
+  //  only alpha===0 as source keeps the "opaque pixels near transparent
+  //  neighbors" semantic exact.)
+  const transparent = new Uint8Array(W * H);
+  for (let i = 0, p = 0; i < px.length; i += 4, p++) {
+    transparent[p] = px[i + 3] === 0 ? 1 : 0;
+  }
+
+  // Two 8-connected dilation passes → Chebyshev distance ≤ 2 from any
+  // transparent pixel.
+  const dilate = (src: Uint8Array): Uint8Array => {
+    const out = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const p = y * W + x;
+        if (src[p]) { out[p] = 1; continue; }
+        let any = 0;
+        for (let dy = -1; dy <= 1 && !any; dy++) {
+          const ny = y + dy;
+          if (ny < 0 || ny >= H) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx;
+            if (nx < 0 || nx >= W) continue;
+            if (src[ny * W + nx]) { any = 1; break; }
+          }
+        }
+        out[p] = any;
+      }
+    }
+    return out;
+  };
+
+  const ring1 = dilate(transparent);
+  const ring2 = dilate(ring1);
+
+  for (let i = 0, p = 0; i < px.length; i += 4, p++) {
+    if (transparent[p]) continue; // never touch transparent pixels
+    if (!ring2[p]) continue;      // outside the 2-pixel band around alpha
+
+    const r = px[i];
+    const g = px[i + 1];
+    const b = px[i + 2];
+
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    if (lum > 90) continue;       // spare bright art (skin, highlights)
+
+    if (magenta) {
+      const excess = Math.min(r, b) - g;
+      if (excess > 0) {
+        px[i] = r - excess;
+        px[i + 2] = b - excess;
+      }
+    } else {
+      // green
+      const excess = g - Math.max(r, b);
+      if (excess > 0) {
+        px[i + 1] = g - excess;
+      }
+    }
+    // px[i + 3] intentionally untouched.
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+}

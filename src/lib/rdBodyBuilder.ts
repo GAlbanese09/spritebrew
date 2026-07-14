@@ -67,6 +67,12 @@ export interface RdAnimateBody {
   frames_duration: number;
   return_spritesheet: true;
   input_image: string;
+  /** Fix a: request a transparent output sheet. RD honors this on
+   *  rd_advanced_animation__* and the animation__any_animation fallback,
+   *  returning genuine hard 1-bit alpha. Omitted (not `false`) when not
+   *  requested — matches JSON.stringify's undefined-drop semantics used by
+   *  the existing wire format. */
+  remove_bg?: boolean;
 }
 
 // === Builders ===
@@ -134,7 +140,7 @@ export function buildRdAnimateBody(body: GenerateBody): RdAnimateBody {
 
   const promptStyle = ACTION_STYLE_MAP[action!] ?? FALLBACK_STYLE;
 
-  return {
+  const out: RdAnimateBody = {
     prompt,
     width: animSize,
     height: animSize,
@@ -144,4 +150,11 @@ export function buildRdAnimateBody(body: GenerateBody): RdAnimateBody {
     return_spritesheet: true,
     input_image: rawBase64,
   };
+
+  // Fix a: mirror runAnimate's inline route.ts wiring so both producer paths
+  // stay byte-identical on the RD wire. Omit rather than set false so
+  // JSON.stringify drops it and the RD wire matches what runAnimate emits.
+  if (body.removeBg) out.remove_bg = true;
+
+  return out;
 }

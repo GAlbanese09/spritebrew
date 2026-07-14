@@ -60,6 +60,16 @@ const MAX_MOTION_PROMPT_LEN = 500;
 
 const KEY = 'spritebrew:animate:latest';
 
+// ── Transparent-background toggle (fix a) ────────────────────────────────────
+// Separate top-level key from `KEY` above (which stores form config as one
+// blob). This is a single boolean the user rarely changes; keeping it in its
+// own key means we don't have to schema-bump SavedAnimateConfig or migrate
+// existing users. Absent key reads as DEFAULT_TRANSPARENT_BG so returning
+// users default to transparent output — that's the RD-honored path added
+// once RD confirmed remove_bg: true works on rd_advanced_animation__* styles.
+export const TRANSPARENT_BG_STORAGE_KEY = 'spritebrew:animate:transparentBg';
+export const DEFAULT_TRANSPARENT_BG = true;
+
 // ── Template layer (Piece B) ─────────────────────────────────────────────────
 
 const TEMPLATES_KEY = 'spritebrew:animate:templates';

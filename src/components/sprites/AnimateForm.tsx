@@ -32,6 +32,8 @@ import {
   deleteTemplate,
   MAX_TEMPLATES,
   MAX_TEMPLATE_NAME_LEN,
+  TRANSPARENT_BG_STORAGE_KEY,
+  DEFAULT_TRANSPARENT_BG,
   type AnimateTemplate,
 } from '@/lib/animateConfig';
 
@@ -178,6 +180,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const [pendingWidth, setPendingWidth] = useState(0);
   const [pendingHeight, setPendingHeight] = useState(0);
   const [bgColor, setBgColor] = useState('#ff00ff');
+  // Transparent-background toggle (fix a). When true, we ask RD for a
+  // transparent sheet via remove_bg: true. The bgColor is still composited
+  // onto the INPUT (RD requires opaque RGB input), but RD strips its baked
+  // version from the OUTPUT. When false (legacy path), the colored bg comes
+  // back and the user can use the client-side keyer on GenerationResult if
+  // they want to strip it later. Persisted separately from SavedAnimateConfig
+  // so we don't have to schema-bump v1; loaded via a mount-only effect below
+  // that reads the localStorage key directly.
+  const [transparentBg, setTransparentBg] = useState(DEFAULT_TRANSPARENT_BG);
   const [paddingEnabled, setPaddingEnabled] = useState(false);
   const [characterSizePct, setCharacterSizePct] = useState(75);
   const [selectedAction, setSelectedAction] = useState('walking');
@@ -261,6 +272,49 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   useEffect(() => {
     setTemplates(loadTemplates());
   }, []);
+
+  // Mount-only: hydrate the transparentBg toggle from its dedicated key.
+  // Absent key reads as DEFAULT_TRANSPARENT_BG (true) so returning users
+  // default to the RD-side transparent path. Only 'false' persists an off
+  // state — any other value (missing / malformed) falls through to true.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(TRANSPARENT_BG_STORAGE_KEY);
+      if (raw === 'false') setTransparentBg(false);
+      // 'true' and absent both leave the useState default (true) in place.
+    } catch {
+      // localStorage disabled — keep default.
+    }
+  }, []);
+
+  // Auto-save transparentBg on change. Same shape as the SavedAnimateConfig
+  // debounce but on its own key — a plain string 'true'/'false' since it's
+  // a single boolean, not a versioned envelope.
+  //
+  // Skip-first-run guard closes the hydration write-order window: on mount
+  // Commit 1 runs the hydration effect (may schedule setTransparentBg(false)
+  // for a returning-OFF user) AND this save effect (whose closure still sees
+  // the initial useState default `true`). Without the guard the save would
+  // write 'true', clobbering the persisted 'false' until Commit 2's re-run
+  // corrects it. A `hydratedRef` set inside the hydration effect wouldn't
+  // help — same-commit effect ordering means the save still fires with a
+  // stale closure. Skipping the FIRST save fire delays writes until an
+  // actual state change occurs (either the hydration's setState → Commit 2,
+  // or a user toggle), so the persisted value is never transiently wrong.
+  const skipFirstTransparentBgSave = useRef(true);
+  useEffect(() => {
+    if (skipFirstTransparentBgSave.current) {
+      skipFirstTransparentBgSave.current = false;
+      return;
+    }
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(TRANSPARENT_BG_STORAGE_KEY, transparentBg ? 'true' : 'false');
+    } catch {
+      // Quota exceeded / localStorage disabled — silently drop.
+    }
+  }, [transparentBg]);
 
   // Auto-save (debounced 200ms) — writes the seven form-config fields on
   // every change. NOT included: character image, pendingDataUrl, handoff
@@ -690,6 +744,17 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         body.motionPrompt = capturedMotion;
       }
 
+      // Transparent-background request (fix a). RD honors remove_bg: true on
+      // every rd_advanced_animation__* style (and the animation__any_animation
+      // fallback), returning genuine hard 1-bit alpha in the returned sheet.
+      // AnimateForm always targets one of those styles via ACTION_STYLE_MAP,
+      // so no per-style gate is needed here — mirrors GenerationForm's
+      // `if (removeBg && selectedStyle.supportsRemoveBg)` pattern with the
+      // supportsRemoveBg check collapsed to always-true for this form.
+      if (transparentBg) {
+        body.removeBg = true;
+      }
+
       // Per-attempt UUID — required by the queue-kickoff path; legacy SSE ignores it.
       const idempotencyKey = crypto.randomUUID();
       body.idempotencyKey = idempotencyKey;
@@ -965,8 +1030,37 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         />
       )}
 
-      {/* Background color for transparency */}
-      {hasAlpha && characterDataUrl && (
+      {/* Transparent background toggle (fix a). When ON we ask RD for a
+          transparent sheet via remove_bg: true — the output PNG has genuine
+          hard 1-bit alpha, no halo from a client-side keyer. When OFF the
+          legacy colored-background path applies: the fill lands in the
+          output and the user can strip it later via GenerationResult's
+          keyer. bgColor is still composited onto the input (RD needs opaque
+          RGB), but its choice only matters when OFF — hidden when ON per
+          the spec. */}
+      {characterDataUrl && (
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={transparentBg}
+              onChange={(e) => setTransparentBg(e.target.checked)}
+              className="accent-[var(--accent-amber)]"
+            />
+            <span className="text-[11px] font-mono text-text-primary">
+              Transparent background
+            </span>
+            <span className="text-[10px] font-mono text-text-muted">
+              (recommended — no halo)
+            </span>
+          </label>
+        </div>
+      )}
+
+      {/* Background color for transparency — legacy path when the toggle is
+          OFF. Still gated on hasAlpha since the fill only matters when the
+          input has transparent areas to composite onto. */}
+      {!transparentBg && hasAlpha && characterDataUrl && (
         <div>
           <label className="block text-[10px] font-mono text-text-muted mb-2">
             Background fill for transparent areas

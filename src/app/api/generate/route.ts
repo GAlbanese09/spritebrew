@@ -634,13 +634,28 @@ async function runAnimate(body: GenerateBody): Promise<Record<string, unknown>> 
     return_spritesheet: true, input_image: rawBase64,
   };
 
+  // Fix a: RD honors remove_bg: true on rd_advanced_animation__* + the
+  // animation__any_animation fallback, returning genuine hard 1-bit alpha
+  // — no client-side keyer halo. Mirrors runCreate's gating at ~line 604.
+  // Both the initial call and the fallback branch below inherit this because
+  // remove_bg lives on the shared payload object.
+  if (body.removeBg) payload.remove_bg = true;
+
   try {
     return await callRD(payload);
   } catch {
-    // Fallback to animation__any_animation if advanced style fails
+    // Fallback to animation__any_animation if advanced style fails.
+    // The last-resort retry sheds untested parameters so a toggle-ON user
+    // degrades to today's opaque-plus-banner behavior rather than a hard
+    // double-charged failure — the July 7 RD confirmation covered
+    // rd_advanced_animation__* only, so we don't know that remove_bg is
+    // honored on animation__any_animation. Same rationale as dropping
+    // frames_duration: the fallback style has a different pipeline that may
+    // 400 on parameters the primary path accepts.
     if (promptStyle !== FALLBACK_STYLE) {
       payload.prompt_style = FALLBACK_STYLE;
       delete payload.frames_duration;
+      delete payload.remove_bg;
       return callRD(payload);
     }
     throw new Error('Animation generation failed.');

@@ -35,10 +35,29 @@
 //
 //   Each mode prints a verdict line and stops.
 //
+// ASYNC MODE — --async flag:
+//   Diagnoses RD's async job API before the queue consumer migrates onto it.
+//   Sends a normal-looking rd_advanced_animation__walking @ 64px request with
+//   `async_process: true`; RD should immediately return a task descriptor.
+//   Prints the FULL raw JSON response (no field-name assumptions — task id
+//   may be `task_id`, `id`, or something else; every key is dumped). Then
+//   polls GET /v1/inferences/tasks/{taskId} every 5s until a terminal status
+//   or 8-minute wall clock, printing each raw response with any base64-looking
+//   strings truncated to 40 chars + total length. On success with an image
+//   payload, saves rd-test-async.png and asks for the pixel verdict.
+//
+// C6 MODE — --c6 flag:
+//   Single sync POST: animation__any_animation @ 64px + frames_duration: 16 +
+//   remove_bg: true. Saves rd-test-c6.png on 200 for the actual-pixel verdict
+//   (per July 7, RD's IHDR color-type lies about alpha for animation styles;
+//   only a pixel scan on the returned PNG is authoritative).
+//
 // Run:
 //   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs ./path/to/opaque-character.png
 //   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --fallback-matrix ./path/to/64px.png
 //   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --fallback-matrix ./path/to/64px.png ./path/to/256px.png
+//   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --async ./path/to/64px.png
+//   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --c6 ./path/to/64px.png
 //
 // Input requirement: an OPAQUE RGB PNG (no alpha). RD rejects transparency on
 // input. To mirror production, use a character on a magenta backdrop, but any
@@ -58,6 +77,8 @@ if (!token) {
 
 const args = process.argv.slice(2);
 const fallbackMatrixMode = args.includes('--fallback-matrix');
+const asyncMode = args.includes('--async');
+const c6Mode = args.includes('--c6');
 const positional = args.filter((a) => !a.startsWith('--'));
 const inputPath = positional[0];
 // Second positional path only meaningful in --fallback-matrix mode: when
@@ -65,7 +86,7 @@ const inputPath = positional[0];
 // only C5 runs at 256px with THIS path as its input. Default mode ignores it.
 const inputPathC5 = positional[1];
 if (!inputPath) {
-  console.error('Usage: RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs [--fallback-matrix] <path-to-opaque.png> [<path-to-256px.png>]');
+  console.error('Usage: RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs [--fallback-matrix | --async | --c6] <path-to-opaque.png> [<path-to-256px.png>]');
   process.exit(1);
 }
 
@@ -232,7 +253,222 @@ async function runFallbackMatrix() {
   console.log(`VERDICT: ${verdict}`);
 }
 
-if (fallbackMatrixMode) {
+// Truncate long string values in a JSON object recursively — any string
+// > 200 chars is replaced with a prefix + total length marker. Base64
+// image blobs land in this window; regular metadata strings do not.
+// Threshold is intentionally generous so we don't accidentally clip a
+// stringified UUID or a status message.
+function truncateBase64Strings(node, maxLen = 200, previewLen = 40) {
+  if (typeof node === 'string') {
+    if (node.length > maxLen) {
+      return `${node.slice(0, previewLen)}...[truncated, total length ${node.length}]`;
+    }
+    return node;
+  }
+  if (Array.isArray(node)) {
+    return node.map((v) => truncateBase64Strings(v, maxLen, previewLen));
+  }
+  if (node && typeof node === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(node)) {
+      out[k] = truncateBase64Strings(v, maxLen, previewLen);
+    }
+    return out;
+  }
+  return node;
+}
+
+// Scan a JSON tree for the first plausible base64 PNG payload. Returns the
+// raw string or null. Heuristic: string value >= 1000 chars containing only
+// base64 characters. Enough to catch RD's output regardless of the field
+// name (base64_image, image, data, etc.).
+function findBase64Image(node) {
+  if (typeof node === 'string') {
+    if (node.length >= 1000 && /^[A-Za-z0-9+/=\s]+$/.test(node)) return node.replace(/\s+/g, '');
+    return null;
+  }
+  if (Array.isArray(node)) {
+    for (const v of node) {
+      const hit = findBase64Image(v);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (node && typeof node === 'object') {
+    for (const v of Object.values(node)) {
+      const hit = findBase64Image(v);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  return null;
+}
+
+async function runAsync() {
+  const payload = {
+    prompt: 'walking character',
+    prompt_style: 'rd_advanced_animation__walking',
+    width: 64,
+    height: 64,
+    num_images: 1,
+    frames_duration: 8,
+    return_spritesheet: true,
+    remove_bg: true,
+    input_image: inputB64,
+    async_process: true,
+  };
+
+  const submitRes = await fetch(RD_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-RD-Token': token,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const submitText = await submitRes.text();
+  console.log(`--async submit: HTTP ${submitRes.status}`);
+  console.log('--async submit raw response:');
+  console.log(submitText);
+
+  if (!submitRes.ok) {
+    console.log('VERDICT: async submit failed; no task to poll');
+    return;
+  }
+
+  let submitJson;
+  try {
+    submitJson = JSON.parse(submitText);
+  } catch {
+    console.log('VERDICT: async submit response was not JSON; cannot extract task id');
+    return;
+  }
+
+  // Field name is unknown — try common shapes. Fall through to a full-key
+  // dump if none match, so we don't guess wrong on a future rename.
+  const taskId =
+    submitJson?.task_id ??
+    submitJson?.id ??
+    submitJson?.taskId ??
+    submitJson?.job_id ??
+    submitJson?.jobId ??
+    null;
+
+  if (typeof taskId !== 'string' || !taskId) {
+    console.log('VERDICT: no task id in response; response keys:',
+      submitJson && typeof submitJson === 'object' ? Object.keys(submitJson) : '(non-object)');
+    process.exit(1);
+  }
+
+  console.log(`--async task id: ${taskId}`);
+  const pollUrl = `${RD_API_URL}/tasks/${taskId}`;
+  const startedAt = Date.now();
+  const timeoutMs = 8 * 60 * 1000; // 8 minutes
+  const intervalMs = 5000;
+  const terminalStatuses = /^(succeeded|failed|completed|complete|error|errored|cancelled|canceled)$/i;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (Date.now() - startedAt > timeoutMs) {
+      console.log('VERDICT: async poll timed out after 8 minutes');
+      return;
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+
+    const pollRes = await fetch(pollUrl, {
+      method: 'GET',
+      headers: { 'X-RD-Token': token },
+    });
+    const pollText = await pollRes.text();
+    const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+    console.log(`--async poll @ ${elapsedSec}s: HTTP ${pollRes.status}`);
+
+    let pollJson;
+    try {
+      pollJson = JSON.parse(pollText);
+    } catch {
+      console.log('--async poll: non-JSON response body:');
+      console.log(pollText.slice(0, 800));
+      continue;
+    }
+    console.log('--async poll raw response (base64 strings truncated):');
+    console.log(JSON.stringify(truncateBase64Strings(pollJson), null, 2));
+
+    // Terminal-status matching — try common status field names, loose match.
+    const status =
+      pollJson?.status ??
+      pollJson?.state ??
+      pollJson?.task_status ??
+      pollJson?.result_status ??
+      null;
+    if (typeof status === 'string' && terminalStatuses.test(status)) {
+      const isSuccess = /^(succeeded|completed|complete)$/i.test(status);
+      if (isSuccess) {
+        const b64 = findBase64Image(pollJson);
+        if (b64) {
+          const png = Buffer.from(b64, 'base64');
+          const outPath = './rd-test-async.png';
+          await writeFile(resolvePath(outPath), png);
+          console.log(`--async: saved ${outPath} (${png.length} bytes)`);
+          console.log('share rd-test-async.png for the pixel verdict');
+        } else {
+          console.log(`--async: terminal status "${status}" but no base64 image payload found`);
+        }
+      } else {
+        console.log(`--async: terminal failure status "${status}"`);
+      }
+      return;
+    }
+  }
+}
+
+async function runC6() {
+  const payload = {
+    prompt: 'walking character',
+    prompt_style: 'animation__any_animation',
+    width: 64,
+    height: 64,
+    num_images: 1,
+    frames_duration: 16,
+    remove_bg: true,
+    return_spritesheet: true,
+    input_image: inputB64,
+  };
+
+  const res = await fetch(RD_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-RD-Token': token,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '(unreadable)');
+    console.log(`--c6: HTTP ${res.status} :: ${body.slice(0, 400)}`);
+    return;
+  }
+
+  const data = await res.json();
+  const b64 = data?.base64_images?.[0];
+  if (!b64) {
+    console.log(`--c6: HTTP ${res.status} :: no base64_images[0] in response`);
+    return;
+  }
+  const png = Buffer.from(b64, 'base64');
+  const outPath = './rd-test-c6.png';
+  await writeFile(resolvePath(outPath), png);
+  console.log(`--c6: saved ${outPath} (${png.length} bytes)`);
+  console.log('share rd-test-c6.png for the pixel verdict (IHDR lies, per July 7)');
+}
+
+if (asyncMode) {
+  await runAsync();
+} else if (c6Mode) {
+  await runC6();
+} else if (fallbackMatrixMode) {
   await runFallbackMatrix();
 } else {
   for (const c of conditions) {

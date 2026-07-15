@@ -37,7 +37,7 @@
 //
 // ASYNC MODE — --async flag:
 //   Diagnoses RD's async job API before the queue consumer migrates onto it.
-//   Sends a normal-looking rd_advanced_animation__walking @ 64px request with
+//   Sends a normal-looking rd_advanced_animation__walking request with
 //   `async_process: true`; RD should immediately return a task descriptor.
 //   Prints the FULL raw JSON response (no field-name assumptions — task id
 //   may be `task_id`, `id`, or something else; every key is dumped). Then
@@ -45,6 +45,21 @@
 //   or 8-minute wall clock, printing each raw response with any base64-looking
 //   strings truncated to 40 chars + total length. On success with an image
 //   payload, saves rd-test-async.png and asks for the pixel verdict.
+//
+//   Optional second positional arg is a numeric SIZE (default 64):
+//     node scripts/rd-bg-test.mjs --async ./input.png 256
+//   Uses it for width and height in the submit payload. Also instruments
+//   the submit itself: prints "submit returned after Ns" on response, or
+//   "submit THREW after Ns" on a client-side abort (e.g. undici headers
+//   timeout ~300s) — distinguishing a client-side give-up from a server
+//   524 is the point.
+//
+// TASKS MODE — --tasks flag:
+//   Bare GET against ${RD_API_URL}/tasks with the API key header. No POST,
+//   costs nothing. Probes whether RD exposes a task LIST endpoint for
+//   recovery of dropped submits (client abort after RD created the task
+//   but before returning its id). Prints HTTP status + response body with
+//   any base64-looking strings truncated to 40 chars + length.
 //
 // C6 MODE — --c6 flag:
 //   Single sync POST: animation__any_animation @ 64px + frames_duration: 16 +
@@ -56,8 +71,10 @@
 //   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs ./path/to/opaque-character.png
 //   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --fallback-matrix ./path/to/64px.png
 //   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --fallback-matrix ./path/to/64px.png ./path/to/256px.png
-//   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --async ./path/to/64px.png
+//   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --async ./path/to/input.png
+//   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --async ./path/to/input.png 256
 //   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --c6 ./path/to/64px.png
+//   RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs --tasks
 //
 // Input requirement: an OPAQUE RGB PNG (no alpha). RD rejects transparency on
 // input. To mirror production, use a character on a magenta backdrop, but any
@@ -79,19 +96,30 @@ const args = process.argv.slice(2);
 const fallbackMatrixMode = args.includes('--fallback-matrix');
 const asyncMode = args.includes('--async');
 const c6Mode = args.includes('--c6');
+const tasksMode = args.includes('--tasks');
 const positional = args.filter((a) => !a.startsWith('--'));
 const inputPath = positional[0];
-// Second positional path only meaningful in --fallback-matrix mode: when
-// present, C3/C4 are skipped (they've already been receipted at 64px) and
-// only C5 runs at 256px with THIS path as its input. Default mode ignores it.
+// Second positional slot is mode-dependent:
+//   --fallback-matrix: a second PATH (256px input) — triggers C5-only.
+//   --async:           a numeric SIZE (defaults to 64) for width/height.
+//   others:            ignored.
 const inputPathC5 = positional[1];
-if (!inputPath) {
-  console.error('Usage: RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs [--fallback-matrix | --async | --c6] <path-to-opaque.png> [<path-to-256px.png>]');
+const asyncSize = (() => {
+  const raw = positional[1];
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 64;
+})();
+// --tasks is a bare GET, no input needed. Skip the positional check for it.
+if (!inputPath && !tasksMode) {
+  console.error('Usage: RD_API_TOKEN=<token> node scripts/rd-bg-test.mjs [--fallback-matrix | --async | --c6 | --tasks] [<path-to-opaque.png>] [<second-path-or-async-size>]');
   process.exit(1);
 }
 
-const inputBytes = await readFile(resolvePath(inputPath));
-const inputB64 = inputBytes.toString('base64');
+// --tasks mode is a bare GET, so it may be invoked without a path. Skip the
+// file read when there's no path; other modes still require the input and
+// error naturally on the readFile below.
+const inputBytes = inputPath ? await readFile(resolvePath(inputPath)) : null;
+const inputB64 = inputBytes ? inputBytes.toString('base64') : '';
 
 // Second input (C5-only mode). Loaded on demand — a 256px sheet, distinct
 // from the 64px C3/C4 input. Bytes stay unread when this positional is absent.
@@ -305,11 +333,16 @@ function findBase64Image(node) {
 }
 
 async function runAsync() {
+  // Size defaults to 64 unless a numeric second positional was given
+  // (--async <input.png> [size]). Same value used for width AND height so
+  // the shape stays square; RD accepts other rectangular sizes but the
+  // useful probe values (64, 128, 256) are all square in production.
+  console.log(`--async submit: size ${asyncSize}x${asyncSize}`);
   const payload = {
     prompt: 'walking character',
     prompt_style: 'rd_advanced_animation__walking',
-    width: 64,
-    height: 64,
+    width: asyncSize,
+    height: asyncSize,
     num_images: 1,
     frames_duration: 8,
     return_spritesheet: true,
@@ -318,14 +351,32 @@ async function runAsync() {
     async_process: true,
   };
 
-  const submitRes = await fetch(RD_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-RD-Token': token,
-    },
-    body: JSON.stringify(payload),
-  });
+  // Instrumentation: distinguish an HTTP 524 (server acknowledged the
+  // request and hit the RD edge timeout — task may still exist) from a
+  // client-side abort (undici's ~300s headers timeout — no task on the
+  // server side, safe to resubmit). Both show up as failures to the
+  // consumer, but only the first needs recovery via task-id polling.
+  const submitStartedAt = Date.now();
+  let submitRes;
+  try {
+    submitRes = await fetch(RD_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-RD-Token': token,
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    const elapsedSec = Math.round((Date.now() - submitStartedAt) / 1000);
+    const name = err?.name ?? 'Error';
+    const message = err?.message ?? String(err);
+    console.log(`--async submit THREW after ${elapsedSec}s: ${name}: ${message}`);
+    console.log('VERDICT: client-side abort — no task id, no server-side record; safe to resubmit');
+    return;
+  }
+  const submitElapsedSec = Math.round((Date.now() - submitStartedAt) / 1000);
+  console.log(`--async submit returned after ${submitElapsedSec}s`);
 
   const submitText = await submitRes.text();
   console.log(`--async submit: HTTP ${submitRes.status}`);
@@ -464,10 +515,45 @@ async function runC6() {
   console.log('share rd-test-c6.png for the pixel verdict (IHDR lies, per July 7)');
 }
 
+// --tasks: bare GET against the tasks collection endpoint (no id). Probes
+// whether RD exposes a list of the caller's outstanding tasks, which would
+// let the consumer recover the task id of a submit whose response was lost
+// (client abort, edge timeout after task creation, etc.). No POST, so no
+// generation is billed. Prints status + response body with any base64-looking
+// strings truncated to 40 chars + total length.
+async function runTasks() {
+  const url = `${RD_API_URL}/tasks`;
+  console.log(`--tasks GET: ${url}`);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'GET',
+      headers: { 'X-RD-Token': token },
+    });
+  } catch (err) {
+    console.log(`--tasks THREW: ${err?.name ?? 'Error'}: ${err?.message ?? String(err)}`);
+    return;
+  }
+  const text = await res.text();
+  console.log(`--tasks: HTTP ${res.status}`);
+  let asJson;
+  try {
+    asJson = JSON.parse(text);
+  } catch {
+    console.log('--tasks response body (non-JSON, first 800 chars):');
+    console.log(text.slice(0, 800));
+    return;
+  }
+  console.log('--tasks response body (base64 strings truncated):');
+  console.log(JSON.stringify(truncateBase64Strings(asJson), null, 2));
+}
+
 if (asyncMode) {
   await runAsync();
 } else if (c6Mode) {
   await runC6();
+} else if (tasksMode) {
+  await runTasks();
 } else if (fallbackMatrixMode) {
   await runFallbackMatrix();
 } else {

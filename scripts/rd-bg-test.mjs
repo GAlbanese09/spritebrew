@@ -122,8 +122,12 @@ const inputBytes = inputPath ? await readFile(resolvePath(inputPath)) : null;
 const inputB64 = inputBytes ? inputBytes.toString('base64') : '';
 
 // Second input (C5-only mode). Loaded on demand — a 256px sheet, distinct
-// from the 64px C3/C4 input. Bytes stay unread when this positional is absent.
-const inputB64C5 = inputPathC5
+// from the 64px C3/C4 input. Bytes stay unread when this positional is
+// absent OR when we're not in --fallback-matrix mode: --async consumes the
+// same positional slot as a numeric SIZE (e.g. `--async ./input.png 256`),
+// and readFile('256') would ENOENT before the submit ever fires. All other
+// modes ignore this positional entirely.
+const inputB64C5 = fallbackMatrixMode && inputPathC5
   ? (await readFile(resolvePath(inputPathC5))).toString('base64')
   : null;
 

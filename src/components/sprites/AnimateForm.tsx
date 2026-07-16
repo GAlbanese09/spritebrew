@@ -33,8 +33,6 @@ import {
   deleteTemplate,
   MAX_TEMPLATES,
   MAX_TEMPLATE_NAME_LEN,
-  TRANSPARENT_BG_STORAGE_KEY,
-  DEFAULT_TRANSPARENT_BG,
   type AnimateTemplate,
 } from '@/lib/animateConfig';
 
@@ -71,22 +69,29 @@ const ACTION_STYLE_MAP: Record<string, string> = {
 
 const FRAME_COUNTS = [4, 6, 8, 10, 12, 16] as const;
 
-const BG_COLORS = [
-  { id: 'black', label: 'Black', color: '#000000' },
-  { id: 'white', label: 'White', color: '#ffffff' },
-  { id: 'green', label: 'Green', color: '#00ff00' },
-  { id: 'magenta', label: 'Magenta', color: '#ff00ff' },
-] as const;
+/**
+ * Fixed fill color for the RGB-encode step. RD requires opaque input; the
+ * choice of fill is invisible in the output now that we always request
+ * remove_bg (RD strips its baked matte server-side) and unconditionally
+ * despill the returned sheet (magenta is what despillChromaEdges is
+ * calibrated against per the July-8 dev-smoke pixel analysis).
+ * Formerly user-configurable via a swatch row; removed July 15 — the
+ * transparency toggle went with it since RD now default-strips.
+ */
+const DEFAULT_BG_COLOR = '#ff00ff';
 
 /**
  * fix-a follow-up: decode → check-for-alpha → despill → re-encode.
- * Called on the animate-result base64 the first time it lands on the client.
- * Gates:
- *   (a) the CALLER only invokes this when the request's transparentBg was ON
- *   (b) here — corner sample; if all four corners are opaque, RD didn't
- *       actually return a transparent sheet (unlikely given our remove_bg
- *       request, but defensive) → return the input unchanged.
- *   (c) fillHex is passed in from the caller's captured state.
+ * Called UNCONDITIONALLY on animate-result base64 the first time it lands on
+ * the client (July 14: RD default-strips animation backgrounds even without
+ * remove_bg; we always send remove_bg anyway as belt-and-suspenders). Two
+ * internal safety gates keep this safe on the exceptional inputs:
+ *   (a) Corner-sample alpha check — if all four corners are opaque, RD
+ *       returned an opaque sheet (rare, e.g. RD reverting the default). We
+ *       short-circuit and return the input unchanged; no cleanup runs.
+ *   (b) fillHex classification inside despillChromaEdges — neutral fills
+ *       (black/white/gray/other hues) short-circuit with no work. Only
+ *       magenta/green fills trigger the actual dilation + subtract pass.
  * Silent-fail on decode errors → returns the input dataUrl. The despill is
  * a quality-of-life step; a broken pass must never break the pipeline.
  */
@@ -178,14 +183,13 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
   // Captures click-time action/motion so the poll-success effect can write
   // history with the right context. Null on resume.
-  // fix-a follow-up: also capture the request-time transparentBg + bgColor
-  // so the despill step in the poll handler uses the values the RD job was
-  // ACTUALLY generated with, not whatever the form state is at
-  // poll-completion time (user may have toggled between click and result).
+  // bgColor is now the fixed DEFAULT_BG_COLOR module constant (the toggle
+  // went away July 15) but still travels through this ref so the despill
+  // in the poll-success handler sees a stable request-time fill regardless
+  // of any future changes to the flatten default.
   const inFlightRef = useRef<{
     action: string;
     motionPrompt: string;
-    transparentBg: boolean;
     bgColor: string;
   } | null>(null);
 
@@ -215,7 +219,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const [characterDataUrl, setCharacterDataUrl] = useState<string | null>(null);
   const [charWidth, setCharWidth] = useState(0);
   const [charHeight, setCharHeight] = useState(0);
-  const [hasAlpha, setHasAlpha] = useState(false);
   // Captured from spriteStore.pendingAnimatorSkipBgRemoval at handoff-consume
   // time, forwarded to CharacterAutoPrep as initialSkipBgRemoval. Reset to
   // false on manual file upload so the handoff preference only applies to
@@ -224,25 +227,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const [pendingDataUrl, setPendingDataUrl] = useState<string | null>(null);
   const [pendingWidth, setPendingWidth] = useState(0);
   const [pendingHeight, setPendingHeight] = useState(0);
-  const [bgColor, setBgColor] = useState('#ff00ff');
-  // Transparent-background toggle (fix a). When true, we ask RD for a
-  // transparent sheet via remove_bg: true. The bgColor is still composited
-  // onto the INPUT (RD requires opaque RGB input), but RD strips its baked
-  // version from the OUTPUT. When false (legacy path), the colored bg comes
-  // back and the user can use the client-side keyer on GenerationResult if
-  // they want to strip it later. Persisted separately from SavedAnimateConfig
-  // so we don't have to schema-bump v1; loaded via a mount-only effect below
-  // that reads the localStorage key directly.
-  const [transparentBg, setTransparentBg] = useState(DEFAULT_TRANSPARENT_BG);
-  // Latest-value refs for transparentBg + bgColor. handleGenerate reads
-  // ONLY from these refs (not from the state bindings) so the callback's
-  // dep array doesn't need to list transparentBg / bgColor — which would
-  // recreate the callback on every toggle AND would make the SSE despill
-  // decision "current-at-result-time" instead of "current-at-request-time",
-  // reintroducing the mid-flight race. Refs stay stable across renders;
-  // the sync effects below keep .current in step with state.
-  const transparentBgRef = useRef(transparentBg);
-  const bgColorRef = useRef(bgColor);
+  // bgColor + transparentBg state, refs, effects, and UI removed July 15.
+  // Fill is now the DEFAULT_BG_COLOR module constant; remove_bg is
+  // unconditional on every animate request. SavedAnimateConfig still
+  // carries a bgColor field for schema stability (see saveLatestConfig
+  // calls below, which now always pass DEFAULT_BG_COLOR).
   const [paddingEnabled, setPaddingEnabled] = useState(false);
   const [characterSizePct, setCharacterSizePct] = useState(75);
   const [selectedAction, setSelectedAction] = useState('walking');
@@ -311,7 +300,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setFrameCount(saved.frameCount);
     setMotionPrompt(saved.motionPrompt);
     setSelectedResolution(saved.selectedResolution);
-    setBgColor(saved.bgColor);
+    // saved.bgColor intentionally ignored — bgColor state was removed
+    // July 15 (fill is now DEFAULT_BG_COLOR). Field still lives on
+    // SavedAnimateConfig for schema stability with older writes.
     setPaddingEnabled(saved.paddingEnabled);
     setCharacterSizePct(saved.characterSizePct);
     // Tell the snap effects to skip their next fire (the post-restore
@@ -327,57 +318,13 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setTemplates(loadTemplates());
   }, []);
 
-  // Mount-only: hydrate the transparentBg toggle from its dedicated key.
-  // Absent key reads as DEFAULT_TRANSPARENT_BG (true) so returning users
-  // default to the RD-side transparent path. Only 'false' persists an off
-  // state — any other value (missing / malformed) falls through to true.
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(TRANSPARENT_BG_STORAGE_KEY);
-      if (raw === 'false') setTransparentBg(false);
-      // 'true' and absent both leave the useState default (true) in place.
-    } catch {
-      // localStorage disabled — keep default.
-    }
-  }, []);
-
-  // Auto-save transparentBg on change. Same shape as the SavedAnimateConfig
-  // debounce but on its own key — a plain string 'true'/'false' since it's
-  // a single boolean, not a versioned envelope.
-  //
-  // Skip-first-run guard closes the hydration write-order window: on mount
-  // Commit 1 runs the hydration effect (may schedule setTransparentBg(false)
-  // for a returning-OFF user) AND this save effect (whose closure still sees
-  // the initial useState default `true`). Without the guard the save would
-  // write 'true', clobbering the persisted 'false' until Commit 2's re-run
-  // corrects it. A `hydratedRef` set inside the hydration effect wouldn't
-  // help — same-commit effect ordering means the save still fires with a
-  // stale closure. Skipping the FIRST save fire delays writes until an
-  // actual state change occurs (either the hydration's setState → Commit 2,
-  // or a user toggle), so the persisted value is never transiently wrong.
-  const skipFirstTransparentBgSave = useRef(true);
-  useEffect(() => {
-    if (skipFirstTransparentBgSave.current) {
-      skipFirstTransparentBgSave.current = false;
-      return;
-    }
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(TRANSPARENT_BG_STORAGE_KEY, transparentBg ? 'true' : 'false');
-    } catch {
-      // Quota exceeded / localStorage disabled — silently drop.
-    }
-  }, [transparentBg]);
-
-  // Latest-value ref syncs for transparentBg + bgColor. handleGenerate
-  // captures {transparentBg, bgColor} into a reqCtx object at the top of
-  // the try block via these refs (see the fix-a-follow-up comment there);
-  // the values then flow to the request assembly, the inFlightRef handoff
-  // for the poll effect, and the SSE despill decision — all consistent
-  // and all "request-time" without adding state to the callback's deps.
-  useEffect(() => { transparentBgRef.current = transparentBg; }, [transparentBg]);
-  useEffect(() => { bgColorRef.current = bgColor; }, [bgColor]);
+  // transparentBg hydration / persistence / ref-sync effects and the
+  // matching bgColor ref-sync — all removed July 15 along with the toggle
+  // UI. Fill is now DEFAULT_BG_COLOR (module constant); remove_bg is
+  // unconditional on every animate request; despill runs unconditionally
+  // on every animate result (alpha-gated internally). Legacy
+  // TRANSPARENT_BG_STORAGE_KEY entries in users' localStorage are simply
+  // ignored — no cleanup needed (the toggle can't be surfaced anyway).
 
   // Auto-save (debounced 200ms) — writes the seven form-config fields on
   // every change. NOT included: character image, pendingDataUrl, handoff
@@ -392,7 +339,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         frameCount,
         motionPrompt,
         selectedResolution,
-        bgColor,
+        bgColor: DEFAULT_BG_COLOR,
         paddingEnabled,
         characterSizePct,
       });
@@ -403,7 +350,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     frameCount,
     motionPrompt,
     selectedResolution,
-    bgColor,
     paddingEnabled,
     characterSizePct,
   ]);
@@ -434,7 +380,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setCharacterDataUrl(null);
     setCharWidth(0);
     setCharHeight(0);
-    setHasAlpha(false);
 
     const img = new Image();
     img.onload = () => {
@@ -459,7 +404,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       setCharacterDataUrl(null);
       setCharWidth(0);
       setCharHeight(0);
-      setHasAlpha(false);
       // Re-show the pending image so Auto-Prep can re-run at new size
       // (only if we still have the original upload)
     }
@@ -511,7 +455,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         setCharacterDataUrl(null);
         setCharWidth(0);
         setCharHeight(0);
-        setHasAlpha(false);
       };
       img.onerror = () => {
         const lowerName = file.name.toLowerCase();
@@ -534,7 +477,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setCharacterDataUrl(null);
     setCharWidth(0);
     setCharHeight(0);
-    setHasAlpha(false);
     setPendingDataUrl(null);
     setPendingWidth(0);
     setPendingHeight(0);
@@ -545,7 +487,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       setCharacterDataUrl(preparedDataUrl);
       setCharWidth(w);
       setCharHeight(h);
-      setHasAlpha(true);
       setPendingDataUrl(null);
       setPendingWidth(0);
       setPendingHeight(0);
@@ -577,7 +518,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setFrameCount(c.frameCount);
     setMotionPrompt(c.motionPrompt);
     setSelectedResolution(c.selectedResolution);
-    setBgColor(c.bgColor);
+    // c.bgColor intentionally ignored — bgColor state was removed
+    // July 15. Field is still on AnimateTemplate for schema stability.
     setPaddingEnabled(c.paddingEnabled);
     setCharacterSizePct(c.characterSizePct);
     restoringPaddingRef.current = true;
@@ -605,7 +547,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       frameCount,
       motionPrompt,
       selectedResolution,
-      bgColor,
+      bgColor: DEFAULT_BG_COLOR,
       paddingEnabled,
       characterSizePct,
     });
@@ -624,7 +566,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     frameCount,
     motionPrompt,
     selectedResolution,
-    bgColor,
     paddingEnabled,
     characterSizePct,
   ]);
@@ -647,11 +588,22 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
   /**
    * Convert the uploaded RGBA image to a base64-encoded RGB PNG, compositing
-   * onto bgColor and budget-aware-encoded so the result fits the Cloudflare
-   * Queues 128 KB message cap (queue-kickoff path).
+   * onto DEFAULT_BG_COLOR and budget-aware-encoded so the result fits the
+   * Cloudflare Queues 128 KB message cap (queue-kickoff path).
    *
-   * Budget ladder — each rung re-encodes and returns if the base64 length is
-   * <= ANIMATE_INPUT_B64_CLIENT_MAX:
+   * Returns `{ primary, fallback64 }`:
+   *   - primary: the size-adaptive encoding (rungs 1-4 below) used as the
+   *     RD prompt-style input at the user's selected resolution.
+   *   - fallback64: an ALWAYS-64×64 nearest-neighbor render of the SAME
+   *     flattened source, used consumer-side as the input to the
+   *     `animation__any_animation` fallback style (which is 64-locked and
+   *     400s on any non-64 primary). Rendered off the ORIGINAL flatten
+   *     (before any posterize / collapse rung is applied) so quality is
+   *     stable regardless of which primary rung wins. Typically 1-2KB
+   *     base64.
+   *
+   * Budget ladder for primary — each rung re-encodes and returns if the
+   * base64 length is <= ANIMATE_INPUT_B64_CLIENT_MAX:
    *   1. straight PNG of the composited canvas
    *   2. posterize to 32 levels per channel (drop low 3 bits)
    *   3. half-res nearest-neighbor round-trip + posterize
@@ -661,7 +613,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
    * Also awaits img.decode() to kill the silent drawImage-on-undecoded-image
    * race that could composite a flat bg-color square.
    */
-  const convertToRgbBase64 = useCallback(async (): Promise<string | null> => {
+  const convertToRgbBase64 = useCallback(async (): Promise<
+    { primary: string; fallback64: string } | null
+  > => {
     if (!characterDataUrl) return null;
 
     const img = new Image();
@@ -681,9 +635,24 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     const ctx = canvas.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
 
-    ctx.fillStyle = bgColor;
+    ctx.fillStyle = DEFAULT_BG_COLOR;
     ctx.fillRect(0, 0, charWidth, charHeight);
     ctx.drawImage(img, 0, 0);
+
+    // Snapshot the fresh full-res flatten BEFORE any rung mutates the
+    // primary canvas — the fallback must always be a nearest-neighbor of
+    // the true source, not of a posterized / collapsed intermediate.
+    const fallbackCanvas = document.createElement('canvas');
+    fallbackCanvas.width = 64;
+    fallbackCanvas.height = 64;
+    const fctx = fallbackCanvas.getContext('2d')!;
+    fctx.imageSmoothingEnabled = false;
+    fctx.fillStyle = DEFAULT_BG_COLOR;
+    fctx.fillRect(0, 0, 64, 64);
+    fctx.drawImage(canvas, 0, 0, charWidth, charHeight, 0, 0, 64, 64);
+    const fallback64 = fallbackCanvas
+      .toDataURL('image/png')
+      .replace(/^data:image\/png;base64,/, '');
 
     const encode = (): string =>
       canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
@@ -717,7 +686,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       tctx.drawImage(canvas, 0, 0, sw, sh);
       ctx.clearRect(0, 0, charWidth, charHeight);
       ctx.imageSmoothingEnabled = false;
-      ctx.fillStyle = bgColor;
+      ctx.fillStyle = DEFAULT_BG_COLOR;
       ctx.fillRect(0, 0, charWidth, charHeight);
       ctx.drawImage(tmp, 0, 0, sw, sh, 0, 0, charWidth, charHeight);
       posterize();
@@ -727,7 +696,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     let out = encode();
     if (out.length <= ANIMATE_INPUT_B64_CLIENT_MAX) {
       console.debug('[animate encode]', { rung: 1, chars: out.length });
-      return out;
+      return { primary: out, fallback64 };
     }
 
     // Rung 2: posterize.
@@ -735,7 +704,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     out = encode();
     if (out.length <= ANIMATE_INPUT_B64_CLIENT_MAX) {
       console.debug('[animate encode]', { rung: 2, chars: out.length });
-      return out;
+      return { primary: out, fallback64 };
     }
 
     // Rung 3: half-res collapse + posterize.
@@ -743,7 +712,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     out = encode();
     if (out.length <= ANIMATE_INPUT_B64_CLIENT_MAX) {
       console.debug('[animate encode]', { rung: 3, chars: out.length });
-      return out;
+      return { primary: out, fallback64 };
     }
 
     // Rung 4: quarter-res collapse + posterize.
@@ -751,14 +720,14 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     out = encode();
     if (out.length <= ANIMATE_INPUT_B64_CLIENT_MAX) {
       console.debug('[animate encode]', { rung: 4, chars: out.length });
-      return out;
+      return { primary: out, fallback64 };
     }
 
     // Rung 5: give up — caller surfaces the friendly error and aborts before
     // any network call (no debit ever happens).
     console.debug('[animate encode]', { rung: 5, chars: out.length });
     return null;
-  }, [characterDataUrl, charWidth, charHeight, bgColor]);
+  }, [characterDataUrl, charWidth, charHeight]);
 
   const handleGenerate = useCallback(async () => {
     if (!characterDataUrl || isGenerating) return;
@@ -768,8 +737,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     if (clickedAt - lastGenerateAtRef.current < 1_000) return;
     lastGenerateAtRef.current = clickedAt;
 
-    const rgbBase64 = await convertToRgbBase64();
-    if (!rgbBase64) {
+    const encoded = await convertToRgbBase64();
+    if (!encoded) {
       // convertToRgbBase64 already set a specific error for the decode-failure
       // path. The other null case is rung-5 "couldn't fit under the queue
       // budget" — only surface that message if no error was set above.
@@ -780,6 +749,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       }
       return;
     }
+    const { primary: rgbBase64, fallback64 } = encoded;
 
     setGenerating(true);
     setGeneratingAction(selectedAction);
@@ -787,19 +757,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setOriginalCharacter(characterDataUrl);
     poll.reset();
 
-    // Click-time context for both branches (SSE and poll). transparentBg +
-    // bgColor come from refs — reading state bindings from the callback
-    // body would force them into the callback's dep array, which would
-    // (a) recreate the callback on every toggle, and (b) let the SSE
-    // despill decision drift to current-at-result-time and reintroduce the
-    // mid-flight toggle race. Snapshotting via refs into reqCtx keeps the
-    // request assembly, the inFlightRef handoff, and the SSE despill all
-    // reading the same request-time values.
+    // Click-time context for both branches (SSE and poll). bgColor is
+    // now the fixed DEFAULT_BG_COLOR module constant (the toggle went
+    // away July 15) but still travels through reqCtx so the despill
+    // step in both SSE-success and poll-success paths sees a stable
+    // fill regardless of any future changes to the flatten default.
     const reqCtx = {
       action: selectedAction,
       motionPrompt: motionPrompt.trim(),
-      transparentBg: transparentBgRef.current,
-      bgColor: bgColorRef.current,
+      bgColor: DEFAULT_BG_COLOR,
     };
 
     let tookPollPath = false;
@@ -818,16 +784,22 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         body.motionPrompt = reqCtx.motionPrompt;
       }
 
-      // Transparent-background request (fix a). RD honors remove_bg: true on
-      // every rd_advanced_animation__* style (and the animation__any_animation
-      // fallback), returning genuine hard 1-bit alpha in the returned sheet.
-      // AnimateForm always targets one of those styles via ACTION_STYLE_MAP,
-      // so no per-style gate is needed here — mirrors GenerationForm's
-      // `if (removeBg && selectedStyle.supportsRemoveBg)` pattern with the
-      // supportsRemoveBg check collapsed to always-true for this form.
-      if (reqCtx.transparentBg) {
-        body.removeBg = true;
-      }
+      // Always request remove_bg. RD default-strips animation backgrounds
+      // as of July 14, but sending remove_bg: true explicitly is
+      // belt-and-suspenders against a future default flip — observed
+      // billing is flat $0.14 either way. Companion despill call in the
+      // success paths handles the chroma rim regardless. `if
+      // (reqCtx.transparentBg)` gate removed July 15 with the toggle.
+      body.removeBg = true;
+
+      // Consumer-side envelope-only field: 64×64 opaque PNG the RD
+      // consumer feeds into the animation__any_animation fallback when
+      // the primary times out or errors. Never forwarded to RD in the
+      // primary submit; the producer route.ts budgets against the
+      // Cloudflare Queues 128KB cap and omits this on the rare oversized
+      // envelope (consumer degrades gracefully — the fallback simply
+      // becomes unavailable for those requests).
+      body.fallbackInputImage = fallback64;
 
       // Per-attempt UUID — required by the queue-kickoff path; legacy SSE ignores it.
       const idempotencyKey = crypto.randomUUID();
@@ -851,19 +823,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         return;
       }
 
-      // fix-a follow-up: despill chroma-fill residue on silhouette edges.
-      // Called UNCONDITIONALLY on animate results: as of July 14 RD strips
-      // animation backgrounds server-side by default even when remove_bg
-      // isn't sent, so toggle-OFF sheets now come back transparent too —
-      // gating the despill on reqCtx.transparentBg would ship RD's raw
-      // matte with its dark chroma rim untouched. The two internal safety
-      // gates make unconditional calls safe: (1) despillIfTransparent's
-      // 4-corner alpha check no-ops on opaque sheets (a defensive path in
-      // case RD reverts and returns opaque again), and (2)
-      // despillChromaEdges no-ops on neutral fills (black/white/gray/other-
-      // hue). Semantics: the toggle now controls whether we EXPLICITLY
-      // request remove_bg (robust if RD reverts); cleanup runs against the
-      // actual sheet regardless.
+      // Despill chroma-fill residue on silhouette edges. Called
+      // UNCONDITIONALLY on animate results — RD default-strips animation
+      // backgrounds server-side and we always request remove_bg on top of
+      // that, so sheets consistently come back transparent with a chroma
+      // rim from the DEFAULT_BG_COLOR flatten. Two internal safety gates
+      // keep this safe on the exceptional inputs: (1) 4-corner alpha check
+      // no-ops on opaque sheets (defensive if RD reverts default-strip),
+      // (2) despillChromaEdges no-ops on neutral fills (only magenta /
+      // green fills trigger the dilation + subtract pass).
       const dataUrl = await despillIfTransparent(data.imageUrl!, reqCtx.bgColor);
 
       setGeneratedImage(dataUrl, dataUrl);
@@ -924,16 +892,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       return;
     }
     if (poll.status === 'success' && poll.result) {
-      // fix-a follow-up: same despill wire as the SSE path. Called
-      // UNCONDITIONALLY on animate results (see the SSE branch's comment
-      // for the July 14 RD default-strip change and the two internal
-      // safety gates that make this safe on opaque sheets and neutral
-      // fills). reqCtx.bgColor is still request-time via inFlightRef so
-      // a mid-poll toggle change can't misfeed the correction; falls
-      // back to '#000000' if the ref is somehow null (mount-race
-      // guardrail — bgColor '#000000' classifies as neutral, so
-      // despillChromaEdges no-ops anyway). Wrapped in an IIFE because
-      // useEffect callbacks can't be async themselves.
+      // Same despill wire as the SSE-success path — see that branch's
+      // comment for the RD default-strip context and the two internal
+      // safety gates that make unconditional calls safe. bgColor is now
+      // the DEFAULT_BG_COLOR module constant (post-July-15) but still
+      // travels via inFlightRef so a stale ref (mount-race edge case)
+      // falls through to '#000000' — that neutral fill is classified as
+      // non-chroma inside despillChromaEdges and no-ops the pass, so it's
+      // a safe fallback. Wrapped in an IIFE because useEffect callbacks
+      // can't be async themselves.
       const rawDataUrl = `data:image/png;base64,${poll.result.resultBase64}`;
       const reqCtx = inFlightRef.current;
       (async () => {
@@ -1111,6 +1078,18 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             ? 'Retro Diffusion locks this style at this resolution. For higher resolutions, choose a Walking/Idle/Attack style instead.'
             : 'Larger = more detail. Cost is flat per generation — no resolution surcharge.'}
         </p>
+        {/* Reliability warning — static copy, no network call. Larger
+            RD animation sizes (128 / 256) have been timing out more often
+            than 64 across the last few days; 16-frame at those sizes is
+            the worst combination. Refunds fire automatically on failure
+            (see consumer classifyError paths), so this is purely a "set
+            your expectations" notice, not a hard block. */}
+        {currentMode.kind !== 'locked' && (selectedResolution === 128 || selectedResolution === 256) && (
+          <p className="text-[10px] font-mono text-amber-400/90 mt-2 leading-snug">
+            Heads up: larger animations are timing out more often than usual with our AI provider. 64px is currently the most reliable. Failed generations auto-refund.
+            {frameCount === 16 && ' 16 frames at this size is the most likely to fail — consider 8.'}
+          </p>
+        )}
       </div>
 
       {/* Auto-prep pipeline — resizes to selectedResolution × selectedResolution */}
@@ -1130,65 +1109,12 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         />
       )}
 
-      {/* Transparent background toggle (fix a). When ON we ask RD for a
-          transparent sheet via remove_bg: true — the output PNG has genuine
-          hard 1-bit alpha, no halo from a client-side keyer. When OFF the
-          legacy colored-background path applies: the fill lands in the
-          output and the user can strip it later via GenerationResult's
-          keyer. bgColor is still composited onto the input (RD needs opaque
-          RGB), but its choice only matters when OFF — hidden when ON per
-          the spec. */}
-      {characterDataUrl && (
-        <div>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={transparentBg}
-              onChange={(e) => setTransparentBg(e.target.checked)}
-              className="accent-[var(--accent-amber)]"
-            />
-            <span className="text-[11px] font-mono text-text-primary">
-              Transparent background
-            </span>
-            <span className="text-[10px] font-mono text-text-muted">
-              (recommended — no halo)
-            </span>
-          </label>
-        </div>
-      )}
-
-      {/* Background color for transparency — legacy path when the toggle is
-          OFF. Still gated on hasAlpha since the fill only matters when the
-          input has transparent areas to composite onto. */}
-      {!transparentBg && hasAlpha && characterDataUrl && (
-        <div>
-          <label className="block text-[10px] font-mono text-text-muted mb-2">
-            Background fill for transparent areas
-          </label>
-          <div className="flex gap-2 items-center">
-            {BG_COLORS.map((bg) => (
-              <button
-                key={bg.id}
-                onClick={() => setBgColor(bg.color)}
-                title={bg.label}
-                className={`w-7 h-7 rounded border-2 cursor-pointer transition-all ${
-                  bgColor === bg.color
-                    ? 'border-accent-amber ring-1 ring-accent-amber'
-                    : 'border-border-default hover:border-border-strong'
-                }`}
-                style={{ backgroundColor: bg.color }}
-              />
-            ))}
-            <input
-              type="color"
-              value={bgColor}
-              onChange={(e) => setBgColor(e.target.value)}
-              className="w-7 h-7 rounded cursor-pointer border-0"
-              title="Custom color"
-            />
-          </div>
-        </div>
-      )}
+      {/* Transparent-background toggle + BG_COLORS swatch row removed
+          July 15 (see DEFAULT_BG_COLOR docstring above). RD default-strips
+          animation backgrounds, we always send remove_bg on top of that,
+          and despillIfTransparent runs unconditionally on every result —
+          the fill choice is now invisible in the output, so the picker
+          would just be confusing. */}
 
       {/* Saved templates (v0.5.12) — character-agnostic, persisted to
           spritebrew:animate:templates. Click a pill to load all 7 form

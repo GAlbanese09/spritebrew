@@ -6,6 +6,15 @@ export interface JobMessage {
   mode: 'create' | 'animate';
   body: unknown;
   enqueuedAt: number;
+  /**
+   * Optional 64×64 opaque PNG base64 (no `data:` prefix). Consumer-side
+   * fallback input for animation__any_animation (64-locked). Present on
+   * animate messages when the client rendered one AND the total envelope
+   * fits Cloudflare Queues' 128KB message cap. Consumer skips fallback
+   * entirely when this field is missing AND the primary was >64px
+   * (deterministic 400 on animation__any_animation).
+   */
+  fallbackInputImage?: string;
 }
 
 interface QueueBinding {

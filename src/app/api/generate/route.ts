@@ -103,6 +103,15 @@ export interface GenerateBody {
   /** Client-supplied UUID for the queue-kickoff path (Build #2A).
    *  Required only when QUEUE_KICKOFF_ENABLED is on for this user. */
   idempotencyKey?: string;
+  /**
+   * Optional 64×64 opaque PNG base64 (no data: prefix) rendered by the
+   * client alongside the primary inputImage. Threaded into the QUEUE
+   * ENVELOPE only (never into the RD wire body). Consumer uses it as the
+   * animation__any_animation fallback input when the primary style fails
+   * on a >64px request. Omitted from the envelope when adding it would
+   * push the message past the queue budget.
+   */
+  fallbackInputImage?: string;
 }
 
 // ── SSE helpers ──
@@ -383,6 +392,35 @@ export async function POST(request: Request) {
         ? buildRdAnimateBody(body)
         : buildRdCreateBody(body);
 
+      // fallbackInputImage: envelope-only (never sent to RD directly). Consumer
+      // uses it as the animation__any_animation fallback input for oversized
+      // primaries. Cloudflare Queues cap is 128KB per message; the primary
+      // inputImage already spends up to ANIMATE_INPUT_B64_SERVER_MAX (124KB),
+      // leaving ~4KB headroom. A 64×64 nearest-neighbor PNG is typically
+      // ~1-2KB base64, so the fallback fits in the common case — but we
+      // budget-check defensively and omit it if the combined size would
+      // approach the cap. Consumer degrades gracefully when absent.
+      const QUEUE_MSG_BUDGET_B64 = 125_000;
+      const primaryLen = typeof body.inputImage === 'string' ? body.inputImage.length : 0;
+      const fallbackLen =
+        typeof body.fallbackInputImage === 'string' ? body.fallbackInputImage.length : 0;
+      const includeFallback =
+        mode === 'animate' &&
+        typeof body.fallbackInputImage === 'string' &&
+        body.fallbackInputImage.length > 0 &&
+        primaryLen + fallbackLen <= QUEUE_MSG_BUDGET_B64;
+      if (
+        mode === 'animate' &&
+        typeof body.fallbackInputImage === 'string' &&
+        body.fallbackInputImage.length > 0 &&
+        !includeFallback
+      ) {
+        console.warn(
+          '[enqueue] fallbackInputImage omitted: total b64 would exceed queue budget',
+          JSON.stringify({ jobId, primaryLen, fallbackLen, budget: QUEUE_MSG_BUDGET_B64 })
+        );
+      }
+
       await enqueueJob(env.RD_QUEUE, {
         jobId,
         userId,
@@ -391,6 +429,7 @@ export async function POST(request: Request) {
         mode,
         body: rdBody,
         enqueuedAt: now,
+        ...(includeFallback ? { fallbackInputImage: body.fallbackInputImage } : {}),
       });
 
       return new Response(

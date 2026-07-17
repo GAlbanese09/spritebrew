@@ -14,6 +14,13 @@ export interface SlicerHints {
   directional: boolean;
   rows?: number;
   cols?: number;
+  /**
+   * Set true when the consumer's fallback pipeline delivered this sheet
+   * (i.e. the primary RD job timed out/failed and we auto-downgraded to
+   * a 64×64 rescue). Additive field — older entries and non-rescued
+   * successes leave this undefined and behave identically.
+   */
+  rescued?: true;
 }
 
 export interface GenerationHistoryEntry {

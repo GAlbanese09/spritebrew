@@ -72,10 +72,21 @@ export async function GET(
 
   // Emit minimal payload during in-flight; full result only on terminal success.
   if (state.status === 'success') {
+    // Rescue metadata (consumer commit 0d71a88): the five fields are present
+    // ONLY on records the consumer marked as rescued. deliveredFrames is
+    // optional even when rescued=true (unreadable IHDR on the delivered
+    // sheet — the client derives it from decoded dimensions in that case).
+    // Absent fields stay absent on the wire (JSON drops undefined), so
+    // non-rescue successes are byte-compatible with today's response.
     return jsonResponse({
       status: 'success',
       resultBase64: state.resultBase64,
       completedAt: state.completedAt,
+      rescued: state.rescued,
+      requestedWidth: state.requestedWidth,
+      requestedHeight: state.requestedHeight,
+      deliveredCellSize: state.deliveredCellSize,
+      deliveredFrames: state.deliveredFrames,
     }, 200);
   }
   if (state.status === 'error') {

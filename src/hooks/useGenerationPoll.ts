@@ -24,9 +24,25 @@ export interface ActiveJobLocalStorage {
 const ACTIVE_JOB_KEY = 'spritebrew:activeJob';
 const STALE_THRESHOLD_MS = 10 * 60 * 1_000;
 
+export interface PollSuccessResult {
+  resultBase64: string;
+  completedAt: number;
+  /**
+   * Rescue metadata mirrored from PollTerminalSuccess. Present iff the
+   * consumer's fallback path delivered this sheet; deliveredFrames may
+   * still be absent when rescued=true if the consumer couldn't read the
+   * PNG header.
+   */
+  rescued?: true;
+  requestedWidth?: number;
+  requestedHeight?: number;
+  deliveredCellSize?: number;
+  deliveredFrames?: number;
+}
+
 export interface UseGenerationPollResult {
   status: GenStatus;
-  result?: { resultBase64: string; completedAt: number };
+  result?: PollSuccessResult;
   error?: { message: string; errorCode?: string; refunded: boolean };
   jobId?: string;
   /** True when the active poll was resumed from localStorage on mount,
@@ -84,7 +100,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
   const { getToken } = useAuth();
 
   const [status, setStatus] = useState<GenStatus>('idle');
-  const [result, setResult] = useState<{ resultBase64: string; completedAt: number } | undefined>();
+  const [result, setResult] = useState<PollSuccessResult | undefined>();
   const [error, setError] = useState<{ message: string; errorCode?: string; refunded: boolean } | undefined>();
   const [jobId, setJobId] = useState<string | undefined>();
   const [isResume, setIsResume] = useState<boolean>(false);
@@ -120,9 +136,18 @@ export function useGenerationPoll(): UseGenerationPollResult {
           if (controller.signal.aborted) return;
 
           if (terminal.status === 'success') {
+            // Rescue fields (rescued / requestedWidth / requestedHeight /
+            // deliveredCellSize / deliveredFrames) forwarded verbatim.
+            // Consumers use them to render a rescue notice + prefer
+            // delivered geometry for the preview/slicer.
             setResult({
               resultBase64: terminal.resultBase64,
               completedAt: terminal.completedAt,
+              ...(terminal.rescued ? { rescued: terminal.rescued } : {}),
+              ...(typeof terminal.requestedWidth === 'number' ? { requestedWidth: terminal.requestedWidth } : {}),
+              ...(typeof terminal.requestedHeight === 'number' ? { requestedHeight: terminal.requestedHeight } : {}),
+              ...(typeof terminal.deliveredCellSize === 'number' ? { deliveredCellSize: terminal.deliveredCellSize } : {}),
+              ...(typeof terminal.deliveredFrames === 'number' ? { deliveredFrames: terminal.deliveredFrames } : {}),
             });
             setStatus('success');
           } else {

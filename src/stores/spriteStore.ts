@@ -2,6 +2,24 @@ import { create } from 'zustand';
 import type { SpriteSheet, SpriteAnimation, SpriteFrame } from '@/lib/types';
 import type { SlicerHints } from '@/lib/generationHistory';
 
+/**
+ * Rescue metadata for the current generation. Set by AnimateForm's poll-
+ * success handler when the consumer's fallback path delivered the sheet
+ * (consumer commit 0d71a88). Non-rescued successes leave this null.
+ * Consumed by GenerationResult (renders the "this came from our backup"
+ * notice) and by generate/page.tsx (feeds slicerHints written into history).
+ */
+export interface RescueInfo {
+  rescued: true;
+  requestedWidth?: number;
+  requestedHeight?: number;
+  deliveredCellSize?: number;
+  /** Client-derived when the consumer couldn't read the delivered PNG's
+   *  header. Undefined if that derivation also didn't yield a clean
+   *  cell/dimension division. */
+  deliveredFrames?: number;
+}
+
 /** Reward types pushed onto the celebration queue. Discriminated union so the
  *  modal can render appropriate copy + icon for each. */
 export type PendingReward =
@@ -29,6 +47,10 @@ interface SpriteStore {
    *  API call so the loading indicator can show "Brewing your attack animation..." */
   generatingAction: string | null;
   originalCharacterDataUrl: string | null;
+  /** Set by AnimateForm on rescued animate deliveries; cleared by any new
+   *  generation or by clearGeneratedImage. Non-rescue and create-mode
+   *  successes leave this null. */
+  rescueInfo: RescueInfo | null;
   generationCount: number;
   generationCountDate: string;
   tokenBalance: number;
@@ -84,6 +106,7 @@ interface SpriteStore {
   setGeneratingAction: (action: string | null) => void;
   setTokenBalance: (balance: number) => void;
   setCurrentSheetMetadata: (metadata: SlicerHints | null) => void;
+  setRescueInfo: (info: RescueInfo | null) => void;
 
   // Reward queue
   enqueueRewards: (rewards: Omit<PendingReward, 'id'>[]) => void;
@@ -117,6 +140,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   animateMode: 'create',
   generatingAction: null,
   originalCharacterDataUrl: null,
+  rescueInfo: null,
   generationCount: 0,
   generationCountDate: '',
   tokenBalance: 0,
@@ -207,6 +231,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
       generatedImageUrl: null,
       generatedImageDataUrl: null,
       originalCharacterDataUrl: null,
+      rescueInfo: null,
       // Clear any pending handoffs alongside the image — they have nothing
       // left to consume once the image is gone.
       pendingEditorHandoff: false,
@@ -241,6 +266,8 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   setTokenBalance: (balance) => set({ tokenBalance: balance }),
 
   setCurrentSheetMetadata: (metadata) => set({ currentSheetMetadata: metadata }),
+
+  setRescueInfo: (info) => set({ rescueInfo: info }),
 
   // Reward queue actions. enqueue assigns each reward a unique id so React
   // keys and the modal's "currentReward" selection stay stable.

@@ -12,7 +12,7 @@ import {
   Save,
 } from 'lucide-react';
 import { useAuth } from '@clerk/react';
-import { useSpriteStore } from '@/stores/spriteStore';
+import { useSpriteStore, type RescueInfo } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import CharacterAutoPrep from './CharacterAutoPrep';
 import { loadImage, imageToCanvas, despillChromaEdges } from '@/lib/spriteUtils';
@@ -118,8 +118,28 @@ async function despillIfTransparent(dataUrl: string, fillHex: string): Promise<s
   }
 }
 
+/**
+ * Animate-specific context for the onGenerated handoff. Passed as an
+ * optional 4th arg so the shared callback in generate/page.tsx can build
+ * accurate slicerHints without falling back to a hardcoded frameCount.
+ *   - frameCount: what the user asked for (may not equal what was
+ *     delivered on a rescue).
+ *   - rescueInfo: full descriptor when the consumer's fallback path
+ *     delivered the sheet; undefined otherwise. When present, its
+ *     deliveredFrames wins over frameCount for slicer hints.
+ */
+export interface AnimateGeneratedContext {
+  frameCount: number;
+  rescueInfo?: RescueInfo;
+}
+
 interface AnimateFormProps {
-  onGenerated: (dataUrl: string, prompt: string, style: string) => void;
+  onGenerated: (
+    dataUrl: string,
+    prompt: string,
+    style: string,
+    animateContext?: AnimateGeneratedContext
+  ) => void;
 }
 
 export default function AnimateForm({ onGenerated }: AnimateFormProps) {
@@ -128,6 +148,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const setGeneratingAction = useSpriteStore((s) => s.setGeneratingAction);
   const setGenerationError = useSpriteStore((s) => s.setGenerationError);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
+  const setRescueInfo = useSpriteStore((s) => s.setRescueInfo);
   const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
   const setOriginalCharacter = useSpriteStore((s) => s.setOriginalCharacter);
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
@@ -187,10 +208,16 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   // went away July 15) but still travels through this ref so the despill
   // in the poll-success handler sees a stable request-time fill regardless
   // of any future changes to the flatten default.
+  // frameCount is snapshotted at click-time so the poll-success handler
+  // can pass the requested count into onGenerated for accurate slicer
+  // hints (rescued deliveries prefer deliveredFrames, but non-rescued
+  // ones need the actual request-time value, not whatever the form state
+  // is at poll-completion time).
   const inFlightRef = useRef<{
     action: string;
     motionPrompt: string;
     bgColor: string;
+    frameCount: number;
   } | null>(null);
 
   // 1s click-debounce (one-render race window beyond isGenerating).
@@ -766,6 +793,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       action: selectedAction,
       motionPrompt: motionPrompt.trim(),
       bgColor: DEFAULT_BG_COLOR,
+      frameCount,
     };
 
     let tookPollPath = false;
@@ -835,9 +863,18 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       const dataUrl = await despillIfTransparent(data.imageUrl!, reqCtx.bgColor);
 
       setGeneratedImage(dataUrl, dataUrl);
+      // SSE path is local-only and never traverses the consumer's fallback
+      // pipeline, so it is never rescued — clear any stale rescueInfo from
+      // a prior generation this session.
+      setRescueInfo(null);
       setGenerationStyle(`any_animation_${reqCtx.action}`);
       await fetchBalance();
-      onGenerated(dataUrl, reqCtx.motionPrompt || reqCtx.action, `any_animation_${reqCtx.action}`);
+      onGenerated(
+        dataUrl,
+        reqCtx.motionPrompt || reqCtx.action,
+        `any_animation_${reqCtx.action}`,
+        { frameCount }
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       const errObj = err as Error & {
@@ -903,16 +940,56 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       // can't be async themselves.
       const rawDataUrl = `data:image/png;base64,${poll.result.resultBase64}`;
       const reqCtx = inFlightRef.current;
+      const pollResult = poll.result;
       (async () => {
         const dataUrl = await despillIfTransparent(rawDataUrl, reqCtx?.bgColor ?? '#000000');
         setGeneratedImage(dataUrl, dataUrl);
+
+        // Rescue metadata (consumer commit 0d71a88): build a client-side
+        // RescueInfo, deriving deliveredFrames from decoded sheet dims
+        // when the consumer omitted it (unreadable IHDR). The derivation
+        // requires a clean (W/cell)*(H/cell) division; anything else
+        // leaves deliveredFrames undefined and the slicer falls back to
+        // its existing behavior (any_animation_* auto-detect at 64×64).
+        let rescueInfo: RescueInfo | null = null;
+        if (pollResult.rescued) {
+          const cell = pollResult.deliveredCellSize;
+          let derivedFrames = pollResult.deliveredFrames;
+          if (derivedFrames === undefined && typeof cell === 'number' && cell > 0) {
+            try {
+              const probe = new Image();
+              probe.src = dataUrl;
+              await probe.decode();
+              const w = probe.naturalWidth;
+              const h = probe.naturalHeight;
+              if (w > 0 && h > 0 && w % cell === 0 && h % cell === 0) {
+                derivedFrames = (w / cell) * (h / cell);
+              }
+            } catch {
+              // Decode failed — leave derivedFrames undefined.
+            }
+          }
+          rescueInfo = {
+            rescued: true,
+            ...(typeof pollResult.requestedWidth === 'number' ? { requestedWidth: pollResult.requestedWidth } : {}),
+            ...(typeof pollResult.requestedHeight === 'number' ? { requestedHeight: pollResult.requestedHeight } : {}),
+            ...(typeof cell === 'number' ? { deliveredCellSize: cell } : {}),
+            ...(typeof derivedFrames === 'number' ? { deliveredFrames: derivedFrames } : {}),
+          };
+        }
+        setRescueInfo(rescueInfo);
+
         if (reqCtx) {
           setGenerationStyle(`any_animation_${reqCtx.action}`);
           void fetchBalance();
           onGenerated(
             dataUrl,
             reqCtx.motionPrompt || reqCtx.action,
-            `any_animation_${reqCtx.action}`
+            `any_animation_${reqCtx.action}`,
+            {
+              frameCount: reqCtx.frameCount,
+              ...(rescueInfo ? { rescueInfo } : {}),
+            }
           );
           inFlightRef.current = null;
         }
@@ -1078,16 +1155,17 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             ? 'Retro Diffusion locks this style at this resolution. For higher resolutions, choose a Walking/Idle/Attack style instead.'
             : 'Larger = more detail. Cost is flat per generation — no resolution surcharge.'}
         </p>
-        {/* Reliability warning — static copy, no network call. Larger
-            RD animation sizes (128 / 256) have been timing out more often
-            than 64 across the last few days; 16-frame at those sizes is
-            the worst combination. Refunds fire automatically on failure
-            (see consumer classifyError paths), so this is purely a "set
-            your expectations" notice, not a hard block. */}
+        {/* Reliability warning — static copy, no network call. Larger RD
+            animation sizes (128 / 256) time out more often than 64.
+            Reworded to promise the auto-downgrade explicitly: users no
+            longer have to infer geometry from a refund message when a
+            rescue lands (see the RescueInfo notice in GenerationResult).
+            16-frame at these sizes is still the worst combo — that
+            append stays, reworded to match the friendlier voice. */}
         {currentMode.kind !== 'locked' && (selectedResolution === 128 || selectedResolution === 256) && (
           <p className="text-[10px] font-mono text-amber-400/90 mt-2 leading-snug">
-            Heads up: larger animations are timing out more often than usual with our AI provider. 64px is currently the most reliable. Failed generations auto-refund.
-            {frameCount === 16 && ' 16 frames at this size is the most likely to fail — consider 8.'}
+            Larger animations are failing more often than usual right now. If yours fails, we&apos;ll automatically create a 64px version instead, so you&apos;ll still get your animation, just smaller.
+            {frameCount === 16 && ' 16 frames at this size fails most often. 8 is the safer bet.'}
           </p>
         )}
       </div>

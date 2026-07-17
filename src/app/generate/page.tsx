@@ -9,6 +9,7 @@ import AnimateForm from '@/components/sprites/AnimateForm';
 import GenerationResult from '@/components/sprites/GenerationResult';
 import { addToHistory, type SlicerHints } from '@/lib/generationHistory';
 import { useSpriteStore } from '@/stores/spriteStore';
+import type { AnimateGeneratedContext } from '@/components/sprites/AnimateForm';
 
 const EARLY_ACCESS_DISMISS_KEY = 'spritebrew_early_access_dismissed';
 const LIMIT_NOTICE_DISMISS_KEY = 'spritebrew_dismissed_limit_notice';
@@ -206,24 +207,41 @@ export default function GeneratePage() {
     }
   }, [pendingAnimatorHandoff, tab, handleTabChange]);
 
-  const handleGenerated = useCallback(async (dataUrl: string, prompt: string, style: string) => {
+  const handleGenerated = useCallback(async (
+    dataUrl: string,
+    prompt: string,
+    style: string,
+    animateContext?: AnimateGeneratedContext
+  ) => {
     // Determine mode + action from the style key
     const isAnimate = style.startsWith('any_animation_');
     const action = isAnimate ? style.replace('any_animation_', '') : undefined;
 
-    // Build slicerHints for animate-mode results
+    // Build slicerHints for animate-mode results. Frame count comes from
+    // the AnimateForm's animateContext (previously hardcoded to 4). When
+    // the sheet was rescued (consumer commit 0d71a88), prefer
+    // deliveredFrames — the rescue is a fixed 64×64 output whose actual
+    // frame count differs from what the user requested.
     const ANIMATE_ACTION_TO_SLICER_TYPE: Record<string, string> = {
       walking: 'walk', idle: 'idle', attack: 'attack', jump: 'jump',
       crouch: 'crouch', destroy: 'destroy', subtle_motion: 'subtle', custom_action: 'custom',
     };
     let slicerHints: SlicerHints | undefined;
     if (isAnimate && action) {
+      const rescueInfo = animateContext?.rescueInfo;
+      const rescuedFrames = rescueInfo?.deliveredFrames;
+      const requestedFrames = animateContext?.frameCount ?? 4;
+      const frameCount =
+        typeof rescuedFrames === 'number' && rescuedFrames > 0
+          ? rescuedFrames
+          : requestedFrames;
       slicerHints = {
         source: 'animate',
         animationType: ANIMATE_ACTION_TO_SLICER_TYPE[action] ?? 'custom',
-        frameCount: 4, // default; actual count depends on user selection but we don't have it here
+        frameCount,
         directional: false,
         rows: 2,
+        ...(rescueInfo ? { rescued: true } : {}),
       };
     }
 

@@ -45,6 +45,18 @@ export interface PollTerminalSuccess {
   status: 'success';
   resultBase64: string;
   completedAt: number;
+  /**
+   * Rescue metadata (present iff the consumer's fallback path delivered
+   * this sheet). Absent on normal successes — non-rescue records are
+   * byte-compatible with today. deliveredFrames can be absent even when
+   * rescued=true if the consumer couldn't read the delivered PNG's
+   * dimensions (client derives it from decoded geometry in that case).
+   */
+  rescued?: true;
+  requestedWidth?: number;
+  requestedHeight?: number;
+  deliveredCellSize?: number;
+  deliveredFrames?: number;
 }
 
 export interface PollTerminalError {
@@ -171,6 +183,11 @@ export async function pollJobStatus(
       error?: string;
       errorCode?: string;
       refunded?: boolean;
+      rescued?: true;
+      requestedWidth?: number;
+      requestedHeight?: number;
+      deliveredCellSize?: number;
+      deliveredFrames?: number;
     };
     try {
       body = await res.json();
@@ -182,10 +199,18 @@ export async function pollJobStatus(
       if (!body.resultBase64 || typeof body.completedAt !== 'number') {
         throw new Error('Polling success state missing resultBase64/completedAt.');
       }
+      // Rescue fields: forwarded verbatim when present. Non-rescue records
+      // don't carry them and JSON.stringify drops undefined, so this stays
+      // additive on the wire.
       return {
         status: 'success',
         resultBase64: body.resultBase64,
         completedAt: body.completedAt,
+        ...(body.rescued ? { rescued: body.rescued } : {}),
+        ...(typeof body.requestedWidth === 'number' ? { requestedWidth: body.requestedWidth } : {}),
+        ...(typeof body.requestedHeight === 'number' ? { requestedHeight: body.requestedHeight } : {}),
+        ...(typeof body.deliveredCellSize === 'number' ? { deliveredCellSize: body.deliveredCellSize } : {}),
+        ...(typeof body.deliveredFrames === 'number' ? { deliveredFrames: body.deliveredFrames } : {}),
       };
     }
 

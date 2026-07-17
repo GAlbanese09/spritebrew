@@ -43,6 +43,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
+  const rescueInfo = useSpriteStore((s) => s.rescueInfo);
   const setPendingAnimatorHandoff = useSpriteStore((s) => s.setPendingAnimatorHandoff);
   const setPendingAnimatorSkipBgRemoval = useSpriteStore((s) => s.setPendingAnimatorSkipBgRemoval);
 
@@ -380,6 +381,31 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           <div className="text-center">
             <p className="text-[9px] font-mono text-accent-amber mb-1">Animated</p>
           </div>
+        </div>
+      )}
+
+      {/* Rescue notice — surfaces the consumer's fallback delivery so
+          users know their requested-size animation timed out and we
+          auto-downgraded to a 64px version at no extra cost. Template
+          builds only from fields that are actually present (spec: "never
+          render undefined"): the requested-size clause drops when
+          requestedWidth is absent, and the frame-count clause drops when
+          deliveredFrames is absent (unreadable IHDR + client-derivation
+          also failed). */}
+      {rescueInfo && (
+        <div className="rounded-lg border border-accent-amber/40 bg-accent-amber/5 px-4 py-3 text-xs font-mono text-text-secondary leading-relaxed">
+          This one came from our backup process.
+          {' '}
+          {typeof rescueInfo.requestedWidth === 'number'
+            ? `Your ${rescueInfo.requestedWidth}px animation failed on the provider's side, so we made a `
+            : `Your animation failed on the provider's side, so we made a `}
+          {typeof rescueInfo.deliveredCellSize === 'number'
+            ? `${rescueInfo.deliveredCellSize}px`
+            : 'smaller'}
+          {typeof rescueInfo.deliveredFrames === 'number'
+            ? `, ${rescueInfo.deliveredFrames}-frame`
+            : ''}
+          {' '}version instead. No extra tokens were used.
         </div>
       )}
 

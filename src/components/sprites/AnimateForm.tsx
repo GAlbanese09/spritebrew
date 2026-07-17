@@ -420,21 +420,18 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     img.src = generatedImageDataUrl;
   }, [pendingAnimatorHandoff, pendingAnimatorSkipBgRemoval, generatedImageDataUrl, clearPendingAnimatorHandoff, clearPendingAnimatorSkipBgRemoval]);
 
-  // When resolution changes after a character is already prepped, invalidate it
-  // so the user re-runs Auto-Prep at the new size. This is simpler and more
-  // reliable than trying to silently re-resize the prepped image.
+  // When resolution changes after a character is already prepped, leave the
+  // character in place and let the sizeWarning/canGenerate gate (line ~1032)
+  // tell the user the dims don't match — they can either click back to the
+  // matching size, re-upload, or (if we ever add it) re-run Auto-Prep at
+  // the new size. Pre-July-16 this callback cleared the character AND
+  // never repopulated pendingDataUrl (the "Re-show the pending image"
+  // comment was aspirational, not implemented), which forced the user to
+  // re-upload just to inspect a different size option. Removed July 16.
   const handleResolutionChange = useCallback((newRes: number) => {
     if (newRes === selectedResolution) return;
     setSelectedResolution(newRes);
-    // If character was already prepped at a different size, clear it
-    if (characterDataUrl && (charWidth !== newRes || charHeight !== newRes)) {
-      setCharacterDataUrl(null);
-      setCharWidth(0);
-      setCharHeight(0);
-      // Re-show the pending image so Auto-Prep can re-run at new size
-      // (only if we still have the original upload)
-    }
-  }, [selectedResolution, characterDataUrl, charWidth, charHeight]);
+  }, [selectedResolution]);
 
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1164,7 +1161,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             append stays, reworded to match the friendlier voice. */}
         {currentMode.kind !== 'locked' && (selectedResolution === 128 || selectedResolution === 256) && (
           <p className="text-[10px] font-mono text-amber-400/90 mt-2 leading-snug">
-            Larger animations are failing more often than usual right now. If yours fails, we&apos;ll automatically create a 64px version instead, so you&apos;ll still get your animation, just smaller.
+            {`Larger animations are failing more often than usual right now. If yours fails, we'll automatically create a 64px version instead, so you'll still get your animation, just smaller.`}
             {frameCount === 16 && ' 16 frames at this size fails most often. 8 is the safer bet.'}
           </p>
         )}
@@ -1187,17 +1184,17 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         />
       )}
 
-      {/* Transparent-background toggle + BG_COLORS swatch row removed
-          July 15 (see DEFAULT_BG_COLOR docstring above). RD default-strips
-          animation backgrounds, we always send remove_bg on top of that,
-          and despillIfTransparent runs unconditionally on every result —
-          the fill choice is now invisible in the output, so the picker
-          would just be confusing. */}
-
       {/* Saved templates (v0.5.12) — character-agnostic, persisted to
           spritebrew:animate:templates. Click a pill to load all 7 form
           fields; X to delete. Save current as a new template via the
-          inline input below. */}
+          inline input below.
+          NB: two orphan JSX-only comment blocks lived here through
+          d1feb76 (a July-15 "transparency toggle removed" note + this
+          one). On the Turbopack production build they correlated with
+          symptom A of the July-16 regression report: every JSX sibling
+          after these two adjacent comment-only expressions failed to
+          render. Merged into a single comment as a defensive fix; there
+          is nothing runtime-load-bearing in either block. */}
       <div>
         <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2">
           Saved Templates

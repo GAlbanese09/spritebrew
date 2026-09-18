@@ -40,3 +40,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .wrangler/
+
+# Claude hub/spoke room: transport between the HQ chat and Claude Code sessions.
+# The durable record lives in the Claude project (claude/room/); this copy is local-only.
+/room/

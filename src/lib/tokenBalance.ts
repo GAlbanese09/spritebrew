@@ -4,6 +4,7 @@
  * KV schema:
  *   token_balance:{userId}              → JSON { balance, created_at, last_updated }
  *   token_tx:{userId}:{ts}:{uid}        → JSON { type, amount, reason, balance_after, style?, timestamp } — TTL 90 days
+ *                                          + KV metadata TxMetadata { type, reason, style?, mode?, size? } (see tokenTxMeta.ts)
  *   token_idempotency:{key}             → "1" — TTL 7 days
  *   bonus_email_verified:{userId}       → "1" — TTL 50 days (idempotency for the earn-back grant)
  *   bonus_discord_joined:{userId}       → "1" — TTL 50 days
@@ -23,6 +24,7 @@ import {
   EARN_BACK_FIRST_SHARE_TOKENS,
   EARN_BACK_FLAG_TTL_SECONDS,
 } from '@/lib/constants';
+import { txMetadata, type TxContext } from '@/lib/tokenTxMeta';
 
 const TX_TTL = 7_776_000; // 90 days
 const IDEMPOTENCY_TTL = 604_800; // 7 days
@@ -57,7 +59,11 @@ const LIFETIME_COUNTER_KEY: Record<FreeTierBucket, string> = {
 
 interface KV {
   get(key: string): Promise<string | null>;
-  put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
+  put(
+    key: string,
+    value: string,
+    options?: { expirationTtl?: number; metadata?: unknown }
+  ): Promise<void>;
   list(options?: { prefix?: string; limit?: number }): Promise<{ keys: { name: string }[] }>;
 }
 
@@ -100,8 +106,10 @@ interface TransactionRecord {
   timestamp: string;
 }
 
-/** Optional metadata threaded through creditTokens → writeTx. */
-export interface CreditMeta {
+/** Optional metadata threaded through creditTokens → writeTx. The TxContext
+ *  part (style/mode/size) goes onto the row's KV metadata only; source and
+ *  streakDay are recorded in the row value as before. */
+export interface CreditMeta extends TxContext {
   source?: TransactionSource;
   streakDay?: number;
 }
@@ -116,9 +124,19 @@ function idempotencyKey(key: string): string {
   return `token_idempotency:${key}`;
 }
 
-async function writeTx(kv: KV, userId: string, tx: TransactionRecord): Promise<void> {
+async function writeTx(
+  kv: KV,
+  userId: string,
+  tx: TransactionRecord,
+  ctx?: TxContext
+): Promise<void> {
   try {
-    await kv.put(txKey(userId), JSON.stringify(tx), { expirationTtl: TX_TTL });
+    await kv.put(txKey(userId), JSON.stringify(tx), {
+      expirationTtl: TX_TTL,
+      // Indexed copy of the classifying fields so the admin failure-rate scan
+      // can read them from list() without a get() per row.
+      metadata: txMetadata(tx.type, tx.reason, ctx),
+    });
   } catch {
     // Transaction logging is best-effort
   }
@@ -236,11 +254,13 @@ export interface DebitResult {
 /**
  * Debit tokens for a generation. Returns the new balance on success,
  * or the current balance + required amount on failure.
+ * Optional `ctx` (style/mode/size) is recorded on the tx row's KV metadata.
  */
 export async function debitTokens(
   userId: string,
   amount: number,
-  idempotencyKeyValue: string
+  idempotencyKeyValue: string,
+  ctx?: TxContext
 ): Promise<DebitResult> {
   const kv = getKV();
   if (!kv) return { success: true, balance: 0 }; // Fail open
@@ -275,13 +295,18 @@ export async function debitTokens(
 
     await kv.put(`token_balance:${userId}`, JSON.stringify(record));
     await kv.put(idemKey, '1', { expirationTtl: IDEMPOTENCY_TTL });
-    await writeTx(kv, userId, {
-      type: 'debit',
-      amount,
-      reason: 'generation',
-      balance_after: newBalance,
-      timestamp: now,
-    });
+    await writeTx(
+      kv,
+      userId,
+      {
+        type: 'debit',
+        amount,
+        reason: 'generation',
+        balance_after: newBalance,
+        timestamp: now,
+      },
+      ctx
+    );
 
     return { success: true, balance: newBalance };
   } catch {
@@ -336,15 +361,20 @@ export async function creditTokens(
 
     await kv.put(`token_balance:${userId}`, JSON.stringify(record));
     await kv.put(idemKey, '1', { expirationTtl: IDEMPOTENCY_TTL });
-    await writeTx(kv, userId, {
-      type: 'credit',
-      amount,
-      reason,
-      source: meta?.source,
-      streakDay: meta?.streakDay,
-      balance_after: newBalance,
-      timestamp: now,
-    });
+    await writeTx(
+      kv,
+      userId,
+      {
+        type: 'credit',
+        amount,
+        reason,
+        source: meta?.source,
+        streakDay: meta?.streakDay,
+        balance_after: newBalance,
+        timestamp: now,
+      },
+      meta
+    );
 
     return { success: true, balance: newBalance };
   } catch {

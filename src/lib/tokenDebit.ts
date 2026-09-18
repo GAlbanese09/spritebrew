@@ -9,13 +9,19 @@
  * via event_id deduplication in KV.
  */
 
+import { txMetadata } from '@/lib/tokenTxMeta';
+
 const TX_TTL = 7_776_000; // 90 days
 
 // ── KV binding ──
 
 interface KV {
   get(key: string): Promise<string | null>;
-  put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
+  put(
+    key: string,
+    value: string,
+    options?: { expirationTtl?: number; metadata?: unknown }
+  ): Promise<void>;
 }
 
 function getKV(): KV | null {
@@ -75,7 +81,10 @@ export async function debitTokensForRefund(
 
   await kv.put(`token_balance:${userId}`, JSON.stringify(record));
 
-  // Write transaction log
+  // Write transaction log. The KV metadata carries { type, reason } only:
+  // a Stripe refund/dispute debit has no style, mode, or size, and the
+  // shared txMetadata() omits fields it isn't given. (The Stripe ids in
+  // `metadata` below stay in the row VALUE, not in the KV metadata.)
   const ts = Date.now();
   const uid = Math.random().toString(36).slice(2, 8);
   const txKey = `token_tx:${userId}:${ts}:${uid}`;
@@ -91,7 +100,7 @@ export async function debitTokensForRefund(
         metadata,
         timestamp: now,
       }),
-      { expirationTtl: TX_TTL }
+      { expirationTtl: TX_TTL, metadata: txMetadata('debit', reason) }
     );
   } catch {
     // Transaction logging is best-effort

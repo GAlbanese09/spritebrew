@@ -142,6 +142,7 @@ import {
   hasUserPaid,
   type FreeTierBucket,
 } from '@/lib/tokenBalance';
+import type { TxContext } from '@/lib/tokenTxMeta';
 import { getTokenCost, getResolutionMode, getFreeTierBucket, GENERATION_STYLES } from '@/lib/styleRegistry';
 import { getAccountStatus } from '@/lib/accountLock';
 import { isAdminUser } from '@/lib/generationLimits';
@@ -212,6 +213,16 @@ export async function POST(request: Request) {
   const tokenCost = getTokenCost(promptStyle);
   const bucket: FreeTierBucket = getFreeTierBucket(promptStyle);
   const isAdmin = isAdminUser(userId);
+
+  // Generation context recorded on the debit and any refund tx rows (KV
+  // metadata) so the admin failure-rate scan can bucket by style/mode/size
+  // without a get() per row. Animate defaults to 64 when width is omitted,
+  // matching validateAnimateBody; create has no server-side default.
+  const txCtx: TxContext = {
+    style: promptStyle,
+    mode,
+    size: body.width ?? (mode === 'animate' ? 64 : undefined),
+  };
 
   // Queue-kickoff routing decision — hoisted so the pre-debit guards below
   // can short-circuit cleanly for users on the queue path without re-running
@@ -311,7 +322,7 @@ export async function POST(request: Request) {
   const requestId = `gen:${userId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
 
   // Debit tokens before generation
-  const debitResult = await debitTokens(userId, tokenCost, requestId);
+  const debitResult = await debitTokens(userId, tokenCost, requestId, txCtx);
   if (!debitResult.success) {
     return Response.json(
       {
@@ -440,7 +451,7 @@ export async function POST(request: Request) {
       // Compensating refund. Same idempotency seed as the SSE path so a
       // retry that lands in this branch (or in SSE) dedupes correctly via
       // tokenBalance's token_idempotency:* check.
-      await creditTokens(userId, tokenCost, 'generation_failed_refund', `refund:${requestId}`);
+      await creditTokens(userId, tokenCost, 'generation_failed_refund', `refund:${requestId}`, txCtx);
 
       // Best-effort: update the pending job KV record to a terminal failed
       // state so a stray poll doesn't see "pending" forever. jobId is
@@ -495,7 +506,7 @@ export async function POST(request: Request) {
     } catch (err) {
       // RD API failure — refund the tokens
       const refundKey = `refund:${requestId}`;
-      await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey);
+      await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey, txCtx);
       const message = err instanceof Error ? err.message : 'Unknown error';
       await writer.write(sseEvent({ type: 'error', message })).catch(() => {});
     } finally {

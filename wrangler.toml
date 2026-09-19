@@ -34,6 +34,13 @@ queue = "spritebrew-rd-jobs"
 binding = "GALLERY_BUCKET"
 bucket_name = "spritebrew-gallery"
 
+# D1 event ledger (WD2a). Written by the consumer Worker; read here by
+# /api/admin/events. Observability only; token_tx:* in KV stays the money truth.
+[[env.production.d1_databases]]
+binding = "EVENTS_DB"
+database_name = "spritebrew-events"
+database_id = "fb33d2dc-cfdc-4ed3-9311-12abaf951816"
+
 # === Preview (dev branch) ===
 [env.preview]
 compatibility_flags = [ "nodejs_compat" ]
@@ -58,3 +65,8 @@ queue = "spritebrew-rd-jobs-dev"
 [[env.preview.r2_buckets]]
 binding = "GALLERY_BUCKET"
 bucket_name = "spritebrew-gallery-dev"
+
+[[env.preview.d1_databases]]
+binding = "EVENTS_DB"
+database_name = "spritebrew-events-dev"
+database_id = "c7ca1a93-a1f9-477b-b056-1b4f7b434a95"

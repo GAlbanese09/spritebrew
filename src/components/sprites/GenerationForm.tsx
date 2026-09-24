@@ -60,6 +60,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const { userId, getToken } = useAuth();
   const setGenerating = useSpriteStore((s) => s.setGenerating);
   const setGeneratingAction = useSpriteStore((s) => s.setGeneratingAction);
+  const setGenerationProgress = useSpriteStore((s) => s.setGenerationProgress);
   const setGenerationError = useSpriteStore((s) => s.setGenerationError);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
@@ -330,6 +331,12 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [poll.status, poll.result, poll.error]);
+
+  // Mirror in-flight progress to the store so BrewingLoader can show the
+  // elapsed time, the job stage and the per-mode expectation.
+  useEffect(() => {
+    setGenerationProgress(poll.startedAt, poll.serverStatus, poll.mode);
+  }, [poll.startedAt, poll.serverStatus, poll.mode, setGenerationProgress]);
 
   return (
     <>

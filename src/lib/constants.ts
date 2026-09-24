@@ -107,6 +107,28 @@ export const ANIMATE_INPUT_B64_CLIENT_MAX = 120_000;
 export const ANIMATE_INPUT_B64_SERVER_MAX = 124_000;
 export const REFS_TOTAL_B64_QUEUE_MAX = 110_000;
 
+/**
+ * Loader copy per generation mode, sized from the production D1 event
+ * ledger (spritebrew-events, generation.succeeded rows, latency_ms), not
+ * guessed. Retune when the digest's p50/p95 drift from these numbers; the
+ * query is in room/loader.md entry 001. A mode with under 30 rows in the
+ * window gets null, and the loader then shows elapsed and stage only.
+ * Window: 2026-09-17 01:07 UTC to 2026-09-24 01:07 UTC (rows span
+ * 2026-09-19 19:35 to 2026-09-23 20:13 UTC), queried 2026-09-24.
+ * animate: n=96, p50=112005, p95=221475.  create: n=24, p50=23597, p95=52205.
+ */
+export const GENERATION_WAIT_COPY: Record<
+  'create' | 'animate',
+  { usual: string; long: string; p95Ms: number } | null
+> = {
+  animate: {
+    usual: 'Animations usually take about 2 minutes, sometimes up to 4',
+    long: 'Taking longer than usual. Still brewing, hang on.',
+    p95Ms: 221_475,
+  },
+  create: null,
+};
+
 // Demo area keyboard controls
 export const DEMO_CONTROLS = {
   move: { keys: ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'], alt: ['a', 'd', 'w', 's'], description: 'Move character' },

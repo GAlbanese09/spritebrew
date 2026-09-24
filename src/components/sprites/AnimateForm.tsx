@@ -146,6 +146,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const { userId, getToken } = useAuth();
   const setGenerating = useSpriteStore((s) => s.setGenerating);
   const setGeneratingAction = useSpriteStore((s) => s.setGeneratingAction);
+  const setGenerationProgress = useSpriteStore((s) => s.setGenerationProgress);
   const setGenerationError = useSpriteStore((s) => s.setGenerationError);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setRescueInfo = useSpriteStore((s) => s.setRescueInfo);
@@ -1025,6 +1026,12 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [poll.status, poll.result, poll.error]);
+
+  // Mirror in-flight progress to the store so BrewingLoader can show the
+  // elapsed time, the job stage and the per-mode expectation.
+  useEffect(() => {
+    setGenerationProgress(poll.startedAt, poll.serverStatus, poll.mode);
+  }, [poll.startedAt, poll.serverStatus, poll.mode, setGenerationProgress]);
 
   const sizeWarning = charWidth > 0 && (charWidth !== selectedResolution || charHeight !== selectedResolution);
   const isCustomAction = selectedAction === 'custom_action';

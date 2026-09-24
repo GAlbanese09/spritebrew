@@ -46,6 +46,14 @@ interface SpriteStore {
   /** The action label being generated (e.g., "attack", "walk"). Set before the
    *  API call so the loading indicator can show "Brewing your attack animation..." */
   generatingAction: string | null;
+  /** In-flight progress for the loader, mirrored from useGenerationPoll by
+   *  whichever form owns the active poll. startedAt is the client start
+   *  persisted with the job (survives reload); stage is the last status the
+   *  poll saw; mode is the job's own mode, which a resumed job keeps even
+   *  when generatingAction is null. All null when no poll is active. */
+  generationStartedAt: number | null;
+  generationStage: 'pending' | 'running' | null;
+  generationMode: 'create' | 'animate' | null;
   originalCharacterDataUrl: string | null;
   /** Set by AnimateForm on rescued animate deliveries; cleared by any new
    *  generation or by clearGeneratedImage. Non-rescue and create-mode
@@ -104,6 +112,11 @@ interface SpriteStore {
   setOriginalCharacter: (dataUrl: string | null) => void;
   setGenerationCount: (count: number, date: string) => void;
   setGeneratingAction: (action: string | null) => void;
+  setGenerationProgress: (
+    startedAt: number | null,
+    stage: 'pending' | 'running' | null,
+    mode: 'create' | 'animate' | null
+  ) => void;
   setTokenBalance: (balance: number) => void;
   setCurrentSheetMetadata: (metadata: SlicerHints | null) => void;
   setRescueInfo: (info: RescueInfo | null) => void;
@@ -139,6 +152,9 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   generationStyle: null,
   animateMode: 'create',
   generatingAction: null,
+  generationStartedAt: null,
+  generationStage: null,
+  generationMode: null,
   originalCharacterDataUrl: null,
   rescueInfo: null,
   generationCount: 0,
@@ -262,6 +278,9 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   setGenerationCount: (count, date) => set({ generationCount: count, generationCountDate: date }),
 
   setGeneratingAction: (action) => set({ generatingAction: action }),
+
+  setGenerationProgress: (startedAt, stage, mode) =>
+    set({ generationStartedAt: startedAt, generationStage: stage, generationMode: mode }),
 
   setTokenBalance: (balance) => set({ tokenBalance: balance }),
 

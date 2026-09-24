@@ -40,6 +40,9 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generatingAction = useSpriteStore((s) => s.generatingAction);
+  const generationStartedAt = useSpriteStore((s) => s.generationStartedAt);
+  const generationStage = useSpriteStore((s) => s.generationStage);
+  const generationMode = useSpriteStore((s) => s.generationMode);
   const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
@@ -226,7 +229,12 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
 
   // Loading overlay — shown over a previous result (dimmed) or standalone
   const loadingIndicator = isGenerating ? (
-    <BrewingLoader action={generatingAction} />
+    <BrewingLoader
+      action={generatingAction}
+      startedAt={generationStartedAt}
+      serverStatus={generationStage}
+      mode={generationMode}
+    />
   ) : null;
 
   // If generating AND there's a previous result, show it dimmed with the

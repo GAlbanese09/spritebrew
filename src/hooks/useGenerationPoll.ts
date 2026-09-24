@@ -49,6 +49,17 @@ export interface UseGenerationPollResult {
    *  rather than freshly initiated this session. Lets callers skip
    *  history-write side effects that need click-time context (prompt/style). */
   isResume: boolean;
+  /** Latest in-flight stage from the status poll; null before the first
+   *  intermediate response and once a terminal state lands. */
+  serverStatus: 'pending' | 'running' | null;
+  /** Consumer's startedAt for the current attempt (server clock). Present
+   *  only while running; null otherwise. */
+  serverStartedAt: number | null;
+  /** Client start time persisted with the active job, so a resumed poll
+   *  keeps the original start. Null when idle. */
+  startedAt: number | null;
+  /** Mode of the active job, fresh or resumed. Null when idle. */
+  mode: GenMode | null;
   startPolling: (jobId: string, idempotencyKey: string, mode: GenMode) => void;
   reset: () => void;
 }
@@ -104,6 +115,10 @@ export function useGenerationPoll(): UseGenerationPollResult {
   const [error, setError] = useState<{ message: string; errorCode?: string; refunded: boolean } | undefined>();
   const [jobId, setJobId] = useState<string | undefined>();
   const [isResume, setIsResume] = useState<boolean>(false);
+  const [serverStatus, setServerStatus] = useState<'pending' | 'running' | null>(null);
+  const [serverStartedAt, setServerStartedAt] = useState<number | null>(null);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [mode, setMode] = useState<GenMode | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -114,8 +129,9 @@ export function useGenerationPoll(): UseGenerationPollResult {
     (
       jid: string,
       _idempotencyKey: string,
-      _mode: GenMode,
-      resumed: boolean
+      jobMode: GenMode,
+      resumed: boolean,
+      jobStartedAt: number
     ): void => {
       // Cancel any prior loop before starting a new one.
       abortRef.current?.abort();
@@ -127,13 +143,24 @@ export function useGenerationPoll(): UseGenerationPollResult {
       setError(undefined);
       setJobId(jid);
       setIsResume(resumed);
+      setServerStatus(null);
+      setServerStartedAt(null);
+      setStartedAt(jobStartedAt);
+      setMode(jobMode);
 
       void (async () => {
         try {
           const terminal: PollTerminalState = await pollJobStatus(jid, getTokenStable, {
             signal: controller.signal,
+            onUpdate: (state) => {
+              if (controller.signal.aborted) return;
+              setServerStatus(state.status);
+              setServerStartedAt(typeof state.startedAt === 'number' ? state.startedAt : null);
+            },
           });
           if (controller.signal.aborted) return;
+          setServerStatus(null);
+          setServerStartedAt(null);
 
           if (terminal.status === 'success') {
             // Rescue fields (rescued / requestedWidth / requestedHeight /
@@ -161,6 +188,8 @@ export function useGenerationPoll(): UseGenerationPollResult {
           clearActiveJob();
         } catch (err) {
           if (err instanceof DOMException && err.name === 'AbortError') return;
+          setServerStatus(null);
+          setServerStartedAt(null);
 
           if (err instanceof PollAbandonedError) {
             setError({
@@ -212,13 +241,14 @@ export function useGenerationPoll(): UseGenerationPollResult {
 
   const startPolling = useCallback(
     (jid: string, idempotencyKey: string, mode: GenMode): void => {
+      const now = Date.now();
       writeActiveJob({
         jobId: jid,
         idempotencyKey,
         mode,
-        startedAt: Date.now(),
+        startedAt: now,
       });
-      runPoll(jid, idempotencyKey, mode, false);
+      runPoll(jid, idempotencyKey, mode, false, now);
     },
     [runPoll]
   );
@@ -232,6 +262,10 @@ export function useGenerationPoll(): UseGenerationPollResult {
     setError(undefined);
     setJobId(undefined);
     setIsResume(false);
+    setServerStatus(null);
+    setServerStartedAt(null);
+    setStartedAt(null);
+    setMode(null);
   }, []);
 
   // Resume from localStorage on mount.
@@ -242,7 +276,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
       clearActiveJob();
       return;
     }
-    runPoll(persisted.jobId, persisted.idempotencyKey, persisted.mode, true);
+    runPoll(persisted.jobId, persisted.idempotencyKey, persisted.mode, true, persisted.startedAt);
     // runPoll captures getTokenStable; if Clerk hasn't hydrated yet, the
     // first getToken() call inside pollJobStatus may return null and throw
     // PollAuthError → status 'error' → user sees an actionable message.
@@ -254,5 +288,17 @@ export function useGenerationPoll(): UseGenerationPollResult {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { status, result, error, jobId, isResume, startPolling, reset };
+  return {
+    status,
+    result,
+    error,
+    jobId,
+    isResume,
+    serverStatus,
+    serverStartedAt,
+    startedAt,
+    mode,
+    startPolling,
+    reset,
+  };
 }

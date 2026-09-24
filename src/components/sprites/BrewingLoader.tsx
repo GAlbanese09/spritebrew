@@ -5,7 +5,9 @@
  *
  * A pixel-art cauldron bubbles with amber/gold potion, with small pixel
  * bubbles rising upward and fading out. Text below shows the action being
- * generated. Pure CSS animation — no canvas, no external libraries.
+ * generated, the elapsed time, the job stage from the status poll, and a
+ * per-mode expectation from GENERATION_WAIT_COPY. Pure CSS animation, no
+ * canvas, no external libraries.
  *
  * IMPORTANT: Bubble/steam animations use inline `style.animation` instead of
  * Tailwind arbitrary syntax because each element has a unique duration that
@@ -13,9 +15,33 @@
  * CSS custom properties like `var(--dur)`).
  */
 
+import { useEffect, useState } from 'react';
+import { GENERATION_WAIT_COPY } from '@/lib/constants';
+
 interface BrewingLoaderProps {
   /** e.g., "attack", "walk". If null, shows a generic message. */
   action?: string | null;
+  /** Client start time persisted with the active job. Null until the poll
+   *  starts; the loader's mount time stands in until then. */
+  startedAt?: number | null;
+  /** Last in-flight status from the poll. Null shows no stage. */
+  serverStatus?: 'pending' | 'running' | null;
+  /** The job's own mode. Falls back to `action ? 'animate' : 'create'`,
+   *  which misreads a resumed animation whose action was not restored. */
+  mode?: 'create' | 'animate' | null;
+}
+
+const STAGE_LABELS: Record<'pending' | 'running', string> = {
+  pending: 'Queued',
+  running: 'Painting frames',
+};
+
+/** 7s -> "0:07", 83s -> "1:23", 725s -> "12:05". */
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1_000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 /** Map action IDs to human-readable labels for the loading message. */
@@ -30,8 +56,33 @@ const ACTION_LABELS: Record<string, string> = {
   custom_action: 'custom',
 };
 
-export default function BrewingLoader({ action }: BrewingLoaderProps) {
+export default function BrewingLoader({
+  action,
+  startedAt = null,
+  serverStatus = null,
+  mode = null,
+}: BrewingLoaderProps) {
   const label = action ? ACTION_LABELS[action] ?? action : null;
+
+  // The loader mounts at the click, a moment before the poll's persisted
+  // start lands, so the earlier of the two is the start: the counter never
+  // steps back on a fresh job, and a resumed job keeps its original start.
+  const [mountedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const origin = startedAt !== null ? Math.min(startedAt, mountedAt) : mountedAt;
+  const elapsedMs = Math.max(0, now - origin);
+  const stage = serverStatus ? STAGE_LABELS[serverStatus] : null;
+  const waitCopy = GENERATION_WAIT_COPY[mode ?? (action ? 'animate' : 'create')];
+  const expectation = waitCopy
+    ? elapsedMs > waitCopy.p95Ms
+      ? waitCopy.long
+      : waitCopy.usual
+    : null;
 
   return (
     <div className="flex flex-col items-center justify-center py-10 space-y-5">
@@ -120,8 +171,12 @@ export default function BrewingLoader({ action }: BrewingLoaderProps) {
             : 'Brewing your sprites...'}
         </p>
         <p className="text-[10px] font-mono text-text-muted">
-          This usually takes 15-30 seconds
+          <span className="tabular-nums">{formatElapsed(elapsedMs)}</span>
+          {stage && ` · ${stage}`}
         </p>
+        {expectation && (
+          <p className="text-[10px] font-mono text-text-muted">{expectation}</p>
+        )}
       </div>
     </div>
   );

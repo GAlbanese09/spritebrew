@@ -31,6 +31,11 @@ interface BrewingLoaderProps {
   mode?: 'create' | 'animate' | null;
 }
 
+// Stage is hidden while the status route reads KV, which serves it up to
+// 60s stale ("Queued" long after a job is running). Flip to true once job
+// status reads are consistent.
+const SHOW_STAGE = false;
+
 const STAGE_LABELS: Record<'pending' | 'running', string> = {
   pending: 'Queued',
   running: 'Painting frames',
@@ -63,6 +68,11 @@ export default function BrewingLoader({
   mode = null,
 }: BrewingLoaderProps) {
   const label = action ? ACTION_LABELS[action] ?? action : null;
+  const headline = label
+    ? `Brewing your ${label} animation...`
+    : mode === 'animate'
+      ? 'Brewing your animation...'
+      : 'Brewing your sprites...';
 
   // The loader mounts at the click, a moment before the poll's persisted
   // start lands, so the earlier of the two is the start: the counter never
@@ -79,7 +89,7 @@ export default function BrewingLoader({
   const stage = serverStatus ? STAGE_LABELS[serverStatus] : null;
   const waitCopy = GENERATION_WAIT_COPY[mode ?? (action ? 'animate' : 'create')];
   const expectation = waitCopy
-    ? elapsedMs > waitCopy.p95Ms
+    ? elapsedMs > waitCopy.longAfterMs
       ? waitCopy.long
       : waitCopy.usual
     : null;
@@ -166,13 +176,11 @@ export default function BrewingLoader({
       {/* Status text */}
       <div className="text-center space-y-1">
         <p className="text-sm font-mono text-accent-amber font-semibold animate-pulse">
-          {label
-            ? `Brewing your ${label} animation...`
-            : 'Brewing your sprites...'}
+          {headline}
         </p>
         <p className="text-[10px] font-mono text-text-muted">
           <span className="tabular-nums">{formatElapsed(elapsedMs)}</span>
-          {stage && ` · ${stage}`}
+          {SHOW_STAGE && stage && ` · ${stage}`}
         </p>
         {expectation && (
           <p className="text-[10px] font-mono text-text-muted">{expectation}</p>

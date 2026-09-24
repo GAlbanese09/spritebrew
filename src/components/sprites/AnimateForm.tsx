@@ -1159,17 +1159,12 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             ? 'Retro Diffusion locks this style at this resolution. For higher resolutions, choose a Walking/Idle/Attack style instead.'
             : 'Larger = more detail. Cost is flat per generation — no resolution surcharge.'}
         </p>
-        {/* Reliability warning — static copy, no network call. Larger RD
-            animation sizes (128 / 256) time out more often than 64.
-            Reworded to promise the auto-downgrade explicitly: users no
-            longer have to infer geometry from a refund message when a
-            rescue lands (see the RescueInfo notice in GenerationResult).
-            16-frame at these sizes is still the worst combo — that
-            append stays, reworded to match the friendlier voice. */}
+        {/* Fallback promise, static copy. Only the true part stays: a large
+            animation that fails is redone at 64px (see the RescueInfo notice
+            in GenerationResult). */}
         {currentMode.kind !== 'locked' && (selectedResolution === 128 || selectedResolution === 256) && (
-          <p className="text-[10px] font-mono text-amber-400/90 mt-2 leading-snug">
-            {`Larger animations are failing more often than usual right now. If yours fails, we'll automatically create a 64px version instead, so you'll still get your animation, just smaller.`}
-            {frameCount === 16 && ' 16 frames at this size fails most often. 8 is the safer bet.'}
+          <p className="text-[9px] font-mono text-text-muted/70 mt-1">
+            If a large animation doesn&apos;t finish, we&apos;ll automatically make a 64px version so you still get one.
           </p>
         )}
       </div>

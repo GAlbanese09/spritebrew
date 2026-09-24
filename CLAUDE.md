@@ -24,7 +24,7 @@ George runs a hub chat (`00 HQ | SpriteBrew`) that dispatches tasks. Tasks arriv
 ## Repo facts that bite
 
 - The Pages app deploys on push to `main` (production branch `main`, build `npx @cloudflare/next-on-pages@latest`). `dev` is a branch here; in the consumer, "dev" and "prod" are wrangler environments (`preview`, `production`) on a single `main` branch.
-- The checkout lives inside OneDrive; expect CRLF warnings from git. Do not "fix" line endings in files you did not otherwise change.
+- Primary checkout since Sep 22, 2026: George's Mac, `~/Documents/repos/SpriteBrew` beside `~/Documents/repos/spritebrew-rd-consumer`. No file in either repo is committed with CRLF. An older Windows checkout inside OneDrive may still show CRLF warnings there; do not "fix" line endings in files you did not otherwise change.
 - KV ledger keys: `token_tx:{userId}:{ts}:{uid}`, 90-day TTL, written in `src/lib/tokenBalance.ts`, `src/lib/tokenDebit.ts`, and the consumer's `src/refund.ts`. A Worker invocation is capped at 1000 subrequests and every `kv.get` is one; never fan out gets per key.
 - The canonical knowledge base is Confluence (Master Index page `71106568`); the hub owns it. Do not create documentation files in this repo beyond what a change needs.
 - The D1 `events` ledger (`EVENTS_DB`, written by the consumer's `src/events.ts`, read by `/api/admin/events`) is observability, not money. `recordEvent` never throws; `token_tx:` in KV stays the source of truth for balances.

@@ -1,7 +1,7 @@
 export const runtime = 'edge';
 
 interface KV {
-  get(key: string): Promise<string | null>;
+  get(key: string, options?: { cacheTtl?: number }): Promise<string | null>;
 }
 
 function getKV(): KV | null {
@@ -55,10 +55,12 @@ export async function GET(
     return jsonResponse({ error: 'kv_unavailable' }, 503);
   }
 
-  // Default KV cache behavior is fine: client polls every 3s, KV's default
-  // ~60s edge cache resolves stale terminal states within 1-2 poll cycles.
-  // (Previously passed { cacheTtl: 0 }, which throws — KV requires cacheTtl >= 60.)
-  const raw = await kv.get(`job:${jobId}`);
+  // KV serves this key from the edge cache for cacheTtl seconds, so a state
+  // change can reach the client that much late (measured: `pending` about 50s
+  // after `running`, `running` about 30s after `success`, at the 60s default).
+  // 30 is the floor since Jan 30, 2026; 0 throws. At 3s polls this is still
+  // about ten poll cycles, never the "1-2" this comment once claimed.
+  const raw = await kv.get(`job:${jobId}`, { cacheTtl: 30 });
   if (!raw) {
     return jsonResponse({ status: 'unknown' }, 404);
   }

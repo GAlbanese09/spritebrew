@@ -109,33 +109,41 @@ export const REFS_TOTAL_B64_QUEUE_MAX = 110_000;
 
 /**
  * Loader copy per generation mode, sized from the production D1 event
- * ledger (spritebrew-events, generation.succeeded rows, latency_ms), not
- * guessed. Retune when the digest's p50/p95 drift from these numbers.
- * A mode with under 30 rows in the window gets null, and the loader then
- * shows elapsed only. Query (from ../spritebrew-rd-consumer):
+ * ledger (spritebrew-events), not guessed. Each job's wait is its attempt-1
+ * queue_wait_ms plus its generation.succeeded latency_ms, which is the
+ * customer's clock from enqueue to the finished record; the status route
+ * reads R2, so the result reaches the page within one poll of that.
+ * Retune when the digest's p50/p95 drift from these numbers. A mode with
+ * under 30 rows in the window gets null, and the loader then shows elapsed
+ * and stage only. Query (from ../spritebrew-rd-consumer):
  *   npx wrangler d1 execute spritebrew-events --remote --json --command
- *   "SELECT json_extract(event_json,'$.extra.mode') AS mode, latency_ms
- *    FROM events WHERE event_name='generation.succeeded'
- *    AND json_extract(event_json,'$.environment')='production'
- *    AND occurred_at_ms >= (strftime('%s','now')-7*86400)*1000
- *    AND latency_ms IS NOT NULL ORDER BY mode, latency_ms"
- * Window: 2026-09-17 01:07 UTC to 2026-09-24 01:07 UTC (rows span
- * 2026-09-19 19:35 to 2026-09-23 20:13 UTC), queried 2026-09-24.
- * animate: n=96, p50=112005, p95=221475.  create: n=24, p50=23597, p95=52205.
- * The copy adds up to 60s to those figures: the status route reads KV,
- * which can serve a finished job's state up to 60s late (30 to 50s seen).
- * Return to latency-only sizing once job status reads are consistent.
+ *   "SELECT json_extract(s.event_json,'$.extra.mode') AS mode,
+ *      s.latency_ms, q.queue_wait_ms
+ *    FROM events s LEFT JOIN events q ON q.job_id = s.job_id
+ *      AND q.event_name = 'queue.message_received' AND q.attempt = 1
+ *      AND q.environment = 'production'
+ *    WHERE s.event_name = 'generation.succeeded'
+ *      AND s.environment = 'production'
+ *      AND s.occurred_at_ms >= (strftime('%s','now')-7*86400)*1000
+ *      AND s.latency_ms IS NOT NULL"
+ * Queried 2026-09-25 03:35 UTC; rows span 2026-09-19 19:35 to 2026-09-25
+ * 03:14 UTC; every row joined. Nearest-rank, queue wait plus latency:
+ * animate: n=105, p50=118811, p95=225994.  create: n=30, p50=27177, p95=92378.
  */
 export const GENERATION_WAIT_COPY: Record<
   'create' | 'animate',
   { usual: string; long: string; longAfterMs: number } | null
 > = {
   animate: {
-    usual: 'Animations usually take 2 to 3 minutes, sometimes up to 5',
+    usual: 'Animations usually take about 2 minutes, sometimes up to 4',
     long: 'Taking longer than usual. Still brewing, hang on.',
-    longAfterMs: 300_000,
+    longAfterMs: 225_994,
   },
-  create: null,
+  create: {
+    usual: 'Sprites usually take about 30 seconds, sometimes up to a minute and a half',
+    long: 'Taking longer than usual. Still brewing, hang on.',
+    longAfterMs: 92_378,
+  },
 };
 
 // Demo area keyboard controls

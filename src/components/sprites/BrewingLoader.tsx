@@ -31,10 +31,10 @@ interface BrewingLoaderProps {
   mode?: 'create' | 'animate' | null;
 }
 
-// Stage is hidden while the status route reads KV, which serves it up to
-// 60s stale ("Queued" long after a job is running). Flip to true once job
-// status reads are consistent.
-const SHOW_STAGE = false;
+// The status route reads the job record from R2 first, which is strongly
+// consistent, so the stage is current to within one poll. Set this to false
+// if the route ever serves stage from KV alone again (KV lags up to 60s).
+const SHOW_STAGE = true;
 
 const STAGE_LABELS: Record<'pending' | 'running', string> = {
   pending: 'Queued',

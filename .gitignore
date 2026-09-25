@@ -44,4 +44,8 @@ next-env.d.ts
 # Claude hub/spoke room: transport between the HQ chat and Claude Code sessions.
 # The durable record lives in the Claude project (claude/room/); this copy is local-only.
 /room/
-.claude/settings.local.json
+/.claude/
+.dev.vars*
+/.open-next/
+*.log
+/local/

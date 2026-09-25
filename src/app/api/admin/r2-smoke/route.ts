@@ -13,8 +13,8 @@ export const runtime = 'edge';
 // Admin allowlist covering both Clerk environments so dev verification on
 // dev.spritebrew.pages.dev works without per-env code edits.
 const ADMIN_USER_IDS = new Set<string>([
-  'user_3C34WAUmVRoHvKiyhYSNrMt4dvT', // production Clerk (george.albanese2@hotmail.com)
-  'user_3BtzTR8gHfGDiNXd1G8WFLQvEf2', // dev Clerk (george.albanese@outlook.com)
+  'user_3C34WAUmVRoHvKiyhYSNrMt4dvT', // George, production Clerk
+  'user_3BtzTR8gHfGDiNXd1G8WFLQvEf2', // George, dev Clerk
 ]);
 
 // Minimal local R2Bucket shape — @cloudflare/workers-types is not installed

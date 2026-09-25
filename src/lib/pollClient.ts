@@ -77,9 +77,12 @@ export interface PollOptions {
   signal?: AbortSignal;
 }
 
+// 2 s throughout: the status route reads the R2 job record, which is current
+// on every read, so a faster poll now shows a finished job sooner (it used to
+// only re-read a stale KV cache faster).
 const DEFAULTS = {
-  initialIntervalMs: 3_000,
-  longIntervalMs: 5_000,
+  initialIntervalMs: 2_000,
+  longIntervalMs: 2_000,
   pollsBeforeBackoff: 30,
   abandonAfterMs: 8 * 60 * 1_000,
 } as const;

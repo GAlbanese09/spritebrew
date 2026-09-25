@@ -148,6 +148,7 @@ import { getAccountStatus } from '@/lib/accountLock';
 import { isAdminUser } from '@/lib/generationLimits';
 import { isQueueKickoffEnabled } from '@/lib/featureFlag';
 import { deriveJobId } from '@/lib/jobIdHelper';
+import { putJobState } from '@/lib/jobState';
 import { enqueueJob } from '@/lib/queueProducer';
 import { buildRdCreateBody, buildRdAnimateBody } from '@/lib/rdBodyBuilder';
 import {
@@ -367,6 +368,7 @@ export async function POST(request: Request) {
     // → consumer never runs → consumer-side refund never fires → debit
     // orphaned (Day-21 incident).
     let jobId: string | undefined;
+    let enqueuedAt: number | undefined;
     try {
       jobId = await deriveJobId(userId, idempotencyKey);
       const env = process.env as Record<string, unknown>;
@@ -385,16 +387,13 @@ export async function POST(request: Request) {
       }
 
       const now = Date.now();
-      await kv.put(
-        `job:${jobId}`,
-        JSON.stringify({
-          status: 'pending',
-          userId,
-          mode,
-          enqueuedAt: now,
-        }),
-        { expirationTtl: 3600 }
-      );
+      enqueuedAt = now;
+      await putJobState(kv, jobId, {
+        status: 'pending',
+        userId,
+        mode,
+        enqueuedAt: now,
+      });
 
       // Translate camelCase request body → snake_case RD wire format BEFORE
       // enqueueing. The consumer forwards body verbatim to RD, so the producer
@@ -453,11 +452,13 @@ export async function POST(request: Request) {
       // tokenBalance's token_idempotency:* check.
       await creditTokens(userId, tokenCost, 'generation_failed_refund', `refund:${requestId}`, txCtx);
 
-      // Best-effort: update the pending job KV record to a terminal failed
-      // state so a stray poll doesn't see "pending" forever. jobId is
-      // defined only if deriveJobId succeeded — the catch may have fired
-      // before that, in which case there's no pending record to update.
-      // Inner try/catch — must never mask the refund return path above.
+      // Best-effort: write the job record as a terminal error, shaped like
+      // the consumer's error records, so the status route serves it and a
+      // resumed poll ends with the refund message instead of polling
+      // "pending" until it abandons. jobId is defined only if deriveJobId
+      // succeeded; the catch may have fired before that, in which case there
+      // is no record to update. Inner try/catch: must never mask the refund
+      // return path above.
       if (jobId) {
         try {
           const env = process.env as Record<string, unknown>;
@@ -465,18 +466,18 @@ export async function POST(request: Request) {
             put: (k: string, v: string, opts?: unknown) => Promise<void>;
           } | undefined;
           if (kv && typeof kv.put === 'function') {
-            await kv.put(
-              `job:${jobId}`,
-              JSON.stringify({
-                status: 'failed',
-                userId,
-                mode,
-                error: 'submission_failed',
-                refunded: true,
-                failedAt: Date.now(),
-              }),
-              { expirationTtl: 3600 }
-            );
+            const failedAt = Date.now();
+            await putJobState(kv, jobId, {
+              status: 'error',
+              userId,
+              mode,
+              enqueuedAt: enqueuedAt ?? failedAt,
+              failedAt,
+              error: 'Could not start your generation.',
+              errorCode: 'submission_failed',
+              attempts: 0,
+              refunded: true,
+            });
           }
         } catch { /* best-effort cleanup */ }
       }

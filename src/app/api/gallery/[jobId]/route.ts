@@ -1,5 +1,6 @@
 import { getAuthedUserId } from '@/lib/edgeAuth';
 import { GALLERY_KV_PREFIX, galleryR2Key, type GalleryEntryV1 } from '@/lib/galleryTypes';
+import { jobStateR2Key } from '@/lib/jobState';
 
 export const runtime = 'edge';
 
@@ -103,6 +104,13 @@ export async function DELETE(
 
   // 2. Delete the R2 blob.
   await bucket.delete(galleryR2Key(userId, jobId));
+
+  // 3. The job's status record mirror (jobs/{jobId}.json, which carries the
+  //    result too). Only once the caller's own gallery entry was found: the
+  //    key is not scoped by userId, so an unmatched jobId must not reach it.
+  if (foundKvKey) {
+    await bucket.delete(jobStateR2Key(jobId));
+  }
 
   if (!foundKvKey) {
     return Response.json({ deleted: false, reason: 'Entry not found.' }, { status: 404 });

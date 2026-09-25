@@ -1,5 +1,6 @@
 import { getAuthedUserId } from '@/lib/edgeAuth';
 import { GALLERY_KV_PREFIX, galleryR2Key, type GalleryEntryV1 } from '@/lib/galleryTypes';
+import { jobStateR2Key } from '@/lib/jobState';
 
 export const runtime = 'edge';
 
@@ -151,9 +152,11 @@ export async function DELETE(request: Request): Promise<Response> {
     safetyCounter++;
   }
 
-  // 2. Delete the R2 blobs.
+  // 2. Delete the R2 blobs, and each job's status record mirror
+  //    (jobs/{jobId}.json, which carries the result too).
   for (const jobId of jobIds) {
     await bucket.delete(galleryR2Key(userId, jobId));
+    await bucket.delete(jobStateR2Key(jobId));
   }
 
   return Response.json({ deleted: jobIds.length });

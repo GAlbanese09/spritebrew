@@ -194,7 +194,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
           if (err instanceof PollAbandonedError) {
             setError({
               message:
-                'Generation took too long. If your tokens were debited, they will be refunded automatically.',
+                'This is taking much longer than usual. If it finishes, it will be in your gallery. If it fails, your tokens come back automatically.',
               refunded: false,
             });
             setStatus('abandoned');
@@ -204,7 +204,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
           if (err instanceof PollNotFoundError) {
             setError({
               message:
-                'Job not found — it may have expired. Try generating again; tokens are refunded automatically on consumer failures.',
+                'We could not find this generation anymore. If it finished, it is in your gallery. If it failed, your tokens come back automatically.',
               refunded: false,
             });
             setStatus('error');
@@ -222,7 +222,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
           }
           if (err instanceof PollTransientError) {
             setError({
-              message: 'Server is having trouble — please try again in a moment.',
+              message: 'The server is having trouble right now. Your generation may still finish, so check your gallery in a minute.',
               refunded: false,
             });
             setStatus('error');

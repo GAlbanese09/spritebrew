@@ -29,7 +29,7 @@ interface DailyRewardResponse {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const auth = getAuthedUserId(request);
+  const auth = await getAuthedUserId(request);
   if ('error' in auth) {
     return Response.json({ success: false, error: auth.error }, { status: auth.status });
   }

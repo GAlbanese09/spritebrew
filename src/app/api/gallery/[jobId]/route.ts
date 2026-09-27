@@ -53,7 +53,7 @@ export async function DELETE(
   request: Request,
   context: { params: Promise<{ jobId: string }> | { jobId: string } }
 ): Promise<Response> {
-  const auth = getAuthedUserId(request);
+  const auth = await getAuthedUserId(request);
   if ('error' in auth) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }

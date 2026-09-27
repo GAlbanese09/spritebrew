@@ -54,7 +54,7 @@ const MAX_LIMIT = 50;
  * Pagination: pass the returned cursor as ?cursor= on the next request.
  */
 export async function GET(request: Request): Promise<Response> {
-  const auth = getAuthedUserId(request);
+  const auth = await getAuthedUserId(request);
   if ('error' in auth) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
@@ -115,7 +115,7 @@ export async function GET(request: Request): Promise<Response> {
  * during a full account purge.
  */
 export async function DELETE(request: Request): Promise<Response> {
-  const auth = getAuthedUserId(request);
+  const auth = await getAuthedUserId(request);
   if ('error' in auth) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }

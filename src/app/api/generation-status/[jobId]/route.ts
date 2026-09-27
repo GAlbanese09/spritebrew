@@ -1,3 +1,4 @@
+import { getAuthedUserId } from '@/lib/edgeAuth';
 import { getJobStateBucket, jobStateR2Key } from '@/lib/jobState';
 
 export const runtime = 'edge';
@@ -13,27 +14,6 @@ function getKV(): KV | null {
   return kv as KV;
 }
 
-// Reuse the same Bearer JWT pattern as /api/generate (recon §1, lines 19-43)
-function decodeJwtPayload(jwt: string): { sub?: string; exp?: number } | null {
-  try {
-    const [, payloadB64] = jwt.split('.');
-    if (!payloadB64) return null;
-    const padded = payloadB64.replace(/-/g, '+').replace(/_/g, '/');
-    const json = atob(padded + '==='.slice((padded.length + 3) % 4));
-    return JSON.parse(json);
-  } catch {
-    return null;
-  }
-}
-
-function getAuthedUserId(request: Request): string | null {
-  const auth = request.headers.get('authorization');
-  if (!auth?.startsWith('Bearer ')) return null;
-  const payload = decodeJwtPayload(auth.slice(7));
-  if (!payload?.sub) return null;
-  if (payload.exp && payload.exp * 1000 < Date.now()) return null;
-  return payload.sub;
-}
 
 type StatusSource = 'r2' | 'kv';
 
@@ -90,7 +70,8 @@ export async function GET(
   context: { params: Promise<{ jobId: string }> }
 ): Promise<Response> {
   const { jobId } = await context.params;
-  const userId = getAuthedUserId(request);
+  const auth = await getAuthedUserId(request);
+  const userId = 'userId' in auth ? auth.userId : null;
   if (!userId) {
     return jsonResponse({ error: 'unauthorized' }, 401);
   }

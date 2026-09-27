@@ -30,7 +30,7 @@ interface R2Bucket {
 }
 
 export async function GET(request: NextRequest) {
-  const auth = getAuthedUserId(request);
+  const auth = await getAuthedUserId(request);
   if ('error' in auth) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }

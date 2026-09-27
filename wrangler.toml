@@ -18,6 +18,8 @@ NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = "pk_live_51TP0INPJhXMHCZ9NsAiTY1UbtRJJQcQoQ
 NODE_ENV = "production"
 NODE_VERSION = "20"
 APP_ENV = "production"
+# Clerk session-token key id for this instance (public; auth-verify.md 003).
+CLERK_JWT_KID = "ins_3C2xmrXk7aJ3jyaWwBydHtPkVpJ"
 # Queue-kickoff feature flag (Confluence 87490562 §14). Day-1 stays "false";
 # admin auto-included via isAdminUser. Flip to "true" globally on Day-4.
 QUEUE_KICKOFF_ENABLED = "true"
@@ -51,6 +53,7 @@ NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = "pk_test_51TP0IYA1tzIxjEgSwhuXyQd7jZjAufLuJ
 NODE_ENV = "production"
 NODE_VERSION = "20"
 APP_ENV = "dev"
+CLERK_JWT_KID = "ins_3BttrtqIBfdRqeqtLKaMroWg2ol"
 # Queue-kickoff feature flag — same gate as production. Admin auto-included.
 QUEUE_KICKOFF_ENABLED = "true"
 

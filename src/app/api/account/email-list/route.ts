@@ -43,7 +43,7 @@ async function fetchClerkPrimaryEmail(userId: string): Promise<string | null> {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const auth = getAuthedUserId(request);
+  const auth = await getAuthedUserId(request);
   if ('error' in auth) {
     return Response.json({ success: false, error: auth.error }, { status: auth.status });
   }
@@ -128,6 +128,5 @@ export async function POST(request: Request): Promise<Response> {
     granted: EMAIL_LIST_BONUS_TOKENS,
     balance: credit.balance,
     claimed: true,
-    email,
   });
 }

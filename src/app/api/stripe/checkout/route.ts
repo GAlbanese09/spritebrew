@@ -1,5 +1,6 @@
 export const runtime = 'edge';
 
+import { getAuthedUserId, type AuthMessages } from '@/lib/edgeAuth';
 import { stripe } from '@/lib/stripe';
 import { getTokenPack } from '@/lib/tokenPacks';
 
@@ -16,39 +17,13 @@ function getKV(): KV | null {
   return null;
 }
 
-// ── JWT helpers (same pattern as /api/generate) ──
-
-interface ClerkJwtPayload {
-  sub?: string;
-  exp?: number;
-  [key: string]: unknown;
-}
-
-function base64UrlDecode(segment: string): string {
-  const base64 = segment.replace(/-/g, '+').replace(/_/g, '/');
-  return atob(base64 + '='.repeat((4 - (base64.length % 4)) % 4));
-}
-
-function decodeJwtPayload(token: string): ClerkJwtPayload | null {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    return JSON.parse(base64UrlDecode(parts[1])) as ClerkJwtPayload;
-  } catch {
-    return null;
-  }
-}
-
-function getAuthedUserId(request: Request): { userId: string } | { error: string } {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) return { error: 'Please sign in to purchase tokens.' };
-  const token = authHeader.slice(7).trim();
-  if (!token || token === 'null' || token === 'undefined') return { error: 'Invalid session. Please sign in again.' };
-  const payload = decodeJwtPayload(token);
-  if (!payload?.sub) return { error: 'Invalid token. Please sign in again.' };
-  if (typeof payload.exp === 'number' && payload.exp * 1000 < Date.now()) return { error: 'Your session expired. Please sign in again.' };
-  return { userId: payload.sub };
-}
+// This route's wording for the shared helper's four failure cases.
+const AUTH_MESSAGES: AuthMessages = {
+  missing: 'Please sign in to purchase tokens.',
+  empty: 'Invalid session. Please sign in again.',
+  invalid: 'Invalid token. Please sign in again.',
+  expired: 'Your session expired. Please sign in again.',
+};
 
 // ── POST /api/stripe/checkout ──
 
@@ -63,7 +38,7 @@ const CONSENT_TEXT =
   'I expressly consent to SpriteBrew beginning performance of this contract immediately by crediting the purchased tokens to my account. I acknowledge that I thereby lose my 14-day right of withdrawal under Article 16(m) of Directive 2011/83/EU and Regulation 37 of the UK Consumer Contracts Regulations 2013 once the tokens are credited and I begin using them.';
 
 export async function POST(request: Request) {
-  const authResult = getAuthedUserId(request);
+  const authResult = await getAuthedUserId(request, AUTH_MESSAGES);
   if ('error' in authResult) {
     return Response.json({ success: false, error: authResult.error }, { status: 401 });
   }

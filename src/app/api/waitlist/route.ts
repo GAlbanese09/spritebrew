@@ -64,26 +64,3 @@ export async function POST(request: Request) {
   console.log('[WAITLIST]', email, timestamp);
   return Response.json({ success: true, stored: 'fallback' });
 }
-
-// ── GET /api/waitlist — admin export (returns full email list) ──
-
-export async function GET() {
-  const kv = getKV();
-
-  if (kv) {
-    try {
-      const allRaw = await kv.get('waitlist:__all_emails');
-      const all: string[] = allRaw ? JSON.parse(allRaw) : [];
-      return Response.json({ success: true, emails: all, count: all.length });
-    } catch {
-      // fall through
-    }
-  }
-
-  return Response.json({
-    success: true,
-    emails: [],
-    count: 0,
-    note: 'KV binding not available.',
-  });
-}

@@ -25,6 +25,7 @@ import {
   EARN_BACK_FLAG_TTL_SECONDS,
 } from '@/lib/constants';
 import { txMetadata, type TxContext } from '@/lib/tokenTxMeta';
+import { devFault, isMoneyPaused, MoneyPausedError } from '@/lib/moneyPause';
 
 const TX_TTL = 7_776_000; // 90 days
 const IDEMPOTENCY_TTL = 604_800; // 7 days
@@ -162,6 +163,9 @@ async function isExistingUser(kv: KV, userId: string): Promise<boolean> {
  * bonus — they can still buy tokens but can't farm the free tier.
  */
 async function initBalance(kv: KV, userId: string): Promise<number> {
+  // Opening a balance is a money write: refused while paused (n1-ledger 005 section 4).
+  if (await isMoneyPaused()) throw new MoneyPausedError();
+
   // Idempotency: prevent double-init
   const idemKey = idempotencyKey(`signup:${userId}`);
   const existing = await kv.get(idemKey);
@@ -240,7 +244,9 @@ export async function getTokenBalance(userId: string): Promise<number> {
     const raw = await kv.get(`token_balance:${userId}`);
     if (raw) return (JSON.parse(raw) as BalanceRecord).balance;
     return await initBalance(kv, userId);
-  } catch {
+  } catch (err) {
+    // A paused opening is not an error to paper over with a guessed number.
+    if (err instanceof MoneyPausedError) throw err;
     return SIGNUP_BONUS_TOKENS;
   }
 }
@@ -309,7 +315,8 @@ export async function debitTokens(
     );
 
     return { success: true, balance: newBalance };
-  } catch {
+  } catch (err) {
+    if (err instanceof MoneyPausedError) throw err;
     return { success: true, balance: 0 }; // Fail open
   }
 }
@@ -331,7 +338,8 @@ export async function creditTokens(
   meta?: CreditMeta
 ): Promise<CreditResult> {
   const kv = getKV();
-  if (!kv) return { success: true, balance: 0 };
+  // Nothing was credited, so say so (n1-ledger 007 section 4, ruling F).
+  if (!kv) return { success: false, balance: 0 };
 
   try {
     // Idempotency check
@@ -341,6 +349,9 @@ export async function creditTokens(
       const balance = await getTokenBalance(userId);
       return { success: true, balance };
     }
+
+    const faults = (await devFault())?.split(',') ?? [];
+    if (faults.includes('credit_throw_before_balance')) throw new Error('dev fault: before the balance put');
 
     const raw = await kv.get(`token_balance:${userId}`);
     if (!raw) {
@@ -360,6 +371,10 @@ export async function creditTokens(
     record.last_updated = now;
 
     await kv.put(`token_balance:${userId}`, JSON.stringify(record));
+    // Known release 1 window (ruling F): a failure here, between the balance
+    // put and the idempotency put, credits twice on a retry. Release 2's single
+    // transaction closes it.
+    if (faults.includes('credit_throw_after_balance')) throw new Error('dev fault: after the balance put');
     await kv.put(idemKey, '1', { expirationTtl: IDEMPOTENCY_TTL });
     await writeTx(
       kv,

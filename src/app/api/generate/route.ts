@@ -126,6 +126,8 @@ import { deriveJobId } from '@/lib/jobIdHelper';
 import { putJobState } from '@/lib/jobState';
 import { enqueueJob } from '@/lib/queueProducer';
 import { buildRdCreateBody, buildRdAnimateBody } from '@/lib/rdBodyBuilder';
+import { devFault, isMoneyPaused, MoneyPausedError, PAUSED_MESSAGE } from '@/lib/moneyPause';
+import { recordUnrefundedAlarm } from '@/lib/unrefundedAlarm';
 import {
   FREE_TIER_LIFETIME_PRO_CAP,
   FREE_TIER_LIFETIME_FAST_CAP,
@@ -205,6 +207,15 @@ export async function POST(request: Request) {
   // the feature-flag check inside the post-debit branch.
   const queueKickoff = isQueueKickoffEnabled(userId, process.env as Record<string, unknown>);
 
+  // The SSE path is retired (n1-ledger 007 section 4): refused before any
+  // debit. Unreachable while QUEUE_KICKOFF_ENABLED is "true".
+  if (!queueKickoff) {
+    return Response.json(
+      { success: false, error: 'path_retired', message: 'This generation path is retired.' },
+      { status: 503 }
+    );
+  }
+
   // Pre-debit gates for the queue-kickoff path. All return 400 BEFORE any
   // debit fires, so there's no refund/orphan-debit churn for these cases.
 
@@ -272,6 +283,15 @@ export async function POST(request: Request) {
   // bonus_email_verified:* and email_verified_cache:* KV keys untouched for
   // historical analytics; nothing here writes to them anymore.)
 
+  // Money paused (n1-ledger 005 section 4): no fresh generation starts, so
+  // nothing is debited.
+  if (await isMoneyPaused()) {
+    return Response.json(
+      { success: false, error: 'money_paused', message: PAUSED_MESSAGE },
+      { status: 503 }
+    );
+  }
+
   // Free-tier lifetime cap enforcement — only for users who haven't paid.
   // Admins are exempt. Plus / Pro / Animation roll up under the `pro` bucket;
   // Fast has its own counter.
@@ -297,8 +317,20 @@ export async function POST(request: Request) {
   // Generate a unique idempotency key for this request
   const requestId = `gen:${userId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
 
-  // Debit tokens before generation
-  const debitResult = await debitTokens(userId, tokenCost, requestId, txCtx);
+  // Debit tokens before generation. A first-ever balance can still meet a
+  // pause that began after the gate above; nothing was debited then.
+  let debitResult: Awaited<ReturnType<typeof debitTokens>>;
+  try {
+    debitResult = await debitTokens(userId, tokenCost, requestId, txCtx);
+  } catch (err) {
+    if (err instanceof MoneyPausedError) {
+      return Response.json(
+        { success: false, error: 'money_paused', message: PAUSED_MESSAGE },
+        { status: 503 }
+      );
+    }
+    throw err;
+  }
   if (!debitResult.success) {
     return Response.json(
       {
@@ -406,6 +438,11 @@ export async function POST(request: Request) {
         );
       }
 
+      // Dev-only fault for ruling G's test: the enqueue fails after the debit.
+      if ((await devFault())?.split(',').includes('enqueue_throw')) {
+        throw new Error('dev fault: enqueue');
+      }
+
       await enqueueJob(env.RD_QUEUE, {
         jobId,
         userId,
@@ -424,8 +461,20 @@ export async function POST(request: Request) {
     } catch {
       // Compensating refund. Same idempotency seed as the SSE path so a
       // retry that lands in this branch (or in SSE) dedupes correctly via
-      // tokenBalance's token_idempotency:* check.
-      await creditTokens(userId, tokenCost, 'generation_failed_refund', `refund:${requestId}`, txCtx);
+      // tokenBalance's token_idempotency:* check. Not gated by the money
+      // pause: it undoes this request's own debit.
+      const refund = await creditTokens(userId, tokenCost, 'generation_failed_refund', `refund:${requestId}`, txCtx);
+      // Ruling G: claim no refund that was not made. The alarm row puts the
+      // job on the morning digest for George to settle by hand.
+      if (!refund.success) {
+        await recordUnrefundedAlarm({
+          userId,
+          jobId,
+          tokenCost,
+          reason: 'refund_credit_failed',
+          detail: `refund:${requestId}`,
+        });
+      }
 
       // Best-effort: write the job record as a terminal error, shaped like
       // the consumer's error records, so the status route serves it and a
@@ -451,7 +500,7 @@ export async function POST(request: Request) {
               error: 'Could not start your generation.',
               errorCode: 'submission_failed',
               attempts: 0,
-              refunded: true,
+              refunded: refund.success,
             });
           }
         } catch { /* best-effort cleanup */ }
@@ -461,7 +510,9 @@ export async function POST(request: Request) {
         JSON.stringify({
           success: false,
           error: 'submission_failed',
-          message: 'Could not start your generation — your tokens were refunded. Please try again.',
+          message: refund.success
+            ? 'Could not start your generation. Your tokens were refunded. Please try again.'
+            : 'Could not start your generation. Your tokens were not returned automatically; we will return them by hand. Please try again later.',
         }),
         { status: 503, headers: { 'content-type': 'application/json' } }
       );

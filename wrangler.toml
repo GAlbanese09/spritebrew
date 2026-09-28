@@ -73,3 +73,11 @@ bucket_name = "spritebrew-gallery-dev"
 binding = "EVENTS_DB"
 database_name = "spritebrew-events-dev"
 database_id = "c7ca1a93-a1f9-477b-b056-1b4f7b434a95"
+
+# Money ledger (n1-ledger.md 005). Release 1 reads only its control table
+# (src/lib/moneyPause.ts), which fails closed: without this binding every
+# money write and every fresh generation answers "paused".
+[[env.preview.d1_databases]]
+binding = "LEDGER_DB"
+database_name = "spritebrew-ledger-dev"
+database_id = "19f96577-407d-4404-8afa-bfa1b931d276"

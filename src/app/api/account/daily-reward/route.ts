@@ -13,6 +13,7 @@ export const runtime = 'edge';
 import { getAuthedUserId } from '@/lib/edgeAuth';
 import { consumeSignupGrant, getTokenBalance, hasClaimedEmailList } from '@/lib/tokenBalance';
 import { checkAndGrantDailyReward, getStreakSnapshot } from '@/lib/dailyReward';
+import { isMoneyPaused, MoneyPausedError, UPDATING_MESSAGE } from '@/lib/moneyPause';
 
 export type RewardPayload =
   | { type: 'signup'; amount: number }
@@ -26,6 +27,7 @@ interface DailyRewardResponse {
   balance: number;
   streak: { count: number; lifetimeMax: number };
   emailListClaimed: boolean;
+  paused?: true;
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -37,30 +39,44 @@ export async function POST(request: Request): Promise<Response> {
 
   const rewards: RewardPayload[] = [];
 
-  // 1. Signup-bonus celebration (one-shot)
-  try {
-    const signup = await consumeSignupGrant(userId);
-    if (signup && signup.amount > 0) {
-      rewards.push({
-        type: signup.source === 'early_adopter' ? 'early_adopter' : 'signup',
-        amount: signup.amount,
-      });
-    }
-  } catch { /* non-fatal */ }
+  // While money is paused neither step runs: step 2 is a credit, and step 1
+  // would mark a not-yet-opened account's celebration as shown. Both stay
+  // claimable once money reopens (the daily reward on the same UTC day).
+  const paused = await isMoneyPaused();
+  if (!paused) {
+    // 1. Signup-bonus celebration (one-shot)
+    try {
+      const signup = await consumeSignupGrant(userId);
+      if (signup && signup.amount > 0) {
+        rewards.push({
+          type: signup.source === 'early_adopter' ? 'early_adopter' : 'signup',
+          amount: signup.amount,
+        });
+      }
+    } catch { /* non-fatal */ }
 
-  // 2. Daily login + streak
-  try {
-    const daily = await checkAndGrantDailyReward(userId);
-    if (daily) {
-      rewards.push({
-        type: daily.isStreakBonus ? 'streak_bonus' : 'daily_login',
-        amount: daily.granted,
-        streakDay: daily.streakDay,
-      });
-    }
-  } catch { /* non-fatal */ }
+    // 2. Daily login + streak
+    try {
+      const daily = await checkAndGrantDailyReward(userId);
+      if (daily) {
+        rewards.push({
+          type: daily.isStreakBonus ? 'streak_bonus' : 'daily_login',
+          amount: daily.granted,
+          streakDay: daily.streakDay,
+        });
+      }
+    } catch { /* non-fatal */ }
+  }
 
-  const balance = await getTokenBalance(userId);
+  let balance: number;
+  try {
+    balance = await getTokenBalance(userId);
+  } catch (err) {
+    if (err instanceof MoneyPausedError) {
+      return Response.json({ success: false, error: UPDATING_MESSAGE, paused: true }, { status: 503 });
+    }
+    throw err;
+  }
   const streak = await getStreakSnapshot(userId);
   const emailListClaimed = await hasClaimedEmailList(userId);
 
@@ -70,6 +86,7 @@ export async function POST(request: Request): Promise<Response> {
     balance,
     streak: { count: streak.count, lifetimeMax: streak.lifetimeMax },
     emailListClaimed,
+    ...(paused ? { paused: true as const } : {}),
   };
   return Response.json(body);
 }

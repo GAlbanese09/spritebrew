@@ -18,6 +18,7 @@ import {
   markEmailListClaimed,
 } from '@/lib/tokenBalance';
 import { EMAIL_LIST_BONUS_TOKENS } from '@/lib/constants';
+import { isMoneyPaused, UPDATING_MESSAGE } from '@/lib/moneyPause';
 
 interface ClerkUser {
   primary_email_address_id?: string;
@@ -58,6 +59,11 @@ export async function POST(request: Request): Promise<Response> {
       claimed: true,
       balance,
     });
+  }
+
+  // A credit follows the subscription, so neither happens while money is paused.
+  if (await isMoneyPaused()) {
+    return Response.json({ success: false, error: UPDATING_MESSAGE, paused: true }, { status: 503 });
   }
 
   const apiKey = process.env.RESEND_API_KEY;

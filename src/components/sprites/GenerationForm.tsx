@@ -254,9 +254,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         setTokenBalance(errObj.balance);
         return;
       }
-      if (errObj.error === 'submission_failed') {
-        // Server already refunded — surface its message verbatim, do NOT
-        // append the generic "(your tokens are safe)" copy.
+      if (errObj.error === 'submission_failed' || errObj.error === 'money_paused') {
+        // The server's message states what happened to the tokens (refunded,
+        // to be returned by hand, or never charged): surface it verbatim, do
+        // NOT append the generic "(your tokens are safe)" copy.
         setGenerationError(msg);
         // Refresh balance so the user sees the refund landed.
         void fetchBalance();

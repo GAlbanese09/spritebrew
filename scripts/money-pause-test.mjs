@@ -47,14 +47,15 @@ async function tokenFor(sub) {
 let calls = [];
 let kvMap = new Map();
 let kvFailPut = () => false;
+let kvTtl = new Map();
 function kvStub() {
   return {
     get: async (k) => { calls.push(`kv.get ${k}`); return kvMap.has(k) ? kvMap.get(k) : null; },
     getWithMetadata: async (k) => { calls.push(`kv.getWithMetadata ${k}`); return { value: kvMap.get(k) ?? null, metadata: null }; },
-    put: async (k, v) => {
+    put: async (k, v, opts) => {
       calls.push(`kv.put ${k}`);
       if (kvFailPut(k)) throw new Error('stub: KV put failed');
-      kvMap.set(k, v);
+      kvMap.set(k, v); kvTtl.set(k, opts?.expirationTtl);
     },
     delete: async (k) => { calls.push(`kv.delete ${k}`); kvMap.delete(k); },
     list: async ({ prefix } = {}) => {
@@ -86,14 +87,24 @@ function ledgerStub() {
   };
 }
 let eventsRows = [];
+let eventsThrow = false;
 function eventsStub() {
   return {
     prepare: (sql) => {
       const stmt = {
         args: [],
         bind: (...a) => { stmt.args = a; return stmt; },
-        run: async () => { calls.push('events.run'); eventsRows.push({ sql, args: stmt.args }); return {}; },
-        first: async () => { calls.push('events.first'); return null; },
+        run: async () => {
+          calls.push('events.run');
+          if (eventsThrow) throw new Error('stub: D1 insert failed');
+          eventsRows.push({ sql, args: stmt.args });
+          return { meta: { changes: 1 } };
+        },
+        first: async () => {
+          calls.push('events.first');
+          if (/WHERE dedupe_key = \?1/.test(sql)) return eventsRows.some((r) => r.args[1] === stmt.args[0]) ? { ok: 1 } : null;
+          return null;
+        },
         all: async () => ({ results: [] }),
       };
       return stmt;
@@ -108,7 +119,7 @@ function r2Stub() {
   };
 }
 let queueThrows = false;
-function env({ ledger = true, kv = true, kickoff = 'true' } = {}) {
+function env({ ledger = true, kv = true, kickoff = 'true', events = true } = {}) {
   // A plain object: Node's own process.env turns every value into a string.
   process.env = { ...process.env };
   for (const k of ['LEDGER_DB', 'SPRITEBREW_KV']) delete process.env[k];
@@ -121,9 +132,10 @@ function env({ ledger = true, kv = true, kickoff = 'true' } = {}) {
   });
   if (ledger) process.env.LEDGER_DB = ledgerStub();
   if (kv) process.env.SPRITEBREW_KV = kvStub();
+  if (!events) delete process.env.EVENTS_DB;
 }
 function reset(over = {}) {
-  calls = []; kvMap = new Map(); kvFailPut = () => false; eventsRows = [];
+  calls = []; kvMap = new Map(); kvTtl = new Map(); kvFailPut = () => false; eventsRows = []; eventsThrow = false;
   control = { money_pause: '0' }; controlThrows = false; pauseSequence = []; pauseReads = 0; queueThrows = false;
   env(over);
 }
@@ -192,6 +204,7 @@ const checkoutEvent = (id, tokens = 100) => ({
     metadata: { userId: USER, packId: 'starter', tokens: String(tokens) } } },
 });
 const json = async (res) => { try { return await res.clone().json(); } catch { return null; } };
+const alarmJson = (row) => (row ? JSON.parse(row.args.find((a) => typeof a === 'string' && a.startsWith('{'))) : null);
 const hasEmDash = (s) => typeof s === 'string' && s.includes('\u2014');
 
 // ── 1. isMoneyPaused fails closed ──
@@ -285,12 +298,61 @@ const alarmRow = eventsRows.find((r) => r.sql.includes('generation.unrefunded'))
 check('G: refund fails -> 503 submission_failed', res.status === 503 && body?.error === 'submission_failed');
 check('G: refund fails -> balance stays debited', balanceOf(USER) === 100 - cost);
 check('G: refund fails -> record refunded false', recState?.status === 'error' && recState?.refunded === false);
-check('G: refund fails -> copy claims no refund, says by hand, no em dash',
-  !/were refunded/.test(body?.message) && /by hand/.test(body?.message) && !hasEmDash(body?.message));
+check('G: refund fails -> copy claims no refund, says it will be returned, no em dash',
+  body?.message === 'Could not start your generation. We could not confirm your refund yet; your tokens will be returned. Please try again later.'
+  && !hasEmDash(body?.message));
 check('G: refund fails -> one generation.unrefunded row, reason refund_credit_failed',
-  alarmRow && alarmRow.args.includes('refund_credit_failed') && JSON.parse(alarmRow.args[8]).extra.reason === 'refund_credit_failed');
+  alarmRow && alarmRow.args.includes('refund_credit_failed') && alarmJson(alarmRow).extra.reason === 'refund_credit_failed'
+  && eventsRows.filter((r) => r.sql.includes('generation.unrefunded')).length === 1);
 check('G: alarm row carries the job id and token cost',
-  alarmRow && rec && alarmRow.args[6] === rec[0].slice('job:'.length) && JSON.parse(alarmRow.args[8]).extra.tokenCost === cost);
+  alarmRow && rec && alarmRow.args[6] === rec[0].slice('job:'.length) && alarmJson(alarmRow).extra.tokenCost === cost);
+
+// n1-ledger-02.md 002 rulings B and C on the same failure.
+const owed = recState?.refundOwed;
+check('B.1 refund fails -> record carries refundOwed with the evidence fields',
+  owed && Object.keys(owed).sort().join() === 'balanceWritten,idempotencyKey,reason,requestId,tokenCost'
+  && owed.tokenCost === cost && owed.reason === 'refund_credit_failed' && owed.requestId.startsWith(`gen:${USER}:`)
+  && owed.idempotencyKey === `refund:${owed.requestId}` && owed.balanceWritten === false);
+check('B.1 refund fails -> record kept 24 h in KV and mirrored to R2',
+  kvTtl.get(rec?.[0]) === 86400 && calls.includes(`r2.put jobs/${rec?.[0].slice('job:'.length)}.json`));
+check('C.1 the alarm row carries the refund key, the request id and balanceWritten',
+  alarmJson(alarmRow)?.extra?.idempotencyKey === owed?.idempotencyKey && alarmRow?.args[7] === owed?.requestId
+  && alarmJson(alarmRow)?.extra?.balanceWritten === false);
+
+// B.4: the alarm cannot be written; the record still carries the debt and one error line names it.
+for (const [label, over, setup] of [
+  ['EVENTS_DB absent', { events: false }, () => {}],
+  ['the alarm insert throws', {}, () => { eventsThrow = true; }],
+]) {
+  reset(over); seedBalance(USER, 100); control.dev_fault = 'enqueue_throw,credit_throw_before_balance'; setup(); logs = [];
+  res = await R.generate.POST(genReq(tok));
+  body = await json(res);
+  const r = [...kvMap.entries()].find(([k]) => k.startsWith('job:'));
+  const st = r ? JSON.parse(r[1]) : null;
+  const line = logs.find((l) => l.includes('unrefunded_alarm_not_written'));
+  check(`B.4 ${label} -> 503 with the unconfirmed-refund copy`, res.status === 503 && /could not confirm your refund yet/.test(body?.message));
+  check(`B.4 ${label} -> no alarm row`, !eventsRows.some((x) => x.sql.includes('generation.unrefunded')));
+  check(`B.4 ${label} -> the record still carries refundOwed (24 h)`, st?.refunded === false && st?.refundOwed?.tokenCost === cost && kvTtl.get(r?.[0]) === 86400);
+  check(`B.4 ${label} -> one error line with job, user, cost and request id, no email`,
+    !!line && line.includes(r?.[0].slice('job:'.length)) && line.includes(USER) && line.includes(`"tokenCost":${cost}`)
+    && line.includes(st?.refundOwed?.requestId) && !line.includes('@'));
+}
+
+// C.4: the refund's balance write lands, then the credit fails before its idempotency key.
+reset(); seedBalance(USER, 100); control.dev_fault = 'enqueue_throw,credit_throw_after_balance';
+res = await R.generate.POST(genReq(tok));
+body = await json(res);
+rec = [...kvMap.entries()].find(([k]) => k.startsWith('job:'));
+recState = rec ? JSON.parse(rec[1]) : null;
+const cRows = eventsRows.filter((x) => x.sql.includes('generation.unrefunded'));
+check('C.4 after-balance fault -> the balance is restored', balanceOf(USER) === 100);
+check('C.4 -> the customer is told the tokens were refunded (they were), no em dash',
+  body?.message === 'Could not start your generation. Your tokens were refunded. Please try again.' && !hasEmDash(body?.message));
+check('C.4 -> record refunded false with refundOwed.balanceWritten true', recState?.refunded === false && recState?.refundOwed?.balanceWritten === true);
+check('C.4 -> one alarm row, saying balanceWritten true', cRows.length === 1 && alarmJson(cRows[0]).extra.balanceWritten === true);
+check('C.4 -> no refund key and no tx row for the refund (why the evidence must travel with the record)',
+  !kvMap.has(`token_idempotency:${recState?.refundOwed?.idempotencyKey}`)
+  && ![...kvMap.entries()].some(([k, v]) => k.startsWith(`token_tx:${USER}:`) && JSON.parse(v).reason === 'generation_failed_refund'));
 
 // ── 4. token-balance ──
 

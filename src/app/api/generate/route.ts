@@ -123,7 +123,7 @@ import { getAccountStatus } from '@/lib/accountLock';
 import { isAdminUser } from '@/lib/generationLimits';
 import { isQueueKickoffEnabled } from '@/lib/featureFlag';
 import { deriveJobId } from '@/lib/jobIdHelper';
-import { putJobState } from '@/lib/jobState';
+import { DEBT_TTL_S, putJobState } from '@/lib/jobState';
 import { enqueueJob } from '@/lib/queueProducer';
 import { buildRdCreateBody, buildRdAnimateBody } from '@/lib/rdBodyBuilder';
 import { devFault, isMoneyPaused, MoneyPausedError, PAUSED_MESSAGE } from '@/lib/moneyPause';
@@ -463,18 +463,21 @@ export async function POST(request: Request) {
       // retry that lands in this branch (or in SSE) dedupes correctly via
       // tokenBalance's token_idempotency:* check. Not gated by the money
       // pause: it undoes this request's own debit.
-      const refund = await creditTokens(userId, tokenCost, 'generation_failed_refund', `refund:${requestId}`, txCtx);
-      // Ruling G: claim no refund that was not made. The alarm row puts the
-      // job on the morning digest for George to settle by hand.
-      if (!refund.success) {
-        await recordUnrefundedAlarm({
-          userId,
-          jobId,
-          tokenCost,
-          reason: 'refund_credit_failed',
-          detail: `refund:${requestId}`,
-        });
-      }
+      const refundKey = `refund:${requestId}`;
+      const refund = await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey, txCtx);
+      // Ruling G, as amended by n1-ledger-02.md 002 B and C: claim no refund
+      // that was not confirmed. The record carries the debt with its evidence
+      // (24 h) so the consumer's sweep settles it once stores recover; the
+      // alarm row puts it on the morning digest as the fallback.
+      const refundOwed = refund.success
+        ? undefined
+        : {
+            tokenCost,
+            reason: 'refund_credit_failed',
+            requestId,
+            idempotencyKey: refundKey,
+            balanceWritten: refund.balanceWritten === true,
+          };
 
       // Best-effort: write the job record as a terminal error, shaped like
       // the consumer's error records, so the status route serves it and a
@@ -501,18 +504,45 @@ export async function POST(request: Request) {
               errorCode: 'submission_failed',
               attempts: 0,
               refunded: refund.success,
-            });
+              ...(refundOwed ? { refundOwed } : {}),
+            }, refundOwed ? DEBT_TTL_S : undefined);
           }
         } catch { /* best-effort cleanup */ }
+      }
+
+      if (refundOwed) {
+        const alarmed = await recordUnrefundedAlarm({
+          userId,
+          jobId,
+          tokenCost,
+          reason: 'refund_credit_failed',
+          requestId,
+          idempotencyKey: refundKey,
+          balanceWritten: refundOwed.balanceWritten,
+        });
+        if (!alarmed) {
+          // The record of last resort. No email, no token.
+          console.error(JSON.stringify({
+            source: 'generate',
+            event: 'unrefunded_alarm_not_written',
+            jobId,
+            userId,
+            tokenCost,
+            requestId,
+            balanceWritten: refundOwed.balanceWritten,
+          }));
+        }
       }
 
       return new Response(
         JSON.stringify({
           success: false,
           error: 'submission_failed',
-          message: refund.success
+          // balanceWritten: the refund's balance write landed before the
+          // failure, so the tokens are back even though it is unconfirmed.
+          message: refund.success || refund.balanceWritten === true
             ? 'Could not start your generation. Your tokens were refunded. Please try again.'
-            : 'Could not start your generation. Your tokens were not returned automatically; we will return them by hand. Please try again later.',
+            : 'Could not start your generation. We could not confirm your refund yet; your tokens will be returned. Please try again later.',
         }),
         { status: 503, headers: { 'content-type': 'application/json' } }
       );

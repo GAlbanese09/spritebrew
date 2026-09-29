@@ -11,6 +11,11 @@
 
 export const JOB_TTL_S = 60 * 60;
 
+/** A record that carries an unpaid refund (`refundOwed`) must outlive the
+ *  one-hour record so the consumer's sweep can still find it
+ *  (n1-ledger-02.md 002 ruling B). */
+export const DEBT_TTL_S = 24 * 60 * 60;
+
 /** R2 answers a second write to one key inside about a second with error
  *  10058; one retry after this delay clears it. */
 const R2_RETRY_DELAY_MS = 1_100;
@@ -66,8 +71,13 @@ async function putJobStateR2(jobId: string, body: string): Promise<void> {
  * Writes the job record to R2, then to KV (`job:{jobId}`), the same JSON in
  * both. A KV failure throws, as the bare kv.put did before.
  */
-export async function putJobState(kv: JobStateKV, jobId: string, state: Record<string, unknown>): Promise<void> {
+export async function putJobState(
+  kv: JobStateKV,
+  jobId: string,
+  state: Record<string, unknown>,
+  ttlS: number = JOB_TTL_S
+): Promise<void> {
   const body = JSON.stringify(state);
   await putJobStateR2(jobId, body);
-  await kv.put(`job:${jobId}`, body, { expirationTtl: JOB_TTL_S });
+  await kv.put(`job:${jobId}`, body, { expirationTtl: ttlS });
 }

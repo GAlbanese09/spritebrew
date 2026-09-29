@@ -7,11 +7,18 @@
  *
  * The row mirrors the consumer's writer (spritebrew-rd-consumer/src/events.ts:
  * the same canonical object, stable JSON and SHA-256), narrowed to this one
- * event. Best effort, like the consumer's: it never throws.
+ * event. It never throws, but it is strict (n1-ledger-02.md 002 ruling B):
+ * it answers whether a row with its dedupe key exists afterwards, so the
+ * caller can log the debt when it does not.
  */
 
 interface D1Like {
-  prepare(sql: string): { bind(...v: unknown[]): { run(): Promise<unknown> } };
+  prepare(sql: string): {
+    bind(...v: unknown[]): {
+      run(): Promise<unknown>;
+      first<T = Record<string, unknown>>(): Promise<T | null>;
+    };
+  };
 }
 
 const NY_DAY = new Intl.DateTimeFormat('en-CA', {
@@ -47,12 +54,20 @@ export async function recordUnrefundedAlarm(args: {
   jobId?: string;
   tokenCost: number;
   reason: string;
+  /** The generate request, and its refund's idempotency key (`refund:{requestId}`),
+   *  so whoever settles it can check the evidence first (ruling C). */
+  requestId?: string;
+  idempotencyKey?: string;
+  balanceWritten?: boolean;
   detail?: string;
-}): Promise<void> {
+}): Promise<boolean> {
   try {
     const env = process.env as Record<string, unknown>;
     const db = env.EVENTS_DB as D1Like | undefined;
-    if (!db || typeof db.prepare !== 'function') return;
+    if (!db || typeof db.prepare !== 'function') {
+      console.error(JSON.stringify({ source: 'unrefunded-alarm', event: 'write_failed', reason: args.reason, error: 'EVENTS_DB unbound' }));
+      return false;
+    }
     const eventId = crypto.randomUUID();
     const occurredAtMs = Date.now();
     const environment = typeof env.APP_ENV === 'string' && env.APP_ENV ? env.APP_ENV : 'unknown';
@@ -71,21 +86,37 @@ export async function recordUnrefundedAlarm(args: {
       sourceService: 'spritebrew-pages',
       userId: args.userId,
       jobId: args.jobId,
+      requestId: args.requestId,
       errorCode: args.reason,
-      extra: { reason: args.reason, tokenCost: args.tokenCost, detail: args.detail?.slice(0, 500) },
+      extra: {
+        reason: args.reason,
+        tokenCost: args.tokenCost,
+        idempotencyKey: args.idempotencyKey,
+        balanceWritten: args.balanceWritten,
+        detail: args.detail?.slice(0, 500),
+      },
     };
     const eventJson = stableStringify(canonical);
     await db
       .prepare(
         `INSERT OR IGNORE INTO events (event_id, dedupe_key, schema_version, event_name, level,
            occurred_at_ms, reporting_day, ingested_at_ms, environment, source_service,
-           user_id, job_id, error_code, event_json, event_sha256)
+           user_id, job_id, request_id, error_code, event_json, event_sha256)
          VALUES (?1, ?2, 1, 'generation.unrefunded', 'error', ?3, ?4, ?3, ?5, 'spritebrew-pages',
-           ?6, ?7, ?8, ?9, ?10)`
+           ?6, ?7, ?8, ?9, ?10, ?11)`
       )
       .bind(eventId, dedupeKey, occurredAtMs, canonical.reportingDay, environment,
-        args.userId, args.jobId ?? null, args.reason, eventJson, await sha256Hex(eventJson))
+        args.userId, args.jobId ?? null, args.requestId ?? null, args.reason, eventJson, await sha256Hex(eventJson))
       .run();
+    // INSERT OR IGNORE also ignores a failed CHECK: the row counts only if
+    // one holds the dedupe key now (a duplicate from an earlier try counts).
+    const row = await db
+      .prepare('SELECT 1 AS ok FROM events WHERE dedupe_key = ?1')
+      .bind(dedupeKey)
+      .first<{ ok: number }>();
+    if (row) return true;
+    console.error(JSON.stringify({ source: 'unrefunded-alarm', event: 'write_failed', reason: args.reason, error: 'insert ignored' }));
+    return false;
   } catch (err) {
     console.error(JSON.stringify({
       source: 'unrefunded-alarm',
@@ -93,5 +124,6 @@ export async function recordUnrefundedAlarm(args: {
       reason: args.reason,
       error: err instanceof Error ? err.message.slice(0, 120) : 'unknown',
     }));
+    return false;
   }
 }

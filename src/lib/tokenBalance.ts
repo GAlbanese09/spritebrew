@@ -324,6 +324,11 @@ export async function debitTokens(
 export interface CreditResult {
   success: boolean;
   balance: number;
+  /** On failure only: true when this credit's balance write finished before
+   *  the failure, so the tokens already moved and only the idempotency key or
+   *  the tx row is missing (the ruling F window). Evidence for whoever settles
+   *  it (n1-ledger-02.md 002 ruling C). */
+  balanceWritten?: boolean;
 }
 
 /**
@@ -339,8 +344,9 @@ export async function creditTokens(
 ): Promise<CreditResult> {
   const kv = getKV();
   // Nothing was credited, so say so (n1-ledger 007 section 4, ruling F).
-  if (!kv) return { success: false, balance: 0 };
+  if (!kv) return { success: false, balance: 0, balanceWritten: false };
 
+  let balanceWritten = false;
   try {
     // Idempotency check
     const idemKey = idempotencyKey(idempotencyKeyValue);
@@ -371,6 +377,7 @@ export async function creditTokens(
     record.last_updated = now;
 
     await kv.put(`token_balance:${userId}`, JSON.stringify(record));
+    balanceWritten = true;
     // Known release 1 window (ruling F): a failure here, between the balance
     // put and the idempotency put, credits twice on a retry. Release 2's single
     // transaction closes it.
@@ -393,7 +400,7 @@ export async function creditTokens(
 
     return { success: true, balance: newBalance };
   } catch {
-    return { success: false, balance: 0 };
+    return { success: false, balance: 0, balanceWritten };
   }
 }
 

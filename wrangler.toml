@@ -43,6 +43,14 @@ binding = "EVENTS_DB"
 database_name = "spritebrew-events"
 database_id = "fb33d2dc-cfdc-4ed3-9311-12abaf951816"
 
+# Money ledger (n1-ledger.md 005). Release 1 reads only its control table
+# (src/lib/moneyPause.ts), which fails closed: without this binding every
+# money write and every fresh generation answers "paused".
+[[env.production.d1_databases]]
+binding = "LEDGER_DB"
+database_name = "spritebrew-ledger"
+database_id = "4d433421-a669-4fc0-909c-993f6d6cd15b"
+
 # === Preview (dev branch) ===
 [env.preview]
 compatibility_flags = [ "nodejs_compat" ]

@@ -6,7 +6,8 @@
  * A pixel-art cauldron bubbles with amber/gold potion, with small pixel
  * bubbles rising upward and fading out. Text below shows the action being
  * generated, the elapsed time, the job stage from the status poll, and a
- * per-mode expectation from GENERATION_WAIT_COPY. Pure CSS animation, no
+ * per-mode expectation from GENERATION_WAIT_COPY, or the status route's
+ * paused copy in its place while money is paused. Pure CSS animation, no
  * canvas, no external libraries.
  *
  * IMPORTANT: Bubble/steam animations use inline `style.animation` instead of
@@ -29,6 +30,9 @@ interface BrewingLoaderProps {
   /** The job's own mode. Falls back to `action ? 'animate' : 'create'`,
    *  which misreads a resumed animation whose action was not restored. */
   mode?: 'create' | 'animate' | null;
+  /** The status route's paused copy (S0). While set, it replaces the
+   *  expectation line; once null, the usual line returns. */
+  pausedMessage?: string | null;
 }
 
 // The status route reads the job record from R2 first, which is strongly
@@ -66,6 +70,7 @@ export default function BrewingLoader({
   startedAt = null,
   serverStatus = null,
   mode = null,
+  pausedMessage = null,
 }: BrewingLoaderProps) {
   const label = action ? ACTION_LABELS[action] ?? action : null;
   const headline = label
@@ -88,11 +93,13 @@ export default function BrewingLoader({
   const elapsedMs = Math.max(0, now - origin);
   const stage = serverStatus ? STAGE_LABELS[serverStatus] : null;
   const waitCopy = GENERATION_WAIT_COPY[mode ?? (action ? 'animate' : 'create')];
-  const expectation = waitCopy
-    ? elapsedMs > waitCopy.longAfterMs
-      ? waitCopy.long
-      : waitCopy.usual
-    : null;
+  const expectation = pausedMessage
+    ? pausedMessage
+    : waitCopy
+      ? elapsedMs > waitCopy.longAfterMs
+        ? waitCopy.long
+        : waitCopy.usual
+      : null;
 
   return (
     <div className="flex flex-col items-center justify-center py-10 space-y-5">

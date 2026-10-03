@@ -512,6 +512,87 @@ reset(); setFault('delay_before_debit:5'); process.env.APP_ENV = 'production';
 const t1 = Date.now();
 await mp.devDelay('delay_before_debit');
 check('production never reads the faults (no hold)', Date.now() - t1 < 1_000 && (await mp.devFaultScope('delay_before_debit')) === undefined);
+process.env.APP_ENV = 'dev';
+
+// ── 9. The loader (n1-ledger-03 012, ruling 1): the forwarding and the swap ──
+
+const CLIENT_OUT = path.join(OUT, 'client');
+await build({
+  entryPoints: {
+    pollClient: path.join(ROOT, 'src/lib/pollClient.ts'),
+    spriteStore: path.join(ROOT, 'src/stores/spriteStore.ts'),
+    BrewingLoader: path.join(ROOT, 'src/components/sprites/BrewingLoader.tsx'),
+  },
+  bundle: true, platform: 'node', format: 'esm', outdir: CLIENT_OUT, logLevel: 'error', jsx: 'automatic',
+  tsconfig: path.join(ROOT, 'tsconfig.json'), outExtension: { '.js': '.mjs' },
+  external: ['react', 'react/*', 'react-dom', 'react-dom/*', 'zustand', 'zustand/*'],
+});
+const loadClient = async (name) => import(pathToFileURL(path.join(CLIENT_OUT, `${name}.mjs`)).href);
+const pc = await loadClient('pollClient');
+const store = (await loadClient('spriteStore')).useSpriteStore;
+const BrewingLoader = (await loadClient('BrewingLoader')).default;
+const { createElement } = await import('react');
+const { renderToStaticMarkup } = await import('react-dom/server');
+
+// The forwarding, end to end: pollClient's fetch is served by the real status
+// route, then a canned terminal error ends the loop.
+const realFetch = globalThis.fetch;
+const pollThrough = async (bodies) => {
+  const states = [];
+  let n = 0;
+  globalThis.fetch = async (url, init) => {
+    const next = bodies[n++];
+    if (typeof next === 'function') {
+      await next();
+      return R['generation-status/[jobId]'].GET(
+        new Request(`https://dev.spritebrew.pages.dev${url}`, init), { params: Promise.resolve({ jobId: JOB }) });
+    }
+    return new Response(JSON.stringify(next), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    const terminal = await pc.pollJobStatus(JOB, async () => tok, {
+      initialIntervalMs: 1, longIntervalMs: 1, onUpdate: (s) => states.push(s),
+    });
+    return { states, terminal };
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+};
+const END = { status: 'error', error: 'end of test', refunded: true };
+reset();
+kvMap.set(`job:${JOB}`, JSON.stringify({ status: 'pending', userId: USER, mode: 'create', enqueuedAt: Date.now() - 120_000 }));
+let polled = await pollThrough([() => setPause('1'), () => setPause('1'), () => setPause('0'), END]);
+check('pollClient forwards paused and message from the status route while paused, then drops them once open',
+  polled.states.length === 3 && polled.terminal.status === 'error'
+  && polled.states.slice(0, 2).every((s) => s.status === 'pending' && s.paused === true && s.message === COPY)
+  && polled.states[2].status === 'pending' && !('paused' in polled.states[2]) && !('message' in polled.states[2]));
+polled = await pollThrough([
+  { status: 'running', startedAt: 5, paused: true },
+  { status: 'running', startedAt: 5, message: 'stray' },
+  { status: 'running', startedAt: 5, paused: true, message: '' },
+  END,
+]);
+check('pollClient forwards no copy without both paused: true and a message, and keeps startedAt',
+  polled.states.length === 3 && polled.states.every((s) => s.status === 'running' && s.startedAt === 5 && !('paused' in s) && !('message' in s)));
+
+// The store carries the copy from the poll to the loader.
+store.getState().setGenerationProgress(1, 'pending', 'create', COPY);
+const withCopy = store.getState().generationPausedMessage;
+store.getState().setGenerationProgress(1, 'pending', 'create', null);
+check('the store keeps the paused copy while set and clears it with the poll', withCopy === COPY && store.getState().generationPausedMessage === null);
+
+// The swap: the copy replaces the expectation line while present; the usual line once absent.
+const USUAL = 'Sprites usually take about 30 seconds, sometimes up to a minute and a half';
+const ANIM_USUAL = 'Animations usually take about 2 minutes, sometimes up to 4';
+const render = (props) => renderToStaticMarkup(createElement(BrewingLoader, { startedAt: Date.now(), serverStatus: 'pending', ...props }));
+const swapped = render({ mode: 'create', pausedMessage: COPY });
+const usual = render({ mode: 'create', pausedMessage: null });
+const animSwapped = render({ mode: 'animate', action: 'walking', pausedMessage: COPY });
+check('BrewingLoader shows the paused copy in place of its usual line while present',
+  swapped.includes(COPY) && !swapped.includes(USUAL) && animSwapped.includes(COPY) && !animSwapped.includes(ANIM_USUAL));
+check('BrewingLoader shows its usual line once the copy is absent', usual.includes(USUAL) && !usual.includes(COPY));
+check('the swap changes only that line (headline and stage unchanged)',
+  swapped.replace(COPY, USUAL) === usual && swapped.includes('Brewing your sprites...') && swapped.includes('Queued'));
 
 say(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

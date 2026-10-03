@@ -55,6 +55,10 @@ export interface UseGenerationPollResult {
   /** Consumer's startedAt for the current attempt (server clock). Present
    *  only while running; null otherwise. */
   serverStartedAt: number | null;
+  /** The status route's paused copy (S0, n1-ledger-03 012 ruling 1): set
+   *  while the last intermediate response carried paused: true, null once
+   *  one does not, and null before and after polling. */
+  pausedMessage: string | null;
   /** Client start time persisted with the active job, so a resumed poll
    *  keeps the original start. Null when idle. */
   startedAt: number | null;
@@ -117,6 +121,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
   const [isResume, setIsResume] = useState<boolean>(false);
   const [serverStatus, setServerStatus] = useState<'pending' | 'running' | null>(null);
   const [serverStartedAt, setServerStartedAt] = useState<number | null>(null);
+  const [pausedMessage, setPausedMessage] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [mode, setMode] = useState<GenMode | null>(null);
 
@@ -145,6 +150,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
       setIsResume(resumed);
       setServerStatus(null);
       setServerStartedAt(null);
+      setPausedMessage(null);
       setStartedAt(jobStartedAt);
       setMode(jobMode);
 
@@ -156,11 +162,13 @@ export function useGenerationPoll(): UseGenerationPollResult {
               if (controller.signal.aborted) return;
               setServerStatus(state.status);
               setServerStartedAt(typeof state.startedAt === 'number' ? state.startedAt : null);
+              setPausedMessage(state.paused && state.message ? state.message : null);
             },
           });
           if (controller.signal.aborted) return;
           setServerStatus(null);
           setServerStartedAt(null);
+          setPausedMessage(null);
 
           if (terminal.status === 'success') {
             // Rescue fields (rescued / requestedWidth / requestedHeight /
@@ -190,6 +198,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
           if (err instanceof DOMException && err.name === 'AbortError') return;
           setServerStatus(null);
           setServerStartedAt(null);
+          setPausedMessage(null);
 
           if (err instanceof PollAbandonedError) {
             setError({
@@ -264,6 +273,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
     setIsResume(false);
     setServerStatus(null);
     setServerStartedAt(null);
+    setPausedMessage(null);
     setStartedAt(null);
     setMode(null);
   }, []);
@@ -296,6 +306,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
     isResume,
     serverStatus,
     serverStartedAt,
+    pausedMessage,
     startedAt,
     mode,
     startPolling,

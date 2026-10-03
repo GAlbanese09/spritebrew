@@ -54,6 +54,9 @@ interface SpriteStore {
   generationStartedAt: number | null;
   generationStage: 'pending' | 'running' | null;
   generationMode: 'create' | 'animate' | null;
+  /** The status route's paused copy for the active job, shown in place of
+   *  the loader's expectation line while set (S0). Null otherwise. */
+  generationPausedMessage: string | null;
   originalCharacterDataUrl: string | null;
   /** Set by AnimateForm on rescued animate deliveries; cleared by any new
    *  generation or by clearGeneratedImage. Non-rescue and create-mode
@@ -115,7 +118,8 @@ interface SpriteStore {
   setGenerationProgress: (
     startedAt: number | null,
     stage: 'pending' | 'running' | null,
-    mode: 'create' | 'animate' | null
+    mode: 'create' | 'animate' | null,
+    pausedMessage: string | null
   ) => void;
   setTokenBalance: (balance: number) => void;
   setCurrentSheetMetadata: (metadata: SlicerHints | null) => void;
@@ -155,6 +159,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   generationStartedAt: null,
   generationStage: null,
   generationMode: null,
+  generationPausedMessage: null,
   originalCharacterDataUrl: null,
   rescueInfo: null,
   generationCount: 0,
@@ -279,8 +284,13 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
 
   setGeneratingAction: (action) => set({ generatingAction: action }),
 
-  setGenerationProgress: (startedAt, stage, mode) =>
-    set({ generationStartedAt: startedAt, generationStage: stage, generationMode: mode }),
+  setGenerationProgress: (startedAt, stage, mode, pausedMessage) =>
+    set({
+      generationStartedAt: startedAt,
+      generationStage: stage,
+      generationMode: mode,
+      generationPausedMessage: pausedMessage,
+    }),
 
   setTokenBalance: (balance) => set({ tokenBalance: balance }),
 

@@ -39,6 +39,10 @@ export class PollTransientError extends Error {
 export interface PollIntermediateState {
   status: 'pending' | 'running';
   startedAt?: number;
+  /** S0 (n1-ledger-03 012, ruling 1): set by the status route while money is
+   *  paused and the job has waited over 60 s, with the copy to show. */
+  paused?: true;
+  message?: string;
 }
 
 export interface PollTerminalSuccess {
@@ -183,6 +187,8 @@ export async function pollJobStatus(
       resultBase64?: string;
       completedAt?: number;
       startedAt?: number;
+      paused?: true;
+      message?: string;
       error?: string;
       errorCode?: string;
       refunded?: boolean;
@@ -227,7 +233,13 @@ export async function pollJobStatus(
     }
 
     // Intermediate — pending / running.
-    onUpdate?.({ status: body.status, startedAt: body.startedAt });
+    // The paused copy travels only with paused: true and a string message.
+    const paused = body.paused === true && typeof body.message === 'string' && body.message.length > 0;
+    onUpdate?.({
+      status: body.status,
+      startedAt: body.startedAt,
+      ...(paused ? { paused: true as const, message: body.message } : {}),
+    });
     pollCount++;
     const interval = pollCount < pollsBeforeBackoff ? initialIntervalMs : longIntervalMs;
     await sleep(interval, signal);

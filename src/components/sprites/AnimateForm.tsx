@@ -1029,10 +1029,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   }, [poll.status, poll.result, poll.error]);
 
   // Mirror in-flight progress to the store so BrewingLoader can show the
-  // elapsed time, the job stage and the per-mode expectation.
+  // elapsed time, the job stage and the per-mode expectation, or the paused
+  // copy in its place.
   useEffect(() => {
-    setGenerationProgress(poll.startedAt, poll.serverStatus, poll.mode);
-  }, [poll.startedAt, poll.serverStatus, poll.mode, setGenerationProgress]);
+    setGenerationProgress(poll.startedAt, poll.serverStatus, poll.mode, poll.pausedMessage);
+  }, [poll.startedAt, poll.serverStatus, poll.mode, poll.pausedMessage, setGenerationProgress]);
 
   const sizeWarning = charWidth > 0 && (charWidth !== selectedResolution || charHeight !== selectedResolution);
   const isCustomAction = selectedAction === 'custom_action';

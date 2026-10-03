@@ -43,6 +43,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const generationStartedAt = useSpriteStore((s) => s.generationStartedAt);
   const generationStage = useSpriteStore((s) => s.generationStage);
   const generationMode = useSpriteStore((s) => s.generationMode);
+  const generationPausedMessage = useSpriteStore((s) => s.generationPausedMessage);
   const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
@@ -234,6 +235,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
       startedAt={generationStartedAt}
       serverStatus={generationStage}
       mode={generationMode}
+      pausedMessage={generationPausedMessage}
     />
   ) : null;
 

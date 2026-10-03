@@ -10,6 +10,15 @@ import GenerationResult from '@/components/sprites/GenerationResult';
 import { addToHistory, type SlicerHints } from '@/lib/generationHistory';
 import { useSpriteStore } from '@/stores/spriteStore';
 import type { AnimateGeneratedContext } from '@/components/sprites/AnimateForm';
+import {
+  PURCHASE_BANNER_COPY,
+  clearBaseline,
+  readPurchaseStatus,
+  takeBaseline,
+  watchPurchase,
+  type PurchaseBannerState,
+  type PurchaseBaseline,
+} from '@/lib/purchaseBanner';
 
 const EARLY_ACCESS_DISMISS_KEY = 'spritebrew_early_access_dismissed';
 const LIMIT_NOTICE_DISMISS_KEY = 'spritebrew_dismissed_limit_notice';
@@ -106,34 +115,45 @@ function PurchaseStatusContent() {
   const { userId, getToken } = useAuth();
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
   const [status, setStatus] = useState<'success' | 'cancelled' | null>(null);
+  // HQ-14: the banner says only what the evidence shows (src/lib/purchaseBanner.ts).
+  const [bannerState, setBannerState] = useState<PurchaseBannerState | null>(null);
+  // The baseline is taken once per return, so a re-run of the effect below
+  // keeps it rather than finding storage already emptied.
+  const baselineRef = useRef<{ taken: boolean; baseline: PurchaseBaseline | null }>({ taken: false, baseline: null });
 
   useEffect(() => {
     const purchase = searchParams.get('purchase');
     if (purchase === 'success' || purchase === 'cancelled') {
       setStatus(purchase);
       window.history.replaceState({}, '', '/generate');
-      if (purchase === 'success' && userId) {
-        (async () => {
-          try {
-            const token = await getToken();
-            const res = await fetch('/api/token-balance', {
-              headers: token ? { Authorization: `Bearer ${token}` } : {},
-            });
-            if (!res.ok) return;
-            const data = await res.json();
-            if (data.success) setTokenBalance(data.balance);
-          } catch { /* */ }
-        })();
-      }
+      if (purchase === 'cancelled') clearBaseline();
     }
-  }, [searchParams, userId, getToken, setTokenBalance]);
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (status !== 'success' || !userId) return;
+    if (!baselineRef.current.taken) {
+      baselineRef.current = { taken: true, baseline: takeBaseline(userId) };
+    }
+    const controller = new AbortController();
+    const baseline = baselineRef.current.baseline;
+    void watchPurchase({
+      read: () => readPurchaseStatus(getToken, controller.signal),
+      baseline: baseline && baseline.userId === userId ? baseline : null,
+      onState: setBannerState,
+      onBalance: setTokenBalance,
+      signal: controller.signal,
+    });
+    return () => controller.abort();
+  }, [status, userId, getToken, setTokenBalance]);
 
   if (status === 'success') {
+    if (!bannerState) return null;
     return (
       <div className="flex items-center gap-3 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-2.5">
         <CheckCircle size={14} className="text-green-400 flex-shrink-0" />
         <p className="flex-1 text-xs font-mono text-green-400">
-          Payment received! Your tokens have been credited.
+          {PURCHASE_BANNER_COPY[bannerState]}
         </p>
         <button onClick={() => setStatus(null)} className="p-1 rounded text-green-400/70 hover:text-green-400 cursor-pointer">
           <X size={14} />

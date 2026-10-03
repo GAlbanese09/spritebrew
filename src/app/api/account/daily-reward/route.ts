@@ -12,7 +12,7 @@ export const runtime = 'edge';
 
 import { getAuthedUserId } from '@/lib/edgeAuth';
 import { consumeSignupGrant, getTokenBalance, hasClaimedEmailList } from '@/lib/tokenBalance';
-import { checkAndGrantDailyReward, getStreakSnapshot } from '@/lib/dailyReward';
+import { checkAndGrantDailyReward, getStreakSnapshot, type DailyRewardTrace } from '@/lib/dailyReward';
 import { MoneyPausedError, UPDATING_MESSAGE } from '@/lib/moneyPause';
 import { admitMoney } from '@/lib/moneyAdmission';
 
@@ -46,15 +46,21 @@ export async function POST(request: Request): Promise<Response> {
   // S0's admission record replaces the pause read (n1-release-2-spec.md 6.2,
   // R5-1): zero rows is the paused answer, and the record is completed in the
   // finally, after the reward, its streak writes and the balance read.
-  const rewardKey = `daily_login:${userId}:${new Date().toISOString().split('T')[0]}`;
+  // The admission line names today's key only as a candidate: the helper picks
+  // its own day, so a request crossing UTC midnight credits the next day's key.
+  // The end line names, from the helper, the key whose credit wrote the
+  // balance (`reward_key`, null for none), and a key whose credit was tried
+  // but is not known to have written (`reward_key_tried`) (Second's 040).
+  const rewardKeyCandidate = `daily_login:${userId}:${new Date().toISOString().split('T')[0]}`;
   const admission = await admitMoney({
     route: 'daily_reward',
     kind: 'user',
     subject: userId,
     userId,
-    ids: { user_id: userId, reward_key: rewardKey },
+    ids: { user_id: userId, reward_key_candidate: rewardKeyCandidate },
   });
   let outcome = 'exception';
+  const trace: DailyRewardTrace = {};
   try {
     const paused = !admission.admitted;
     if (!paused) {
@@ -71,7 +77,7 @@ export async function POST(request: Request): Promise<Response> {
 
       // 2. Daily login + streak
       try {
-        const daily = await checkAndGrantDailyReward(userId);
+        const daily = await checkAndGrantDailyReward(userId, trace);
         if (daily) {
           rewards.push({
             type: daily.isStreakBonus ? 'streak_bonus' : 'daily_login',
@@ -103,9 +109,22 @@ export async function POST(request: Request): Promise<Response> {
       emailListClaimed,
       ...(paused ? { paused: true as const } : {}),
     };
-    outcome = paused ? 'paused' : rewards.length ? `rewarded (${rewards.map((r) => r.type).join(',')})` : 'no reward due';
+    // The daily credit's own status, kept beside any signup celebration in
+    // the same request, so a partial credit is never folded into 'rewarded'.
+    const dailyGranted = rewards.some((r) => r.type === 'daily_login' || r.type === 'streak_bonus');
+    const dailyIssue = dailyGranted || !trace.rewardKey ? null
+      : trace.balanceWritten ? 'reward incomplete (balance written)'
+      : trace.balanceWritten === false ? 'reward failed (nothing written)'
+      : 'reward uncertain';
+    outcome = paused ? 'paused'
+      : [rewards.length ? `rewarded (${rewards.map((r) => r.type).join(',')})` : null, dailyIssue]
+        .filter(Boolean).join('; ') || 'no reward due';
     return Response.json(body);
   } finally {
-    await admission.complete(outcome);
+    // The helper's own record of its credit, kept even when it answered null
+    // after the balance write (the ruling F window, a failed streak write).
+    const rewardKey = trace.balanceWritten && trace.rewardKey ? trace.rewardKey : null;
+    const tried = !rewardKey && trace.rewardKey ? { reward_key_tried: trace.rewardKey } : {};
+    await admission.complete(outcome, { reward_key: rewardKey, ...tried });
   }
 }

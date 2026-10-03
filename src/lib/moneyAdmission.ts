@@ -41,8 +41,11 @@ export interface Admission {
   readonly id: string;
   /** True only when the read-back found the row: money was open. */
   readonly admitted: boolean;
-  /** The completion and the end line. Never throws; call it in a `finally`. */
-  complete(outcome: string): Promise<void>;
+  /**
+   * The completion and the end line. Never throws; call it in a `finally`.
+   * `end` adds ids known only at the end, such as the key a movement used.
+   */
+  complete(outcome: string, end?: Record<string, string | null | undefined>): Promise<void>;
 }
 
 const ADMISSION_SQL =
@@ -115,14 +118,14 @@ export async function admitMoney(args: {
   return {
     id,
     admitted,
-    async complete(outcome: string): Promise<void> {
+    async complete(outcome: string, end?: Record<string, string | null | undefined>): Promise<void> {
       if (admitted || uncertain) {
         if (uncertain && insert) {
           await withTimeout(insert, 'admission insert', UNCERTAIN_INSERT_WAIT_MS).catch(() => undefined);
         }
         await completeRecord(id, args, uncertain);
       }
-      console.log(JSON.stringify({ ...line, event: 'end', outcome }));
+      console.log(JSON.stringify({ ...line, ...end, event: 'end', outcome }));
     },
   };
 }

@@ -10,8 +10,8 @@
 //   ../spritebrew-rd-consumer/migrations-ledger/0001_control.sql, 0002_stripe_refusals.sql
 //   ../spritebrew-rd-consumer/migrations/0001_events.sql
 // The consumer checkout must hold 0002 (its n1-s0 branch). KV, R2 and the
-// queue are in-memory stubs. Nothing is written or printed but case names and
-// pass or fail.
+// queue are in-memory stubs. The harness writes only its esbuild bundles, to
+// local/.s0-test (gitignored), and prints only case names and pass or fail.
 
 import { build } from 'esbuild';
 import { createHmac, webcrypto } from 'node:crypto';
@@ -107,12 +107,13 @@ const lateAlarms = () => events.prepare("SELECT * FROM events WHERE event_name =
 
 let kvMap = new Map();
 let kvGetThrows = () => false;
+let kvPutThrows = () => false;
 let calls = [];
 function kvStub() {
   return {
     get: async (k) => { calls.push(`kv.get ${k}`); if (kvGetThrows(k)) throw new Error('stub: KV get failed'); return kvMap.has(k) ? kvMap.get(k) : null; },
     getWithMetadata: async (k) => ({ value: kvMap.get(k) ?? null, metadata: null }),
-    put: async (k, v) => { calls.push(`kv.put ${k}`); kvMap.set(k, v); },
+    put: async (k, v) => { calls.push(`kv.put ${k}`); if (kvPutThrows(k)) throw new Error('stub: KV put failed'); kvMap.set(k, v); },
     delete: async (k) => { kvMap.delete(k); },
     list: async ({ prefix } = {}) => ({ keys: [...kvMap.keys()].filter((k) => k.startsWith(prefix ?? '')).map((name) => ({ name })), list_complete: true }),
   };
@@ -135,7 +136,7 @@ function env({ kv = true, ledgerBound = true } = {}) {
 }
 let lastMessage = null;
 function reset(over = {}) {
-  freshDbs(); kvMap = new Map(); kvGetThrows = () => false; calls = []; queueThrows = false; lastMessage = null; logs = [];
+  freshDbs(); kvMap = new Map(); kvGetThrows = () => false; kvPutThrows = () => false; calls = []; queueThrows = false; lastMessage = null; logs = [];
   env(over);
 }
 globalThis.fetch = async () => new Response('{}', { status: 503 });
@@ -452,9 +453,9 @@ check('a failed refusal write -> still 503, a write_failed line', res.status ===
 reset(); seedBalance(USER, 42);
 res = await R['account/daily-reward'].POST(authReq('/api/account/daily-reward', tok, 'POST'));
 row = only(admissionRows());
-check('daily-reward open -> admission route daily_reward, subject the user, completed; lines name the reward key',
+check('daily-reward open -> admission route daily_reward, subject the user, completed; the admission line names the candidate key',
   res.status === 200 && row?.route === 'daily_reward' && row?.subject_kind === 'user' && row?.subject_id === USER && row?.completed_at_ms !== null
-  && only(lines('admission'))?.reward_key?.startsWith(`daily_login:${USER}:`));
+  && only(lines('admission'))?.reward_key_candidate?.startsWith(`daily_login:${USER}:`) && !('reward_key' in only(lines('admission'))));
 reset(); setPause('1'); seedBalance(USER, 42);
 res = await R['account/daily-reward'].POST(authReq('/api/account/daily-reward', tok, 'POST'));
 check('daily-reward paused -> 200 paused true, no admission row, no money write', res.status === 200 && (await json(res))?.paused === true
@@ -522,6 +523,7 @@ await build({
     pollClient: path.join(ROOT, 'src/lib/pollClient.ts'),
     spriteStore: path.join(ROOT, 'src/stores/spriteStore.ts'),
     BrewingLoader: path.join(ROOT, 'src/components/sprites/BrewingLoader.tsx'),
+    purchaseBanner: path.join(ROOT, 'src/lib/purchaseBanner.ts'),
   },
   bundle: true, platform: 'node', format: 'esm', outdir: CLIENT_OUT, logLevel: 'error', jsx: 'automatic',
   tsconfig: path.join(ROOT, 'tsconfig.json'), outExtension: { '.js': '.mjs' },
@@ -605,6 +607,266 @@ for (const [mode, action, afterMs] of [['create', null, 92_378], ['animate', 'wa
   check(`BrewingLoader past the ${mode} long threshold: the copy in place of the long line, and the long line once absent`,
     lateCopy.includes(COPY) && !lateCopy.includes(LONG) && lateUsual.includes(LONG) && !lateUsual.includes(COPY));
 }
+
+// ── 10. Daily-reward's key (Second's 040, n1-ledger-03 016) ──
+//
+// The admission line names today's key as a candidate; the end line names the
+// key the credit used, from the helper, or null when nothing moved.
+
+const keyOf = (u, day) => `daily_login:${u}:${day}`;
+const today = () => new Date().toISOString().split('T')[0];
+reset(); seedBalance(USER, 42);
+res = await R['account/daily-reward'].POST(authReq('/api/account/daily-reward', tok, 'POST'));
+let adLine = only(lines('admission')), endLine = only(lines('end'));
+check('a granted reward: the end line names the key the credit used, the same day as the candidate',
+  res.status === 200 && balanceOf(USER) === 45 && endLine?.outcome === 'rewarded (daily_login)'
+  && endLine?.reward_key === keyOf(USER, today()) && endLine?.reward_key_candidate === keyOf(USER, today())
+  && adLine?.reward_key_candidate === keyOf(USER, today()) && kvMap.has(`token_idempotency:${keyOf(USER, today())}`));
+logs = [];
+res = await R['account/daily-reward'].POST(authReq('/api/account/daily-reward', tok, 'POST'));
+endLine = only(lines('end'));
+check('no reward due: the end line names no key (null), the candidate kept', res.status === 200 && balanceOf(USER) === 45
+  && endLine?.outcome === 'no reward due' && endLine?.reward_key === null && endLine?.reward_key_candidate === keyOf(USER, today()));
+reset(); setPause('1'); seedBalance(USER, 42);
+res = await R['account/daily-reward'].POST(authReq('/api/account/daily-reward', tok, 'POST'));
+endLine = only(lines('end'));
+check('paused: the end line names no key (null)', endLine?.outcome === 'paused' && endLine?.reward_key === null && balanceOf(USER) === 42);
+
+// Second's trace: started at 23:59:59.999Z, the helper runs after midnight.
+// The clock moves past midnight as the admission's insert runs, so the route's
+// candidate is Oct 3 and the helper's own day is Oct 4.
+const RealDate = Date;
+let clockMs = 0;
+class ClockDate extends RealDate {
+  constructor(...a) { super(...(a.length ? a : [clockMs])); }
+  static now() { return clockMs; }
+}
+const BEFORE = RealDate.UTC(2026, 9, 3, 23, 59, 59, 999);
+const AFTER = RealDate.UTC(2026, 9, 4, 0, 0, 0, 20);
+reset(); seedBalance(USER, 42);
+kvMap.set(`streak:${USER}:last_reward_date`, '2026-10-03');
+kvMap.set(`streak:${USER}:count`, '1');
+globalThis.Date = ClockDate;
+clockMs = BEFORE;
+try {
+  const tokMid = await tokenFor(USER);
+  ledgerDelay = (sql) => { if (/INSERT INTO money_admissions/.test(sql)) clockMs = AFTER; return 0; };
+  res = await R['account/daily-reward'].POST(authReq('/api/account/daily-reward', tokMid, 'POST'));
+} finally {
+  globalThis.Date = RealDate;
+}
+adLine = only(lines('admission')); endLine = only(lines('end'));
+check('the midnight trace: the admission line names the Oct 3 candidate only',
+  adLine?.reward_key_candidate === keyOf(USER, '2026-10-03') && !('reward_key' in (adLine ?? { reward_key: 1 })));
+check('the midnight trace: the end line names the Oct 4 key the credit used, beside the Oct 3 candidate',
+  endLine?.reward_key === keyOf(USER, '2026-10-04') && endLine?.reward_key_candidate === keyOf(USER, '2026-10-03'));
+check('the midnight trace: credited once, under the Oct 4 key only; the helper picked its own day',
+  res.status === 200 && balanceOf(USER) === 45 && kvMap.has(`token_idempotency:${keyOf(USER, '2026-10-04')}`)
+  && !kvMap.has(`token_idempotency:${keyOf(USER, '2026-10-03')}`) && kvMap.get(`streak:${USER}:last_reward_date`) === '2026-10-04');
+
+// The mirror: the helper fixes its day (Oct 3) before the clock crosses
+// midnight, inside its own KV reads. A key recomputed from the clock at the
+// end would say Oct 4; the helper's key says Oct 3.
+reset(); seedBalance(USER, 42);
+kvMap.set(`streak:${USER}:last_reward_date`, '2026-10-02');
+kvMap.set(`streak:${USER}:count`, '1');
+globalThis.Date = ClockDate;
+clockMs = BEFORE;
+try {
+  const tokMid = await tokenFor(USER);
+  kvGetThrows = (k) => { if (k === `streak:${USER}:count`) clockMs = AFTER; return false; };
+  res = await R['account/daily-reward'].POST(authReq('/api/account/daily-reward', tokMid, 'POST'));
+} finally {
+  globalThis.Date = RealDate;
+  kvGetThrows = () => false;
+}
+endLine = only(lines('end'));
+check('the mirror trace: the end line names the helper\'s Oct 3 key, not a key recomputed after midnight',
+  res.status === 200 && endLine?.reward_key === keyOf(USER, '2026-10-03') && endLine?.reward_key_candidate === keyOf(USER, '2026-10-03')
+  && balanceOf(USER) === 45 && kvMap.has(`token_idempotency:${keyOf(USER, '2026-10-03')}`) && !kvMap.has(`token_idempotency:${keyOf(USER, '2026-10-04')}`));
+
+// The helper's partial answers (KE-1): it answers null, yet a credit was tried.
+reset(); seedBalance(USER, 42); setFault('credit_throw_after_balance');
+res = await R['account/daily-reward'].POST(authReq('/api/account/daily-reward', tok, 'POST'));
+endLine = only(lines('end'));
+check('a credit whose balance write finished before it failed: the end line names its key, outcome incomplete',
+  res.status === 200 && balanceOf(USER) === 45 && endLine?.reward_key === keyOf(USER, today())
+  && endLine?.outcome === 'reward incomplete (balance written)' && !('reward_key_tried' in endLine));
+reset(); seedBalance(USER, 42); kvPutThrows = (k) => k === `streak:${USER}:last_reward_date`;
+res = await R['account/daily-reward'].POST(authReq('/api/account/daily-reward', tok, 'POST'));
+endLine = only(lines('end'));
+check('a full credit whose streak write then failed: the end line names its key, outcome incomplete',
+  res.status === 200 && balanceOf(USER) === 45 && endLine?.reward_key === keyOf(USER, today())
+  && endLine?.outcome === 'reward incomplete (balance written)');
+reset(); seedBalance(USER, 42); setFault('credit_throw_before_balance');
+res = await R['account/daily-reward'].POST(authReq('/api/account/daily-reward', tok, 'POST'));
+endLine = only(lines('end'));
+check('a credit that wrote nothing: reward_key null, the key named as tried, outcome failed',
+  res.status === 200 && balanceOf(USER) === 42 && endLine?.reward_key === null && endLine?.reward_key_tried === keyOf(USER, today())
+  && endLine?.outcome === 'reward failed (nothing written)');
+reset(); seedBalance(USER, 42); setFault('credit_throw_after_balance');
+kvMap.set(`signup_grant:${USER}`, JSON.stringify({ amount: 5, source: 'signup' }));
+res = await R['account/daily-reward'].POST(authReq('/api/account/daily-reward', tok, 'POST'));
+endLine = only(lines('end'));
+check('a signup celebration in the same request keeps the daily credit\'s own status beside it',
+  res.status === 200 && balanceOf(USER) === 45 && endLine?.reward_key === keyOf(USER, today())
+  && endLine?.outcome === 'rewarded (signup); reward incomplete (balance written)');
+
+// ── 11. The purchase banner by state (HQ-14, n1-ledger-03 016) ──
+
+const pb = await loadClient('purchaseBanner');
+const store11 = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), m }; };
+const BASE = { userId: USER, balance: 100, tokens: 500, atMs: Date.now() };
+const S = pb.bannerStateFor;
+check('the three strings are HQ-14 verbatim', pb.PURCHASE_BANNER_COPY.added === 'Payment received. Your tokens have been added.'
+  && pb.PURCHASE_BANNER_COPY.pending === 'Payment received. Your tokens will appear in a moment.'
+  && pb.PURCHASE_BANNER_COPY.paused === "Payment received. We're finishing a short maintenance step, so your tokens will appear when it's done. You don't need to do anything.");
+check('state 1 only on evidence: the balance up by the pack above the baseline', S({ ok: true, balance: 600, moneyPaused: false }, BASE) === 'added'
+  && S({ ok: true, balance: 650, moneyPaused: false }, BASE) === 'added');
+check('no state 1 on a smaller rise (a daily reward, a refund) or none', S({ ok: true, balance: 599, moneyPaused: false }, BASE) === 'pending'
+  && S({ ok: true, balance: 103, moneyPaused: false }, BASE) === 'pending' && S({ ok: true, balance: 100, moneyPaused: false }, BASE) === 'pending');
+check('no state 1 without a baseline, however high the balance', S({ ok: true, balance: 99_999, moneyPaused: false }, null) === 'pending'
+  && S({ ok: true, balance: 99_999, moneyPaused: true }, null) === 'paused');
+check('state 3 while paused, and when the pause is unknown or the read failed (fail closed)', S({ ok: true, balance: 100, moneyPaused: true }, BASE) === 'paused'
+  && S({ ok: true, balance: 100 }, BASE) === 'paused' && S({ ok: false }, BASE) === 'paused' && S({ ok: false }, null) === 'paused');
+check('evidence wins: a balance already up by the pack is state 1 even while paused', S({ ok: true, balance: 600, moneyPaused: true }, BASE) === 'added');
+
+let st = store11();
+pb.saveBaseline(BASE, st);
+const took = pb.takeBaseline(USER, Date.now(), st);
+check('the baseline is taken once: read, then removed', took?.balance === 100 && took?.tokens === 500 && pb.takeBaseline(USER, Date.now(), st) === null);
+st = store11(); pb.saveBaseline(BASE, st);
+check('another user\'s baseline is no baseline', pb.takeBaseline(NEWUSER, Date.now(), st) === null);
+st = store11(); pb.saveBaseline({ ...BASE, atMs: Date.now() - pb.BASELINE_MAX_AGE_MS - 1 }, st);
+const stale = pb.takeBaseline(USER, Date.now(), st);
+st = store11(); st.setItem('spritebrew:purchaseBaseline', '{not json');
+const bad = pb.takeBaseline(USER, Date.now(), st);
+st = store11(); pb.saveBaseline({ ...BASE, tokens: 0 }, st);
+check('a stale, malformed or zero-token baseline is no baseline; storage that throws is none', stale === null && bad === null
+  && pb.takeBaseline(USER, Date.now(), st) === null
+  && pb.takeBaseline(USER, Date.now(), { getItem: () => { throw new Error('denied'); }, setItem() {}, removeItem() {} }) === null);
+
+const runWatch = async (reads, baseline, { windowMs = 60_000, intervalMs = 3_000 } = {}) => {
+  let t = 0, n = 0;
+  const states = [], balances = [];
+  // A guard for a watcher that never stops: abort after 200 reads.
+  const guard = new AbortController();
+  const last = await pb.watchPurchase({
+    read: async () => { if (n >= 200) guard.abort(); return reads[Math.min(n++, reads.length - 1)]; }, baseline, signal: guard.signal,
+    onState: (s) => states.push(s), onBalance: (b) => balances.push(b),
+    intervalMs, windowMs, now: () => t, sleep: async (ms) => { t += ms; },
+  });
+  return { last, states, balances, reads: n };
+};
+let w = await runWatch([{ ok: true, balance: 100, moneyPaused: false }, { ok: true, balance: 100, moneyPaused: false }, { ok: true, balance: 600, moneyPaused: false }], BASE);
+check('state 2, re-checked, then state 1 when the credit lands; the re-check stops there',
+  w.last === 'added' && w.states.join() === 'pending,pending,added' && w.reads === 3 && w.balances.join() === '100,100,600');
+w = await runWatch([{ ok: true, balance: 100, moneyPaused: false }], BASE);
+check('the re-check is bounded: a minute at 3 s, then it rests on state 2 (21 reads)', w.last === 'pending' && w.reads === 21
+  && w.states.every((s) => s === 'pending'));
+w = await runWatch([{ ok: true, balance: 100, moneyPaused: true }, { ok: true, balance: 100, moneyPaused: true }, { ok: true, balance: 100, moneyPaused: false }, { ok: true, balance: 600, moneyPaused: false }], BASE);
+check('state 3 while paused, state 2 once open, state 1 when credited', w.states.join() === 'paused,paused,pending,added');
+w = await runWatch([{ ok: true, balance: 100, moneyPaused: false }, { ok: true, balance: 600, moneyPaused: false }], null);
+check('without a baseline a credit never shows as state 1', w.last === 'pending' && !w.states.includes('added'));
+
+// The return read, through the real /api/token-balance.
+let pauseReads = 0;
+const tbFetch = (hang = false) => async (url, init) => {
+  if (hang) return new Promise(() => {});
+  return R['token-balance'].GET(new Request(`https://dev.spritebrew.pages.dev${url}`, init));
+};
+const spyPause = (failIt = false) => { pauseReads = 0; ledgerFail = (sql) => { if (/money_pause/.test(sql)) { pauseReads++; return failIt; } return false; }; };
+const withFetch = async (f, fn) => { const saved = globalThis.fetch; globalThis.fetch = f; try { return await fn(); } finally { globalThis.fetch = saved; } };
+reset(); seedBalance(USER, 100); spyPause();
+let rd = await withFetch(tbFetch(), () => pb.readPurchaseStatus(async () => tok));
+check('the return read, open: the balance and moneyPaused false, one pause read', rd.ok && rd.balance === 100 && rd.moneyPaused === false && pauseReads === 1);
+reset(); seedBalance(USER, 100); setPause('1'); spyPause();
+rd = await withFetch(tbFetch(), () => pb.readPurchaseStatus(async () => tok));
+check('the return read, paused: moneyPaused true, so state 3', rd.ok && rd.moneyPaused === true && S(rd, BASE) === 'paused');
+reset(); seedBalance(USER, 100); spyPause(true);
+rd = await withFetch(tbFetch(), () => pb.readPurchaseStatus(async () => tok));
+check('the return read, the pause read failing: moneyPaused true (fail closed)', rd.ok && rd.moneyPaused === true && S(rd, BASE) === 'paused');
+reset(); setPause('1'); spyPause();
+rd = await withFetch(tbFetch(), () => pb.readPurchaseStatus(async () => tokNew));
+check('the return read for a user with no balance record: no opening, no balance, the pause still read (state 3 while paused)',
+  rd.ok && rd.balance === undefined && rd.moneyPaused === true && S(rd, null) === 'paused'
+  && admissionRows().length === 0 && balanceOf(NEWUSER) === null);
+reset(); spyPause();
+rd = await withFetch(tbFetch(), () => pb.readPurchaseStatus(async () => tokNew));
+const baseNew = await withFetch(tbFetch(), () => pb.readBaselineBalance(async () => tokNew));
+check('the flagged reads for a user with no balance record, money open: no opening, no admission, no balance written',
+  rd.ok && rd.balance === undefined && rd.moneyPaused === false && baseNew === null && pauseReads === 1
+  && admissionRows().length === 0 && balanceOf(NEWUSER) === null && !calls.some((c) => c.startsWith('kv.put')));
+rd = await withFetch(async () => { throw new TypeError('network'); }, () => pb.readPurchaseStatus(async () => tok));
+const tHang = Date.now();
+const rdHang = await Promise.race([
+  withFetch(tbFetch(true), () => pb.readPurchaseStatus(async () => tok, undefined, 50)),
+  new Promise((r) => setTimeout(() => r({ ok: 'still waiting' }), 3_000)),
+]);
+check('the return read, failed or unanswered (bounded): no answer, so state 3', !rd.ok && S(rd, BASE) === 'paused'
+  && rdHang.ok === false && Date.now() - tHang < 2_000);
+const tTok = Date.now();
+const rdTok = await Promise.race([
+  pb.readPurchaseStatus(() => new Promise(() => {}), undefined, 50),
+  new Promise((r) => setTimeout(() => r('still waiting'), 3_000)),
+]);
+check('the bound covers a token that never comes', rdTok !== 'still waiting' && rdTok.ok === false && Date.now() - tTok < 2_000);
+let seenSignal = null;
+const abortable = new AbortController();
+const rdAbort = withFetch(async (url, init) => {
+  seenSignal = init.signal;
+  return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))));
+}, () => pb.readPurchaseStatus(async () => tok, abortable.signal, 5_000));
+await sleep(20);
+abortable.abort();
+const rdAborted = await rdAbort;
+check('the caller\'s abort reaches the request, and the read ends with no answer', seenSignal?.aborted === true && rdAborted.ok === false);
+reset(); seedBalance(USER, 100); spyPause();
+const plain = await withFetch(tbFetch(), async () => {
+  const r = await R['token-balance'].GET(authReq('/api/token-balance', tok));
+  return json(r);
+});
+const baseBal = await withFetch(tbFetch(), () => pb.readBaselineBalance(async () => tok));
+check('an ordinary balance load is unchanged, and neither it nor the baseline read reads the pause',
+  plain?.success === true && plain?.balance === 100 && 'tokenCosts' in plain && !('moneyPaused' in plain) && baseBal === 100 && pauseReads === 0);
+
+// BA-1: a balance read that fails must never become evidence. getTokenBalance
+// answers a guessed 5 on a KV error; the banner's reads are strict.
+reset(); seedBalance(USER, 1000); kvGetThrows = (k) => k === `token_balance:${USER}`;
+const guessed = await R['token-balance'].GET(authReq('/api/token-balance', tok)).then(json);
+st = store11();
+pb.saveBaseline({ ...BASE, balance: 1 }, st);
+const prepFailed = await withFetch(tbFetch(), () => pb.prepareBaseline({ userId: USER, tokens: 500, getToken: async () => tok, storage: st }));
+check('a failed KV read before checkout: no baseline (and an older one cleared), where the plain route guesses 5',
+  guessed?.balance === 5 && prepFailed === null && st.getItem('spritebrew:purchaseBaseline') === null);
+rd = await withFetch(tbFetch(), () => pb.readPurchaseStatus(async () => tok));
+check('a failed KV read on return: no balance, so never state 1, even against a low baseline',
+  rd.ok && rd.balance === undefined && S(rd, { ...BASE, balance: 0, tokens: 1 }) !== 'added');
+kvGetThrows = () => false;
+st = store11();
+spyPause();
+const prepared = await withFetch(tbFetch(), () => pb.prepareBaseline({ userId: USER, tokens: 500, getToken: async () => tok, storage: st, nowMs: 1_000 }));
+check('prepareBaseline saves the route\'s strict balance with the pack\'s tokens', prepared?.balance === 1000 && prepared?.tokens === 500
+  && JSON.parse(st.getItem('spritebrew:purchaseBaseline') ?? '{}').balance === 1000 && pauseReads === 0);
+
+// The shipped timings, as the page uses them (it passes neither option).
+let tDef = 0, nDef = 0;
+const sleeps = [];
+const lastDef = await pb.watchPurchase({
+  read: async () => { nDef++; return { ok: true, balance: 100, moneyPaused: false }; }, baseline: BASE, onState: () => {},
+  now: () => tDef, sleep: async (ms) => { sleeps.push(ms); tDef += ms; },
+});
+check('the shipped re-check: every 3 s for a minute (21 reads), each read bounded at 8 s',
+  lastDef === 'pending' && nDef === 21 && sleeps.every((ms) => ms === 3_000) && pb.RECHECK_INTERVAL_MS === 3_000
+  && pb.RECHECK_WINDOW_MS === 60_000 && pb.READ_TIMEOUT_MS === 8_000);
+const abortWatch = new AbortController();
+const afterAbort = [];
+await pb.watchPurchase({
+  read: async () => { abortWatch.abort(); return { ok: true, balance: 600, moneyPaused: false }; }, baseline: BASE,
+  onState: (s) => afterAbort.push(s), onBalance: (b) => afterAbort.push(b), signal: abortWatch.signal,
+  now: () => 0, sleep: async () => {},
+});
+check('an abort during a read shows nothing from that read', afterAbort.length === 0);
 
 say(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

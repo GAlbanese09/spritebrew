@@ -47,6 +47,18 @@ export interface DailyRewardResult {
   balance: number;
 }
 
+/**
+ * What the helper did, filled in as it goes, for the caller's audit line
+ * (Second's 040), even when the helper then answers null: the idempotency key
+ * of the credit it attempted (`daily_login:{userId}:{day}`, the day being this
+ * helper's own), and whether that credit's balance write finished
+ * (CreditResult's balanceWritten; undefined when the credit threw).
+ */
+export interface DailyRewardTrace {
+  rewardKey?: string;
+  balanceWritten?: boolean;
+}
+
 export interface StreakSnapshot {
   count: number;
   lifetimeMax: number;
@@ -99,7 +111,8 @@ export async function getStreakSnapshot(userId: string): Promise<StreakSnapshot>
  * by the date check on `last_reward_date`.
  */
 export async function checkAndGrantDailyReward(
-  userId: string
+  userId: string,
+  trace?: DailyRewardTrace
 ): Promise<DailyRewardResult | null> {
   const kv = getKV();
   if (!kv) return null;
@@ -129,17 +142,20 @@ export async function checkAndGrantDailyReward(
     const reason = isStreakBonus
       ? `streak_bonus:${today}:day=${streakCount}`
       : `daily_login:${today}:day=${streakCount}`;
+    const rewardKey = `daily_login:${userId}:${today}`;
+    if (trace) trace.rewardKey = rewardKey;
     const creditResult = await creditTokens(
       userId,
       granted,
       reason,
-      `daily_login:${userId}:${today}`,
+      rewardKey,
       {
         source: isStreakBonus ? 'streak_bonus' : 'daily_login',
         streakDay: streakCount,
       }
     );
 
+    if (trace) trace.balanceWritten = creditResult.success || creditResult.balanceWritten === true;
     if (!creditResult.success) return null;
 
     // Persist streak state

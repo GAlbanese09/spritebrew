@@ -276,6 +276,26 @@ export async function getTokenBalance(userId: string): Promise<number> {
   }
 }
 
+/**
+ * A strict, read-only balance read for the purchase banner (HQ-14,
+ * n1-ledger-03 016): the stored balance, or null when it cannot be known (no
+ * KV, a failed read, an absent or unreadable record). Unlike getTokenBalance it
+ * never opens a balance and never answers a guessed number, so the banner
+ * cannot take a fallback for evidence.
+ */
+export async function readBalanceStrict(userId: string): Promise<number | null> {
+  const kv = getKV();
+  if (!kv) return null;
+  try {
+    const raw = await kv.get(`token_balance:${userId}`);
+    if (!raw) return null;
+    const balance = (JSON.parse(raw) as BalanceRecord).balance;
+    return typeof balance === 'number' && Number.isFinite(balance) ? balance : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface DebitResult {
   success: boolean;
   balance: number;

@@ -126,7 +126,8 @@ import { deriveJobId } from '@/lib/jobIdHelper';
 import { DEBT_TTL_S, putJobState } from '@/lib/jobState';
 import { enqueueJob } from '@/lib/queueProducer';
 import { buildRdCreateBody, buildRdAnimateBody } from '@/lib/rdBodyBuilder';
-import { devFault, isMoneyPaused, MoneyPausedError, PAUSED_MESSAGE } from '@/lib/moneyPause';
+import { devDelay, devFault, MoneyPausedError, PAUSED_MESSAGE } from '@/lib/moneyPause';
+import { admitMoney } from '@/lib/moneyAdmission';
 import { recordUnrefundedAlarm } from '@/lib/unrefundedAlarm';
 import {
   FREE_TIER_LIFETIME_PRO_CAP,
@@ -283,303 +284,337 @@ export async function POST(request: Request) {
   // bonus_email_verified:* and email_verified_cache:* KV keys untouched for
   // historical analytics; nothing here writes to them anymore.)
 
-  // Money paused (n1-ledger 005 section 4): no fresh generation starts, so
-  // nothing is debited.
-  if (await isMoneyPaused()) {
-    return Response.json(
-      { success: false, error: 'money_paused', message: PAUSED_MESSAGE },
-      { status: 503 }
-    );
-  }
-
-  // Free-tier lifetime cap enforcement — only for users who haven't paid.
-  // Admins are exempt. Plus / Pro / Animation roll up under the `pro` bucket;
-  // Fast has its own counter.
-  if (!isAdmin) {
-    const paid = await hasUserPaid(userId);
-    if (!paid) {
-      const used = await getLifetimeFreeCount(userId, bucket);
-      if (used >= FREE_TIER_CAP[bucket]) {
-        return Response.json(
-          {
-            success: false,
-            error: 'free_tier_cap_reached',
-            code: 'free_tier_cap_reached',
-            message: `You've used all free generations for this style tier. Top up to continue.`,
-            tier: bucket,
-          },
-          { status: 402 }
-        );
-      }
-    }
-  }
-
-  // Generate a unique idempotency key for this request
+  // S0 (n1-release-2-spec.md 6.2, R5-1): the request id and the job id exist
+  // before the admission, so the record and both log lines carry them. The
+  // job id is a pure hash of the user and the idempotency key validated above.
   const requestId = `gen:${userId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+  const idempotencyKey = body.idempotencyKey as string;
+  const jobId = await deriveJobId(userId, idempotencyKey);
 
-  // Debit tokens before generation. A first-ever balance can still meet a
-  // pause that began after the gate above; nothing was debited then.
-  let debitResult: Awaited<ReturnType<typeof debitTokens>>;
+  // Money paused (n1-ledger 005 section 4): no fresh generation starts, so
+  // nothing is debited. S0's admission record replaces the pause read: zero
+  // rows is the paused answer, and the record is completed in the finally,
+  // after the last money write (the send, or the catch's refund and records).
+  const admission = await admitMoney({
+    route: 'generate',
+    kind: 'job',
+    subject: jobId,
+    userId,
+    meta: { mode, tokenCost, requestId },
+    ids: { request_id: requestId, job_id: jobId, user_id: userId },
+  });
+  let outcome = 'exception';
   try {
-    debitResult = await debitTokens(userId, tokenCost, requestId, txCtx);
-  } catch (err) {
-    if (err instanceof MoneyPausedError) {
+    if (!admission.admitted) {
+      outcome = 'paused';
       return Response.json(
         { success: false, error: 'money_paused', message: PAUSED_MESSAGE },
         { status: 503 }
       );
     }
-    throw err;
-  }
-  if (!debitResult.success) {
-    return Response.json(
-      {
-        success: false,
-        error: 'Insufficient tokens',
-        balance: debitResult.balance,
-        required: debitResult.required,
-      },
-      { status: 402 }
-    );
-  }
 
-  // Free-tier lifetime counter — increment after successful debit, before the
-  // (potentially long) generation. A failed-and-refunded gen still counts as
-  // one free attempt; that's intentional to keep cap enforcement tight.
-  if (!isAdmin) {
-    try {
+
+    // Free-tier lifetime cap enforcement, only for users who haven't paid.
+    // Admins are exempt. Plus / Pro / Animation roll up under the `pro` bucket;
+    // Fast has its own counter.
+    if (!isAdmin) {
       const paid = await hasUserPaid(userId);
       if (!paid) {
-        await incrementLifetimeFreeCount(userId, bucket);
+        const used = await getLifetimeFreeCount(userId, bucket);
+        if (used >= FREE_TIER_CAP[bucket]) {
+          outcome = 'free_tier_cap (402)';
+          return Response.json(
+            {
+              success: false,
+              error: 'free_tier_cap_reached',
+              code: 'free_tier_cap_reached',
+              message: `You've used all free generations for this style tier. Top up to continue.`,
+              tier: bucket,
+            },
+            { status: 402 }
+          );
+        }
       }
-    } catch { /* best effort */ }
-  }
+    }
 
-  // === QUEUE-KICKOFF FEATURE FLAG (Confluence 87490562 §14) ===
-  // When enabled for this user, return 202 {jobId} after enqueueing instead
-  // of opening the SSE stream. The consumer Worker (sibling repo) handles
-  // the long-running RD call out-of-band; browser polls /api/generation-status.
-  //
-  // Day-1+ rollout: env var stays 'false'; admin auto-included via isAdminUser, staged-rollout users via isQueueBetaUser.
-  // When flag is OFF, behavior below is byte-identical to pre-refactor.
-  // queueKickoff hoisted above the debit; idempotencyKey already validated.
-  if (queueKickoff) {
-    // idempotencyKey is guaranteed valid by the pre-debit gate above.
-    const idempotencyKey = body.idempotencyKey as string;
+    // Dev only (spec 10.3): hold the request before its debit.
+    await devDelay('delay_before_debit');
 
-    // Wrap everything from here through the 202 in try/catch so a throw at
-    // any step (KV get/put, RD body build, enqueueJob's binding check, or
-    // q.send) refunds the debit and returns a structured 503. Mirrors the
-    // SSE path's compensating refund at line ~342-343. Without this, a
-    // synchronous throw bubbles to the Edge runtime → bare 500 text/plain
-    // → consumer never runs → consumer-side refund never fires → debit
-    // orphaned (Day-21 incident).
-    let jobId: string | undefined;
-    let enqueuedAt: number | undefined;
+    // Debit tokens before generation. A first-ever balance can still meet a
+    // pause that began after the gate above; nothing was debited then.
+    let debitResult: Awaited<ReturnType<typeof debitTokens>>;
     try {
-      jobId = await deriveJobId(userId, idempotencyKey);
-      const env = process.env as Record<string, unknown>;
-      const kv = env.SPRITEBREW_KV as {
-        get: (k: string) => Promise<string | null>;
-        put: (k: string, v: string, opts?: unknown) => Promise<void>;
-      };
+      debitResult = await debitTokens(userId, tokenCost, requestId, txCtx);
+    } catch (err) {
+      if (err instanceof MoneyPausedError) {
+        outcome = 'paused (no balance to open)';
+        return Response.json(
+          { success: false, error: 'money_paused', message: PAUSED_MESSAGE },
+          { status: 503 }
+        );
+      }
+      throw err;
+    }
+    if (!debitResult.success) {
+      outcome = 'insufficient_tokens (402)';
+      return Response.json(
+        {
+          success: false,
+          error: 'Insufficient tokens',
+          balance: debitResult.balance,
+          required: debitResult.required,
+        },
+        { status: 402 }
+      );
+    }
 
-      // Request-side idempotency: same jobId already exists → return it without re-enqueue.
-      const existing = await kv.get(`job:${jobId}`);
-      if (existing) {
+    // Dev only (spec 10.3): hold the request after its debit.
+    await devDelay('delay_after_debit');
+
+    // Free-tier lifetime counter: increment after successful debit, before the
+    // (potentially long) generation. A failed-and-refunded gen still counts as
+    // one free attempt; that's intentional to keep cap enforcement tight.
+    if (!isAdmin) {
+      try {
+        const paid = await hasUserPaid(userId);
+        if (!paid) {
+          await incrementLifetimeFreeCount(userId, bucket);
+        }
+      } catch { /* best effort */ }
+    }
+
+    // === QUEUE-KICKOFF FEATURE FLAG (Confluence 87490562 §14) ===
+    // When enabled for this user, return 202 {jobId} after enqueueing instead
+    // of opening the SSE stream. The consumer Worker (sibling repo) handles
+    // the long-running RD call out-of-band; browser polls /api/generation-status.
+    //
+    // Day-1+ rollout: env var stays 'false'; admin auto-included via isAdminUser, staged-rollout users via isQueueBetaUser.
+    // When flag is OFF, behavior below is byte-identical to pre-refactor.
+    // queueKickoff hoisted above the debit; idempotencyKey already validated.
+    if (queueKickoff) {
+      // Wrap everything from here through the 202 in try/catch so a throw at
+      // any step (KV get/put, RD body build, enqueueJob's binding check, or
+      // q.send) refunds the debit and returns a structured 503. Mirrors the
+      // SSE path's compensating refund at line ~342-343. Without this, a
+      // synchronous throw bubbles to the Edge runtime → bare 500 text/plain
+      // → consumer never runs → consumer-side refund never fires → debit
+      // orphaned (Day-21 incident).
+      let enqueuedAt: number | undefined;
+      try {
+        const env = process.env as Record<string, unknown>;
+        const kv = env.SPRITEBREW_KV as {
+          get: (k: string) => Promise<string | null>;
+          put: (k: string, v: string, opts?: unknown) => Promise<void>;
+        };
+
+        // Request-side idempotency: same jobId already exists → return it without re-enqueue.
+        const existing = await kv.get(`job:${jobId}`);
+        if (existing) {
+          outcome = 'replay (202, no new job)';
+          return new Response(
+            JSON.stringify({ jobId, replayed: true }),
+            { status: 202, headers: { 'content-type': 'application/json' } }
+          );
+        }
+
+        const now = Date.now();
+        enqueuedAt = now;
+        // S0 (spec 5.1, A3, N4): the pending record carries its cost and request
+        // id, both or neither, so an import can tie it to its debit.
+        await putJobState(kv, jobId, {
+          status: 'pending',
+          userId,
+          mode,
+          enqueuedAt: now,
+          tokenCost,
+          requestId,
+        });
+
+        // Translate camelCase request body → snake_case RD wire format BEFORE
+        // enqueueing. The consumer forwards body verbatim to RD, so the producer
+        // must hand it the exact RD shape (Build #2A.1). Mirrors runCreate/runAnimate.
+        const rdBody = mode === 'animate'
+          ? buildRdAnimateBody(body)
+          : buildRdCreateBody(body);
+
+        // fallbackInputImage: envelope-only (never sent to RD directly). Consumer
+        // uses it as the animation__any_animation fallback input for oversized
+        // primaries. Cloudflare Queues cap is 128KB per message; the primary
+        // inputImage already spends up to ANIMATE_INPUT_B64_SERVER_MAX (124KB),
+        // leaving ~4KB headroom. A 64×64 nearest-neighbor PNG is typically
+        // ~1-2KB base64, so the fallback fits in the common case, but we
+        // budget-check defensively and omit it if the combined size would
+        // approach the cap. Consumer degrades gracefully when absent.
+        const QUEUE_MSG_BUDGET_B64 = 125_000;
+        const primaryLen = typeof body.inputImage === 'string' ? body.inputImage.length : 0;
+        const fallbackLen =
+          typeof body.fallbackInputImage === 'string' ? body.fallbackInputImage.length : 0;
+        const includeFallback =
+          mode === 'animate' &&
+          typeof body.fallbackInputImage === 'string' &&
+          body.fallbackInputImage.length > 0 &&
+          primaryLen + fallbackLen <= QUEUE_MSG_BUDGET_B64;
+        if (
+          mode === 'animate' &&
+          typeof body.fallbackInputImage === 'string' &&
+          body.fallbackInputImage.length > 0 &&
+          !includeFallback
+        ) {
+          console.warn(
+            '[enqueue] fallbackInputImage omitted: total b64 would exceed queue budget',
+            JSON.stringify({ jobId, primaryLen, fallbackLen, budget: QUEUE_MSG_BUDGET_B64 })
+          );
+        }
+
+        // Dev-only fault for ruling G's test: the enqueue fails after the debit.
+        if ((await devFault())?.split(',').includes('enqueue_throw')) {
+          throw new Error('dev fault: enqueue');
+        }
+
+        // Dev only (spec 10.3): hold the request before its queue send.
+        await devDelay('delay_before_send');
+
+        await enqueueJob(env.RD_QUEUE, {
+          jobId,
+          userId,
+          idempotencyKey,
+          tokenCost,
+          mode,
+          body: rdBody,
+          enqueuedAt: now,
+          ...(includeFallback ? { fallbackInputImage: body.fallbackInputImage } : {}),
+        });
+
+        outcome = 'enqueued (202)';
         return new Response(
-          JSON.stringify({ jobId, replayed: true }),
+          JSON.stringify({ jobId }),
           { status: 202, headers: { 'content-type': 'application/json' } }
         );
-      }
+      } catch {
+        // Compensating refund. Same idempotency seed as the SSE path so a
+        // retry that lands in this branch (or in SSE) dedupes correctly via
+        // tokenBalance's token_idempotency:* check. Not gated by the money
+        // pause: it undoes this request's own debit.
+        const refundKey = `refund:${requestId}`;
+        const refund = await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey, txCtx);
+        // Ruling G, as amended by n1-ledger-02.md 002 B and C: claim no refund
+        // that was not confirmed. The record carries the debt with its evidence
+        // (24 h) so the consumer's sweep settles it once stores recover; the
+        // alarm row puts it on the morning digest as the fallback.
+        const refundOwed = refund.success
+          ? undefined
+          : {
+              tokenCost,
+              reason: 'refund_credit_failed',
+              requestId,
+              idempotencyKey: refundKey,
+              balanceWritten: refund.balanceWritten === true,
+            };
 
-      const now = Date.now();
-      enqueuedAt = now;
-      await putJobState(kv, jobId, {
-        status: 'pending',
-        userId,
-        mode,
-        enqueuedAt: now,
-      });
+        // Best-effort: write the job record as a terminal error, shaped like
+        // the consumer's error records, so the status route serves it and a
+        // resumed poll ends with the refund message instead of polling
+        // "pending" until it abandons. Inner try/catch: must never mask the
+        // refund return path above.
+        {
+          try {
+            const env = process.env as Record<string, unknown>;
+            const kv = env.SPRITEBREW_KV as {
+              put: (k: string, v: string, opts?: unknown) => Promise<void>;
+            } | undefined;
+            if (kv && typeof kv.put === 'function') {
+              const failedAt = Date.now();
+              await putJobState(kv, jobId, {
+                status: 'error',
+                userId,
+                mode,
+                enqueuedAt: enqueuedAt ?? failedAt,
+                failedAt,
+                error: 'Could not start your generation.',
+                errorCode: 'submission_failed',
+                attempts: 0,
+                refunded: refund.success,
+                ...(refundOwed ? { refundOwed } : {}),
+              }, refundOwed ? DEBT_TTL_S : undefined);
+            }
+          } catch { /* best-effort cleanup */ }
+        }
 
-      // Translate camelCase request body → snake_case RD wire format BEFORE
-      // enqueueing. The consumer forwards body verbatim to RD, so the producer
-      // must hand it the exact RD shape (Build #2A.1). Mirrors runCreate/runAnimate.
-      const rdBody = mode === 'animate'
-        ? buildRdAnimateBody(body)
-        : buildRdCreateBody(body);
-
-      // fallbackInputImage: envelope-only (never sent to RD directly). Consumer
-      // uses it as the animation__any_animation fallback input for oversized
-      // primaries. Cloudflare Queues cap is 128KB per message; the primary
-      // inputImage already spends up to ANIMATE_INPUT_B64_SERVER_MAX (124KB),
-      // leaving ~4KB headroom. A 64×64 nearest-neighbor PNG is typically
-      // ~1-2KB base64, so the fallback fits in the common case — but we
-      // budget-check defensively and omit it if the combined size would
-      // approach the cap. Consumer degrades gracefully when absent.
-      const QUEUE_MSG_BUDGET_B64 = 125_000;
-      const primaryLen = typeof body.inputImage === 'string' ? body.inputImage.length : 0;
-      const fallbackLen =
-        typeof body.fallbackInputImage === 'string' ? body.fallbackInputImage.length : 0;
-      const includeFallback =
-        mode === 'animate' &&
-        typeof body.fallbackInputImage === 'string' &&
-        body.fallbackInputImage.length > 0 &&
-        primaryLen + fallbackLen <= QUEUE_MSG_BUDGET_B64;
-      if (
-        mode === 'animate' &&
-        typeof body.fallbackInputImage === 'string' &&
-        body.fallbackInputImage.length > 0 &&
-        !includeFallback
-      ) {
-        console.warn(
-          '[enqueue] fallbackInputImage omitted: total b64 would exceed queue budget',
-          JSON.stringify({ jobId, primaryLen, fallbackLen, budget: QUEUE_MSG_BUDGET_B64 })
-        );
-      }
-
-      // Dev-only fault for ruling G's test: the enqueue fails after the debit.
-      if ((await devFault())?.split(',').includes('enqueue_throw')) {
-        throw new Error('dev fault: enqueue');
-      }
-
-      await enqueueJob(env.RD_QUEUE, {
-        jobId,
-        userId,
-        idempotencyKey,
-        tokenCost,
-        mode,
-        body: rdBody,
-        enqueuedAt: now,
-        ...(includeFallback ? { fallbackInputImage: body.fallbackInputImage } : {}),
-      });
-
-      return new Response(
-        JSON.stringify({ jobId }),
-        { status: 202, headers: { 'content-type': 'application/json' } }
-      );
-    } catch {
-      // Compensating refund. Same idempotency seed as the SSE path so a
-      // retry that lands in this branch (or in SSE) dedupes correctly via
-      // tokenBalance's token_idempotency:* check. Not gated by the money
-      // pause: it undoes this request's own debit.
-      const refundKey = `refund:${requestId}`;
-      const refund = await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey, txCtx);
-      // Ruling G, as amended by n1-ledger-02.md 002 B and C: claim no refund
-      // that was not confirmed. The record carries the debt with its evidence
-      // (24 h) so the consumer's sweep settles it once stores recover; the
-      // alarm row puts it on the morning digest as the fallback.
-      const refundOwed = refund.success
-        ? undefined
-        : {
+        if (refundOwed) {
+          const alarmed = await recordUnrefundedAlarm({
+            userId,
+            jobId,
             tokenCost,
             reason: 'refund_credit_failed',
             requestId,
             idempotencyKey: refundKey,
-            balanceWritten: refund.balanceWritten === true,
-          };
-
-      // Best-effort: write the job record as a terminal error, shaped like
-      // the consumer's error records, so the status route serves it and a
-      // resumed poll ends with the refund message instead of polling
-      // "pending" until it abandons. jobId is defined only if deriveJobId
-      // succeeded; the catch may have fired before that, in which case there
-      // is no record to update. Inner try/catch: must never mask the refund
-      // return path above.
-      if (jobId) {
-        try {
-          const env = process.env as Record<string, unknown>;
-          const kv = env.SPRITEBREW_KV as {
-            put: (k: string, v: string, opts?: unknown) => Promise<void>;
-          } | undefined;
-          if (kv && typeof kv.put === 'function') {
-            const failedAt = Date.now();
-            await putJobState(kv, jobId, {
-              status: 'error',
-              userId,
-              mode,
-              enqueuedAt: enqueuedAt ?? failedAt,
-              failedAt,
-              error: 'Could not start your generation.',
-              errorCode: 'submission_failed',
-              attempts: 0,
-              refunded: refund.success,
-              ...(refundOwed ? { refundOwed } : {}),
-            }, refundOwed ? DEBT_TTL_S : undefined);
-          }
-        } catch { /* best-effort cleanup */ }
-      }
-
-      if (refundOwed) {
-        const alarmed = await recordUnrefundedAlarm({
-          userId,
-          jobId,
-          tokenCost,
-          reason: 'refund_credit_failed',
-          requestId,
-          idempotencyKey: refundKey,
-          balanceWritten: refundOwed.balanceWritten,
-        });
-        if (!alarmed) {
-          // The record of last resort. No email, no token.
-          console.error(JSON.stringify({
-            source: 'generate',
-            event: 'unrefunded_alarm_not_written',
-            jobId,
-            userId,
-            tokenCost,
-            requestId,
             balanceWritten: refundOwed.balanceWritten,
-          }));
+          });
+          if (!alarmed) {
+            // The record of last resort. No email, no token.
+            console.error(JSON.stringify({
+              source: 'generate',
+              event: 'unrefunded_alarm_not_written',
+              jobId,
+              userId,
+              tokenCost,
+              requestId,
+              balanceWritten: refundOwed.balanceWritten,
+            }));
+          }
         }
+
+        outcome = refundOwed ? 'refund_owed (503)' : 'refunded (503)';
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: 'submission_failed',
+            // balanceWritten: the refund's balance write landed before the
+            // failure, so the tokens are back even though it is unconfirmed.
+            message: refund.success || refund.balanceWritten === true
+              ? 'Could not start your generation. Your tokens were refunded. Please try again.'
+              : 'Could not start your generation. We could not confirm your refund yet; your tokens will be returned. Please try again later.',
+          }),
+          { status: 503, headers: { 'content-type': 'application/json' } }
+        );
       }
-
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: 'submission_failed',
-          // balanceWritten: the refund's balance write landed before the
-          // failure, so the tokens are back even though it is unconfirmed.
-          message: refund.success || refund.balanceWritten === true
-            ? 'Could not start your generation. Your tokens were refunded. Please try again.'
-            : 'Could not start your generation. We could not confirm your refund yet; your tokens will be returned. Please try again later.',
-        }),
-        { status: 503, headers: { 'content-type': 'application/json' } }
-      );
     }
+    // === END QUEUE-KICKOFF GATE ===
+
+    // Open SSE stream
+    const { readable, writable } = new TransformStream<Uint8Array>();
+    const writer = writable.getWriter();
+
+    (async () => {
+      const heartbeat = startHeartbeat(writer);
+      try {
+        await writer.write(sseEvent({ type: 'status', message: 'Starting generation...' }));
+        const result = mode === 'animate' ? await runAnimate(body) : await runCreate(body);
+        await writer.write(sseEvent({ type: 'result', data: result }));
+      } catch (err) {
+        // RD API failure: refund the tokens
+        const refundKey = `refund:${requestId}`;
+        await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey, txCtx);
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        await writer.write(sseEvent({ type: 'error', message })).catch(() => {});
+      } finally {
+        clearInterval(heartbeat);
+        await writer.write(sseDone()).catch(() => {});
+        await writer.close().catch(() => {});
+      }
+    })();
+
+    return new Response(readable, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+      },
+    });
+
+  } finally {
+    await admission.complete(outcome);
   }
-  // === END QUEUE-KICKOFF GATE ===
-
-  // Open SSE stream
-  const { readable, writable } = new TransformStream<Uint8Array>();
-  const writer = writable.getWriter();
-
-  (async () => {
-    const heartbeat = startHeartbeat(writer);
-    try {
-      await writer.write(sseEvent({ type: 'status', message: 'Starting generation...' }));
-      const result = mode === 'animate' ? await runAnimate(body) : await runCreate(body);
-      await writer.write(sseEvent({ type: 'result', data: result }));
-    } catch (err) {
-      // RD API failure — refund the tokens
-      const refundKey = `refund:${requestId}`;
-      await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey, txCtx);
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      await writer.write(sseEvent({ type: 'error', message })).catch(() => {});
-    } finally {
-      clearInterval(heartbeat);
-      await writer.write(sseDone()).catch(() => {});
-      await writer.close().catch(() => {});
-    }
-  })();
-
-  return new Response(readable, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-    },
-  });
 }
 
 // ── Validation ──

@@ -18,7 +18,8 @@ import {
   markEmailListClaimed,
 } from '@/lib/tokenBalance';
 import { EMAIL_LIST_BONUS_TOKENS } from '@/lib/constants';
-import { isMoneyPaused, UPDATING_MESSAGE } from '@/lib/moneyPause';
+import { UPDATING_MESSAGE } from '@/lib/moneyPause';
+import { admitMoney } from '@/lib/moneyAdmission';
 
 interface ClerkUser {
   primary_email_address_id?: string;
@@ -61,78 +62,100 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
-  // A credit follows the subscription, so neither happens while money is paused.
-  if (await isMoneyPaused()) {
-    return Response.json({ success: false, error: UPDATING_MESSAGE, paused: true }, { status: 503 });
-  }
-
-  const apiKey = process.env.RESEND_API_KEY;
-  const audienceId = process.env.RESEND_AUDIENCE_ID;
-  if (!apiKey || !audienceId) {
-    console.error('[Email List] RESEND_API_KEY or RESEND_AUDIENCE_ID not configured');
-    return Response.json(
-      { success: false, error: 'Newsletter signup is temporarily unavailable. Try again later.' },
-      { status: 500 }
-    );
-  }
-
-  const email = await fetchClerkPrimaryEmail(userId);
-  if (!email) {
-    return Response.json(
-      { success: false, error: 'Could not read your email. Try again or contact support.' },
-      { status: 400 }
-    );
-  }
-
-  // Add to the Resend audience. The legacy { audienceId, email } form is the
-  // simplest path — Resend's docs still support it.
+  // A credit follows the subscription, so neither happens while money is
+  // paused. S0's admission record replaces the pause read (n1-release-2-spec.md
+  // 6.2, R5-1): zero rows is the paused answer, and the record is completed in
+  // the finally, after the flag.
+  const admission = await admitMoney({
+    route: 'email_list',
+    kind: 'user',
+    subject: userId,
+    userId,
+    ids: { user_id: userId, reward_key: `email_list:${userId}` },
+  });
+  let outcome = 'exception';
   try {
-    const resend = new Resend(apiKey);
-    const result = await resend.contacts.create({
-      audienceId,
-      email,
-      unsubscribed: false,
-    });
-    // Resend's SDK returns { data, error } — treat truthy `error` as failure.
-    const errPayload = (result as { error?: { message?: string } | null }).error;
-    if (errPayload && errPayload.message && !/already exists/i.test(errPayload.message)) {
-      console.error('[Email List] Resend create failed:', errPayload.message);
+    if (!admission.admitted) {
+      outcome = 'paused';
+      return Response.json({ success: false, error: UPDATING_MESSAGE, paused: true }, { status: 503 });
+    }
+
+    const apiKey = process.env.RESEND_API_KEY;
+    const audienceId = process.env.RESEND_AUDIENCE_ID;
+    if (!apiKey || !audienceId) {
+      console.error('[Email List] RESEND_API_KEY or RESEND_AUDIENCE_ID not configured');
+      outcome = 'resend_unconfigured (500)';
+      return Response.json(
+        { success: false, error: 'Newsletter signup is temporarily unavailable. Try again later.' },
+        { status: 500 }
+      );
+    }
+
+    const email = await fetchClerkPrimaryEmail(userId);
+    if (!email) {
+      outcome = 'no_email (400)';
+      return Response.json(
+        { success: false, error: 'Could not read your email. Try again or contact support.' },
+        { status: 400 }
+      );
+    }
+
+    // Add to the Resend audience. The legacy { audienceId, email } form is the
+    // simplest path; Resend's docs still support it.
+    try {
+      const resend = new Resend(apiKey);
+      const result = await resend.contacts.create({
+        audienceId,
+        email,
+        unsubscribed: false,
+      });
+      // Resend's SDK returns { data, error }: treat a truthy `error` as failure.
+      const errPayload = (result as { error?: { message?: string } | null }).error;
+      if (errPayload && errPayload.message && !/already exists/i.test(errPayload.message)) {
+        console.error('[Email List] Resend create failed:', errPayload.message);
+        outcome = 'resend_failed (500)';
+        return Response.json(
+          { success: false, error: 'Newsletter signup failed. Try again in a moment.' },
+          { status: 500 }
+        );
+      }
+      // "already exists" is fine: we still credit the bonus once (idempotency
+      // is gated by the bonus_email_list flag, not the Resend response).
+    } catch (err) {
+      console.error('[Email List] Resend exception:', err);
+      outcome = 'resend_failed (500)';
       return Response.json(
         { success: false, error: 'Newsletter signup failed. Try again in a moment.' },
         { status: 500 }
       );
     }
-    // "already exists" is fine — we still credit the bonus once (idempotency
-    // is gated by the bonus_email_list flag, not the Resend response).
-  } catch (err) {
-    console.error('[Email List] Resend exception:', err);
-    return Response.json(
-      { success: false, error: 'Newsletter signup failed. Try again in a moment.' },
-      { status: 500 }
+
+    // Resend success → credit + flag
+    const credit = await creditTokens(
+      userId,
+      EMAIL_LIST_BONUS_TOKENS,
+      'earn_back_email_list',
+      `email_list:${userId}`,
+      { source: 'email_list' }
     );
+    if (!credit.success) {
+      outcome = 'credit_failed (500)';
+      return Response.json(
+        { success: false, error: 'Could not credit tokens. Contact support.' },
+        { status: 500 }
+      );
+    }
+
+    await markEmailListClaimed(userId);
+
+    outcome = 'credited';
+    return Response.json({
+      success: true,
+      granted: EMAIL_LIST_BONUS_TOKENS,
+      balance: credit.balance,
+      claimed: true,
+    });
+  } finally {
+    await admission.complete(outcome);
   }
-
-  // Resend success → credit + flag
-  const credit = await creditTokens(
-    userId,
-    EMAIL_LIST_BONUS_TOKENS,
-    'earn_back_email_list',
-    `email_list:${userId}`,
-    { source: 'email_list' }
-  );
-  if (!credit.success) {
-    return Response.json(
-      { success: false, error: 'Could not credit tokens. Contact support.' },
-      { status: 500 }
-    );
-  }
-
-  await markEmailListClaimed(userId);
-
-  return Response.json({
-    success: true,
-    granted: EMAIL_LIST_BONUS_TOKENS,
-    balance: credit.balance,
-    claimed: true,
-  });
 }

@@ -25,7 +25,8 @@ import {
   EARN_BACK_FLAG_TTL_SECONDS,
 } from '@/lib/constants';
 import { txMetadata, type TxContext } from '@/lib/tokenTxMeta';
-import { devFault, isMoneyPaused, MoneyPausedError } from '@/lib/moneyPause';
+import { devFault, MoneyPausedError } from '@/lib/moneyPause';
+import { admitMoney } from '@/lib/moneyAdmission';
 
 const TX_TTL = 7_776_000; // 90 days
 const IDEMPOTENCY_TTL = 604_800; // 7 days
@@ -163,17 +164,41 @@ async function isExistingUser(kv: KV, userId: string): Promise<boolean> {
  * bonus — they can still buy tokens but can't farm the free tier.
  */
 async function initBalance(kv: KV, userId: string): Promise<number> {
-  // Opening a balance is a money write: refused while paused (n1-ledger 005 section 4).
-  if (await isMoneyPaused()) throw new MoneyPausedError();
+  // Opening a balance is a money write: refused while paused (n1-ledger 005
+  // section 4). S0's admission record replaces the pause read: route
+  // 'opening', subject the user, completed in its own finally, so an opening
+  // inside another admitted request takes its own record (spec 6.2, R5-1).
+  const admission = await admitMoney({
+    route: 'opening',
+    kind: 'user',
+    subject: userId,
+    userId,
+    ids: { user_id: userId },
+  });
+  let outcome = 'exception';
+  try {
+    if (!admission.admitted) {
+      outcome = 'paused';
+      throw new MoneyPausedError();
+    }
+    const opened = await openBalance(kv, userId);
+    outcome = opened.already ? 'already_opened' : `opened (${opened.balance})`;
+    return opened.balance;
+  } finally {
+    await admission.complete(outcome);
+  }
+}
 
+/** The opening's writes, admitted by initBalance (release 1's body, unchanged). */
+async function openBalance(kv: KV, userId: string): Promise<{ balance: number; already: boolean }> {
   // Idempotency: prevent double-init
   const idemKey = idempotencyKey(`signup:${userId}`);
   const existing = await kv.get(idemKey);
   if (existing) {
     // Already initialized — read current balance
     const raw = await kv.get(`token_balance:${userId}`);
-    if (raw) return (JSON.parse(raw) as BalanceRecord).balance;
-    return SIGNUP_BONUS_TOKENS; // shouldn't happen, but safe fallback
+    if (raw) return { balance: (JSON.parse(raw) as BalanceRecord).balance, already: true };
+    return { balance: SIGNUP_BONUS_TOKENS, already: true }; // shouldn't happen, but safe fallback
   }
 
   const blocked = await kv.get(`disposable_blocked:${userId}`);
@@ -228,7 +253,7 @@ async function initBalance(kv: KV, userId: string): Promise<number> {
     }
   }
 
-  return bonus;
+  return { balance: bonus, already: false };
 }
 
 // ── Public API ──

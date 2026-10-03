@@ -13,7 +13,8 @@ export const runtime = 'edge';
 import { getAuthedUserId } from '@/lib/edgeAuth';
 import { consumeSignupGrant, getTokenBalance, hasClaimedEmailList } from '@/lib/tokenBalance';
 import { checkAndGrantDailyReward, getStreakSnapshot } from '@/lib/dailyReward';
-import { isMoneyPaused, MoneyPausedError, UPDATING_MESSAGE } from '@/lib/moneyPause';
+import { MoneyPausedError, UPDATING_MESSAGE } from '@/lib/moneyPause';
+import { admitMoney } from '@/lib/moneyAdmission';
 
 export type RewardPayload =
   | { type: 'signup'; amount: number }
@@ -42,51 +43,69 @@ export async function POST(request: Request): Promise<Response> {
   // While money is paused neither step runs: step 2 is a credit, and step 1
   // would mark a not-yet-opened account's celebration as shown. Both stay
   // claimable once money reopens (the daily reward on the same UTC day).
-  const paused = await isMoneyPaused();
-  if (!paused) {
-    // 1. Signup-bonus celebration (one-shot)
-    try {
-      const signup = await consumeSignupGrant(userId);
-      if (signup && signup.amount > 0) {
-        rewards.push({
-          type: signup.source === 'early_adopter' ? 'early_adopter' : 'signup',
-          amount: signup.amount,
-        });
-      }
-    } catch { /* non-fatal */ }
-
-    // 2. Daily login + streak
-    try {
-      const daily = await checkAndGrantDailyReward(userId);
-      if (daily) {
-        rewards.push({
-          type: daily.isStreakBonus ? 'streak_bonus' : 'daily_login',
-          amount: daily.granted,
-          streakDay: daily.streakDay,
-        });
-      }
-    } catch { /* non-fatal */ }
-  }
-
-  let balance: number;
+  // S0's admission record replaces the pause read (n1-release-2-spec.md 6.2,
+  // R5-1): zero rows is the paused answer, and the record is completed in the
+  // finally, after the reward, its streak writes and the balance read.
+  const rewardKey = `daily_login:${userId}:${new Date().toISOString().split('T')[0]}`;
+  const admission = await admitMoney({
+    route: 'daily_reward',
+    kind: 'user',
+    subject: userId,
+    userId,
+    ids: { user_id: userId, reward_key: rewardKey },
+  });
+  let outcome = 'exception';
   try {
-    balance = await getTokenBalance(userId);
-  } catch (err) {
-    if (err instanceof MoneyPausedError) {
-      return Response.json({ success: false, error: UPDATING_MESSAGE, paused: true }, { status: 503 });
-    }
-    throw err;
-  }
-  const streak = await getStreakSnapshot(userId);
-  const emailListClaimed = await hasClaimedEmailList(userId);
+    const paused = !admission.admitted;
+    if (!paused) {
+      // 1. Signup-bonus celebration (one-shot)
+      try {
+        const signup = await consumeSignupGrant(userId);
+        if (signup && signup.amount > 0) {
+          rewards.push({
+            type: signup.source === 'early_adopter' ? 'early_adopter' : 'signup',
+            amount: signup.amount,
+          });
+        }
+      } catch { /* non-fatal */ }
 
-  const body: DailyRewardResponse = {
-    success: true,
-    rewards,
-    balance,
-    streak: { count: streak.count, lifetimeMax: streak.lifetimeMax },
-    emailListClaimed,
-    ...(paused ? { paused: true as const } : {}),
-  };
-  return Response.json(body);
+      // 2. Daily login + streak
+      try {
+        const daily = await checkAndGrantDailyReward(userId);
+        if (daily) {
+          rewards.push({
+            type: daily.isStreakBonus ? 'streak_bonus' : 'daily_login',
+            amount: daily.granted,
+            streakDay: daily.streakDay,
+          });
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    let balance: number;
+    try {
+      balance = await getTokenBalance(userId);
+    } catch (err) {
+      if (err instanceof MoneyPausedError) {
+        outcome = 'paused (no balance to open)';
+        return Response.json({ success: false, error: UPDATING_MESSAGE, paused: true }, { status: 503 });
+      }
+      throw err;
+    }
+    const streak = await getStreakSnapshot(userId);
+    const emailListClaimed = await hasClaimedEmailList(userId);
+
+    const body: DailyRewardResponse = {
+      success: true,
+      rewards,
+      balance,
+      streak: { count: streak.count, lifetimeMax: streak.lifetimeMax },
+      emailListClaimed,
+      ...(paused ? { paused: true as const } : {}),
+    };
+    outcome = paused ? 'paused' : rewards.length ? `rewarded (${rewards.map((r) => r.type).join(',')})` : 'no reward due';
+    return Response.json(body);
+  } finally {
+    await admission.complete(outcome);
+  }
 }

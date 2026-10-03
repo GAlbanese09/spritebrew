@@ -6,7 +6,9 @@ import { creditTokens, getTokenBalance, setUserPaid } from '@/lib/tokenBalance';
 import { debitTokensForRefund } from '@/lib/tokenDebit';
 import { setAccountStatus } from '@/lib/accountLock';
 import { recordEvidenceSnapshot, loadConsentSnapshot } from '@/lib/disputeEvidence';
-import { isMoneyPaused } from '@/lib/moneyPause';
+import { admitMoney } from '@/lib/moneyAdmission';
+import { devDelay } from '@/lib/moneyPause';
+import { recordStripeRefusal } from '@/lib/stripeHeld';
 
 // ── KV binding ──
 
@@ -59,56 +61,87 @@ export async function POST(request: Request) {
     return Response.json({ error: `Webhook signature verification failed: ${msg}` }, { status: 400 });
   }
 
-  // Money paused (n1-ledger 005 section 4): answer 503 before the dedupe read
-  // and without marking the event, so Stripe retries it after the pause.
-  if (await isMoneyPaused()) {
-    return Response.json({ error: 'Money writes are paused. Retry later.' }, { status: 503 });
-  }
-
-  // Idempotency check
   const kv = getKV();
   const eventKey = `webhook:stripe:${event.id}`;
-  if (kv) {
-    try {
-      const existing = await kv.get(eventKey);
-      if (existing) {
-        return Response.json({ received: true, deduplicated: true });
-      }
-    } catch {
-      // KV check failed — continue processing
-    }
-  }
 
-  // A handler that throws leaves the event unmarked and answers 500, so
-  // Stripe retries it; creditTokens keyed on event.id credits once.
+  // S0's admission record replaces the pause read (n1-release-2-spec.md 6.2,
+  // R5-1): admitted only while money is open, completed in the finally after
+  // the mark. A checkout names its user in its metadata; a refund or dispute
+  // learns its user later, from the purchase mapping, so its record has none.
+  const checkoutUserId = event.type === 'checkout.session.completed'
+    ? ((event.data.object as Stripe.Checkout.Session).metadata?.userId ?? null)
+    : null;
+  const admission = await admitMoney({
+    route: 'stripe_webhook',
+    kind: 'event',
+    subject: event.id,
+    userId: checkoutUserId,
+    ids: { event_id: event.id, event_type: event.type },
+  });
+  let outcome = 'exception';
   try {
-    // ── checkout.session.completed ──
-    if (event.type === 'checkout.session.completed') {
-      await handleCheckoutCompleted(event, kv);
+    // Money paused (n1-ledger 005 section 4): answer 503 without marking the
+    // event, so Stripe retries it after the pause. Before the 503, the
+    // refusal row records the event with release 1's two keys (spec 4.13).
+    if (!admission.admitted) {
+      const r1Keys = await recordStripeRefusal({
+        kv,
+        eventId: event.id,
+        eventType: event.type,
+        eventCreatedS: event.created,
+      });
+      outcome = `paused (r1_keys ${r1Keys})`;
+      return Response.json({ error: 'Money writes are paused. Retry later.' }, { status: 503 });
     }
 
-    // ── charge.refunded ──
-    if (event.type === 'charge.refunded') {
-      await handleChargeRefunded(event, kv);
+    // Idempotency check
+    if (kv) {
+      try {
+        const existing = await kv.get(eventKey);
+        if (existing) {
+          outcome = 'deduplicated';
+          return Response.json({ received: true, deduplicated: true });
+        }
+      } catch {
+        // KV check failed: continue processing
+      }
     }
 
-    // ── charge.dispute.created ──
-    if (event.type === 'charge.dispute.created') {
-      await handleDisputeCreated(event, kv);
-    }
-  } catch (err) {
-    console.error('[Stripe Webhook] Handler failed, event left unmarked:', event.type, err instanceof Error ? err.message : err);
-    return Response.json({ error: 'Webhook handler failed.' }, { status: 500 });
-  }
-
-  // Mark event as processed
-  if (kv) {
+    // A handler that throws leaves the event unmarked and answers 500, so
+    // Stripe retries it; creditTokens keyed on event.id credits once.
     try {
-      await kv.put(eventKey, '1', { expirationTtl: 604800 }); // 7 days
-    } catch { /* best effort */ }
-  }
+      // ── checkout.session.completed ──
+      if (event.type === 'checkout.session.completed') {
+        await handleCheckoutCompleted(event, kv);
+      }
 
-  return Response.json({ received: true });
+      // ── charge.refunded ──
+      if (event.type === 'charge.refunded') {
+        await handleChargeRefunded(event, kv);
+      }
+
+      // ── charge.dispute.created ──
+      if (event.type === 'charge.dispute.created') {
+        await handleDisputeCreated(event, kv);
+      }
+    } catch (err) {
+      console.error('[Stripe Webhook] Handler failed, event left unmarked:', event.type, err instanceof Error ? err.message : err);
+      outcome = 'handler_failed (500, unmarked)';
+      return Response.json({ error: 'Webhook handler failed.' }, { status: 500 });
+    }
+
+    // Mark event as processed
+    if (kv) {
+      try {
+        await kv.put(eventKey, '1', { expirationTtl: 604800 }); // 7 days
+      } catch { /* best effort */ }
+    }
+
+    outcome = 'processed';
+    return Response.json({ received: true });
+  } finally {
+    await admission.complete(outcome);
+  }
 }
 
 // ── checkout.session.completed ──
@@ -129,6 +162,9 @@ async function handleCheckoutCompleted(event: Stripe.Event, kv: KV | null): Prom
     console.error('[Stripe Webhook] Invalid token amount:', tokensStr);
     return;
   }
+
+  // Dev only (spec 10.3): hold the delivery before its credit.
+  await devDelay('delay_before_credit');
 
   // No catch here: a failed credit must reach POST, which answers 500
   // unmarked so Stripe retries (n1-ledger 005 section 4, ruling F).

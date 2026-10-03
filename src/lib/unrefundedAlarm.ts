@@ -21,14 +21,14 @@ interface D1Like {
   };
 }
 
-const NY_DAY = new Intl.DateTimeFormat('en-CA', {
+export const NY_DAY = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/New_York',
   year: 'numeric',
   month: '2-digit',
   day: '2-digit',
 });
 
-function stableStringify(value: unknown): string {
+export function stableStringify(value: unknown): string {
   const sort = (v: unknown): unknown => {
     if (Array.isArray(v)) return v.map(sort);
     if (v !== null && typeof v === 'object') {
@@ -44,7 +44,7 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(sort(value));
 }
 
-async function sha256Hex(text: string): Promise<string> {
+export async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }

@@ -70,20 +70,52 @@ let controlThrows = false;
 let pauseReads = 0;
 // Sequenced answers for money_pause, consumed one per read, then `control`.
 let pauseSequence = [];
+// S0 (n1-release-2-spec.md 6.2, 4.13): admission records and refusal rows,
+// modeled as their SQL behaves. An admission reads money_pause as the pause
+// read did, so it consumes pauseSequence and counts in pauseReads.
+let admissions = new Map();
+let heldRows = [];
+const pauseValue = () => {
+  pauseReads++;
+  return pauseSequence.length ? pauseSequence.shift() : control.money_pause;
+};
 function ledgerStub() {
   return {
-    prepare: (sql) => ({
-      first: async () => {
-        calls.push('ledger.first');
-        if (controlThrows) throw new Error('stub: D1 unavailable');
-        const key = /'(money_pause|dev_fault)'/.exec(sql)?.[1];
-        if (key === 'money_pause') {
-          pauseReads++;
-          if (pauseSequence.length) return { value: pauseSequence.shift() };
-        }
-        return key && control[key] !== undefined ? { value: control[key] } : null;
-      },
-    }),
+    prepare: (sql) => {
+      const stmt = {
+        args: [],
+        bind: (...a) => { stmt.args = a; return stmt; },
+        run: async () => {
+          calls.push('ledger.run');
+          if (controlThrows) throw new Error('stub: D1 unavailable');
+          const a = stmt.args;
+          if (/INSERT INTO money_admissions/.test(sql)) {
+            if (pauseValue() === '0') admissions.set(a[0], { route: a[1], kind: a[2], subject: a[3], user: a[4], meta: a[5], completed: null });
+          } else if (/UPDATE money_admissions SET completed_at_ms/.test(sql)) {
+            const row = admissions.get(a[0]);
+            if (row && row.completed === null) row.completed = a[1];
+          } else if (/INSERT INTO stripe_held/.test(sql)) {
+            if (control.money_pause !== undefined && control.money_pause !== '0') heldRows.push({ event: a[0], r1Keys: a[1] });
+          }
+          return { meta: {} };
+        },
+        first: async () => {
+          calls.push('ledger.first');
+          if (controlThrows) throw new Error('stub: D1 unavailable');
+          if (/FROM money_admissions/.test(sql)) {
+            const row = admissions.get(stmt.args[0]);
+            if (!row) return null;
+            return /completed_at_ms, closed_at_ms/.test(sql)
+              ? { completed_at_ms: row.completed, closed_at_ms: null }
+              : { admission_id: stmt.args[0] };
+          }
+          const key = /'(money_pause|dev_fault)'/.exec(sql)?.[1];
+          if (key === 'money_pause') return { value: pauseValue() };
+          return key && control[key] !== undefined ? { value: control[key] } : null;
+        },
+      };
+      return stmt;
+    },
   };
 }
 let eventsRows = [];
@@ -137,6 +169,7 @@ function env({ ledger = true, kv = true, kickoff = 'true', events = true } = {})
 function reset(over = {}) {
   calls = []; kvMap = new Map(); kvTtl = new Map(); kvFailPut = () => false; eventsRows = []; eventsThrow = false;
   control = { money_pause: '0' }; controlThrows = false; pauseSequence = []; pauseReads = 0; queueThrows = false;
+  admissions = new Map(); heldRows = [];
   env(over);
 }
 globalThis.fetch = async () => { calls.push('fetch'); return new Response('{}', { status: 503 }); };
@@ -404,7 +437,10 @@ check('email-list paused, already claimed -> 200 alreadyClaimed (no money)', res
 reset(); control.money_pause = '1'; seedBalance(USER, 10);
 res = await R['stripe/webhook'].POST(stripeReq(checkoutEvent('evt_paused')));
 check('webhook paused -> 503', res.status === 503);
-check('webhook paused -> no dedupe read, no write, not marked', !calls.some((c) => c.includes('webhook:stripe:')) && puts().length === 0 && balanceOf(USER) === 10);
+// S0 (spec 7.5, 4.13): the paused branch reads release 1's two keys for its refusal row; still no KV write.
+check('webhook paused -> reads the two release 1 keys only, no KV write, not marked',
+  calls.filter((c) => c.startsWith('kv.get')).sort().join() === 'kv.get token_idempotency:evt_paused,kv.get webhook:stripe:evt_paused'
+  && puts().length === 0 && balanceOf(USER) === 10);
 
 reset(); controlThrows = true; seedBalance(USER, 10);
 res = await R['stripe/webhook'].POST(stripeReq(checkoutEvent('evt_readfail')));

@@ -1,5 +1,13 @@
 import { getAuthedUserId } from '@/lib/edgeAuth';
 import { getJobStateBucket, jobStateR2Key } from '@/lib/jobState';
+import { isMoneyPaused } from '@/lib/moneyPause';
+
+// S0's paused loader copy (n1-release-2-spec.md 5.5, O2). UNAPPROVED COPY:
+// HQ-1's Proposal text, used on dev only until HQ approves it for production.
+const PAUSED_STATUS_COPY = 'SpriteBrew is updating. Your generation will start in a few minutes, or its tokens will be returned.';
+
+/** A pending or running job older than this, while money is paused, shows the copy. */
+const PAUSED_COPY_AFTER_MS = 60_000;
 
 export const runtime = 'edge';
 
@@ -149,8 +157,17 @@ export async function GET(
       refunded: state.refunded ?? false,
     }, 200, source);
   }
+  // S0 (O2): a job waiting more than 60 s while money is paused shows the
+  // paused copy. A fresh job does no pause read; a failed read counts as
+  // paused (fail closed), so the copy shows then too.
+  const since = typeof state.enqueuedAt === 'number' ? state.enqueuedAt
+    : typeof state.startedAt === 'number' ? state.startedAt : null;
+  const waiting = (state.status === 'pending' || state.status === 'running')
+    && since !== null && Date.now() - since > PAUSED_COPY_AFTER_MS;
+  const paused = waiting && await isMoneyPaused();
   return jsonResponse({
     status: state.status,
     startedAt: state.startedAt ?? null,
+    ...(paused ? { paused: true, message: PAUSED_STATUS_COPY } : {}),
   }, 200, source);
 }

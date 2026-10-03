@@ -28,6 +28,25 @@ export const UPDATING_MESSAGE = 'SpriteBrew is updating. Try again in a few minu
 
 const PAUSE_READ_TIMEOUT_MS = 2_000;
 
+/**
+ * The same bound for S0's ledger and events statements (spec 6.2, 4.13): a
+ * statement that has not answered in 2 s is treated as failed. The work itself
+ * is not cancelled; a caller that must know its end keeps its promise.
+ */
+export async function withTimeout<T>(work: Promise<T>, what: string, ms = PAUSE_READ_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${what} timed out`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export async function isMoneyPaused(): Promise<boolean> {
   const env = process.env as Record<string, unknown>;
   const db = env.LEDGER_DB as D1Like | undefined;
@@ -82,4 +101,34 @@ export async function devFault(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * S0's dev faults (n1-release-2-spec.md 10.3): the same row read as a
+ * `name[:scope]` comma list. Answers undefined when the fault is absent, null
+ * when it is set without a scope, or its scope. Release 1's exact-name faults
+ * keep working, since they carry no scope.
+ */
+export async function devFaultScope(name: string): Promise<string | null | undefined> {
+  const raw = await devFault();
+  if (!raw) return undefined;
+  for (const entry of raw.split(',')) {
+    const [faultName, ...rest] = entry.trim().split(':');
+    if (faultName === name) return rest.length ? rest.join(':') : null;
+  }
+  return undefined;
+}
+
+/**
+ * The four hold faults (10.3): `delay_before_debit:<minutes>`,
+ * `delay_after_debit:<minutes>`, `delay_before_send:<minutes>` and
+ * `delay_before_credit:<minutes>` hold the request that long, dev only, so the
+ * drain tests can keep a request in flight across a pause.
+ */
+export async function devDelay(name: string): Promise<void> {
+  const scope = await devFaultScope(name);
+  const minutes = scope == null ? NaN : Number(scope);
+  if (!Number.isFinite(minutes) || minutes <= 0) return;
+  console.log(JSON.stringify({ source: 'dev-fault', event: 'delay', fault: name, minutes }));
+  await new Promise((resolve) => setTimeout(resolve, minutes * 60_000));
 }

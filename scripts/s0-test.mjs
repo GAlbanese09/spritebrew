@@ -534,8 +534,10 @@ const BrewingLoader = (await loadClient('BrewingLoader')).default;
 const { createElement } = await import('react');
 const { renderToStaticMarkup } = await import('react-dom/server');
 
-// The forwarding, end to end: pollClient's fetch is served by the real status
-// route, then a canned terminal error ends the loop.
+// The forwarding, from the real status route to pollClient's onUpdate:
+// pollClient's fetch is served by the route, then a canned terminal error
+// ends the loop. The hook, the forms' mirror and GenerationResult's prop are
+// not loaded here (no React runner in this repo); the dev page check covers them.
 const realFetch = globalThis.fetch;
 const pollThrough = async (bodies) => {
   const states = [];
@@ -579,7 +581,7 @@ check('pollClient forwards no copy without both paused: true and a message, and 
 store.getState().setGenerationProgress(1, 'pending', 'create', COPY);
 const withCopy = store.getState().generationPausedMessage;
 store.getState().setGenerationProgress(1, 'pending', 'create', null);
-check('the store keeps the paused copy while set and clears it with the poll', withCopy === COPY && store.getState().generationPausedMessage === null);
+check('setGenerationProgress stores the paused copy and replaces it with null', withCopy === COPY && store.getState().generationPausedMessage === null);
 
 // The swap: the copy replaces the expectation line while present; the usual line once absent.
 const USUAL = 'Sprites usually take about 30 seconds, sometimes up to a minute and a half';
@@ -593,6 +595,16 @@ check('BrewingLoader shows the paused copy in place of its usual line while pres
 check('BrewingLoader shows its usual line once the copy is absent', usual.includes(USUAL) && !usual.includes(COPY));
 check('the swap changes only that line (headline and stage unchanged)',
   swapped.replace(COPY, USUAL) === usual && swapped.includes('Brewing your sprites...') && swapped.includes('Queued'));
+// Past the long threshold (create 92,378 ms, animate 225,994 ms), where a held
+// job usually is by the time the copy arrives: the copy replaces the long line too.
+const LONG = 'Taking longer than usual. Still brewing, hang on.';
+for (const [mode, action, afterMs] of [['create', null, 92_378], ['animate', 'walking', 225_994]]) {
+  const late = (pausedMessage) => render({ mode, action, pausedMessage, startedAt: Date.now() - afterMs - 5_000 });
+  const lateCopy = late(COPY);
+  const lateUsual = late(null);
+  check(`BrewingLoader past the ${mode} long threshold: the copy in place of the long line, and the long line once absent`,
+    lateCopy.includes(COPY) && !lateCopy.includes(LONG) && lateUsual.includes(LONG) && !lateUsual.includes(COPY));
+}
 
 say(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -23,9 +23,9 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
-  // ── 0.6.1: Privacy policy updated (Oct 3, 2026) ──
+  // ── 0.6.1: Privacy policy updated (Oct 4, 2026) ──
   {
-    releaseLabel: 'OCT 3, 2026: PRIVACY POLICY UPDATED',
+    releaseLabel: 'OCT 4, 2026: PRIVACY POLICY UPDATED',
     emoji: '🔒',
     title: 'Privacy policy updated',
     description:

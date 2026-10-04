@@ -1,39 +1,29 @@
 /**
- * Token balance system — KV-backed economy for generation credits.
+ * Token balances on the D1 ledger, `spritebrew-ledger` (n1-release-2-spec.md
+ * revision 9, S4; 6.2: "4.1, 4.2 behind the same names"). Money truth is the
+ * ledger: every credit is one guarded batch (src/lib/money.ts, src/lib/ledger.ts),
+ * and the balance is read from `balances`, failing closed: never
+ * SIGNUP_BONUS_TOKENS as a guess and never a fail-open debit. Release 2 writes
+ * no `token_balance:`, `token_idempotency:` or `token_tx:` key (009 A).
  *
- * KV schema:
- *   token_balance:{userId}              → JSON { balance, created_at, last_updated }
- *   token_tx:{userId}:{ts}:{uid}        → JSON { type, amount, reason, balance_after, style?, timestamp } — TTL 90 days
- *                                          + KV metadata TxMetadata { type, reason, style?, mode?, size? } (see tokenTxMeta.ts)
- *   token_idempotency:{key}             → "1" — TTL 7 days
- *   bonus_email_verified:{userId}       → "1" — TTL 50 days (idempotency for the earn-back grant)
- *   bonus_discord_joined:{userId}       → "1" — TTL 50 days
- *   bonus_first_share:{userId}          → "1" — TTL 50 days
- *   lifetime_free_pro:{userId}          → number-as-string (no TTL)
- *   lifetime_free_fast:{userId}         → number-as-string (no TTL)
- *   purchase:{userId}:has_paid          → "true" once user has paid via Stripe (no TTL)
- *   disposable_blocked:{userId}         → "true" if signup email matched the disposable blocklist (no TTL)
- *
- * New users get 30 signup tokens. Existing users (have gen_count: keys) get 200 — grandfather clause.
+ * KV keys that stay (6.3), all gates or records, none of them money:
+ *   bonus_discord_joined:{userId}, bonus_first_share:{userId} (TTL 50 days)
+ *   lifetime_free_pro:{userId}, lifetime_free_fast:{userId}
+ *   purchase:{userId}:has_paid, disposable_blocked:{userId}
+ *   signup_grant:{userId}, signup_bonus_modal_shown:{userId}
+ *   bonus_email_list:{userId}
  */
 
 import {
-  SIGNUP_BONUS_TOKENS,
-  EARLY_ADOPTER_BONUS_TOKENS,
   EARN_BACK_DISCORD_JOINED_TOKENS,
   EARN_BACK_FIRST_SHARE_TOKENS,
   EARN_BACK_FLAG_TTL_SECONDS,
 } from '@/lib/constants';
-import { txMetadata, type TxContext } from '@/lib/tokenTxMeta';
-import { devFault, MoneyPausedError } from '@/lib/moneyPause';
-import { admitMoney } from '@/lib/moneyAdmission';
-
-const TX_TTL = 7_776_000; // 90 days
-const IDEMPOTENCY_TTL = 604_800; // 7 days
+import type { MovementResult } from '@/lib/ledger';
+import { getBalance, ledgerCtx, move, MoneyUnavailableError, readBalanceStrict as readStrict } from '@/lib/money';
 
 // S16: email_verified removed (bot-passable). Discord / first_share remain
-// wired via grantEarnBackBonus but lack a UI trigger — they'll be activated
-// once the Discord bot ships.
+// wired via grantEarnBackBonus but lack a UI trigger.
 export type EarnBackType = 'discord_joined' | 'first_share';
 export type FreeTierBucket = 'pro' | 'fast';
 
@@ -47,40 +37,22 @@ const EARN_BACK_AMOUNT: Record<EarnBackType, number> = {
   first_share: EARN_BACK_FIRST_SHARE_TOKENS,
 };
 
-const EARN_BACK_SOURCE: Record<EarnBackType, TransactionSource> = {
-  discord_joined: 'discord_joined',
-  first_share: 'first_share',
-};
-
 const LIFETIME_COUNTER_KEY: Record<FreeTierBucket, string> = {
   pro: 'lifetime_free_pro',
   fast: 'lifetime_free_fast',
 };
 
-// ── KV binding ──
+// ── KV binding (the gates) ──
 
 interface KV {
   get(key: string): Promise<string | null>;
-  put(
-    key: string,
-    value: string,
-    options?: { expirationTtl?: number; metadata?: unknown }
-  ): Promise<void>;
-  list(options?: { prefix?: string; limit?: number }): Promise<{ keys: { name: string }[] }>;
+  put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
 }
 
 function getKV(): KV | null {
   const kv = (process.env as Record<string, unknown>).SPRITEBREW_KV;
   if (kv && typeof (kv as KV).put === 'function') return kv as KV;
   return null;
-}
-
-// ── Helpers ──
-
-interface BalanceRecord {
-  balance: number;
-  created_at: string;
-  last_updated: string;
 }
 
 export type TransactionSource =
@@ -97,365 +69,54 @@ export type TransactionSource =
   | 'dispute_debit'
   | 'generation';
 
-interface TransactionRecord {
-  type: 'credit' | 'debit';
-  amount: number;
-  reason: string;
-  source?: TransactionSource;
-  streakDay?: number;
-  balance_after: number;
-  style?: string;
-  timestamp: string;
-}
-
-/** Optional metadata threaded through creditTokens → writeTx. The TxContext
- *  part (style/mode/size) goes onto the row's KV metadata only; source and
- *  streakDay are recorded in the row value as before. */
-export interface CreditMeta extends TxContext {
-  source?: TransactionSource;
-  streakDay?: number;
-}
-
-function txKey(userId: string): string {
-  const ts = Date.now();
-  const uid = Math.random().toString(36).slice(2, 8);
-  return `token_tx:${userId}:${ts}:${uid}`;
-}
-
-function idempotencyKey(key: string): string {
-  return `token_idempotency:${key}`;
-}
-
-async function writeTx(
-  kv: KV,
-  userId: string,
-  tx: TransactionRecord,
-  ctx?: TxContext
-): Promise<void> {
-  try {
-    await kv.put(txKey(userId), JSON.stringify(tx), {
-      expirationTtl: TX_TTL,
-      // Indexed copy of the classifying fields so the admin failure-rate scan
-      // can read them from list() without a get() per row.
-      metadata: txMetadata(tx.type, tx.reason, ctx),
-    });
-  } catch {
-    // Transaction logging is best-effort
-  }
-}
+// ── Balances and credits ──
 
 /**
- * Check if this is an existing user by looking for any gen_count: keys.
- * Used for the lazy migration: existing users get 200 tokens, new users get 100.
- */
-async function isExistingUser(kv: KV, userId: string): Promise<boolean> {
-  try {
-    const result = await kv.list({ prefix: `gen_count:${userId}:`, limit: 1 });
-    return result.keys.length > 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Initialize a new balance record. Checks if the user is an existing user
- * (has gen_count: keys) and grants the appropriate bonus. Disposable-email
- * users (flagged by Clerk webhook handler) get a zero-balance record and no
- * bonus — they can still buy tokens but can't farm the free tier.
- */
-async function initBalance(kv: KV, userId: string): Promise<number> {
-  // Opening a balance is a money write: refused while paused (n1-ledger 005
-  // section 4). S0's admission record replaces the pause read: route
-  // 'opening', subject the user, completed in its own finally, so an opening
-  // inside another admitted request takes its own record (spec 6.2, R5-1).
-  const admission = await admitMoney({
-    route: 'opening',
-    kind: 'user',
-    subject: userId,
-    userId,
-    ids: { user_id: userId },
-  });
-  let outcome = 'exception';
-  try {
-    if (!admission.admitted) {
-      outcome = 'paused';
-      throw new MoneyPausedError();
-    }
-    const opened = await openBalance(kv, userId);
-    outcome = opened.already ? 'already_opened' : `opened (${opened.balance})`;
-    return opened.balance;
-  } finally {
-    await admission.complete(outcome);
-  }
-}
-
-/** The opening's writes, admitted by initBalance (release 1's body, unchanged). */
-async function openBalance(kv: KV, userId: string): Promise<{ balance: number; already: boolean }> {
-  // Idempotency: prevent double-init
-  const idemKey = idempotencyKey(`signup:${userId}`);
-  const existing = await kv.get(idemKey);
-  if (existing) {
-    // Already initialized — read current balance
-    const raw = await kv.get(`token_balance:${userId}`);
-    if (raw) return { balance: (JSON.parse(raw) as BalanceRecord).balance, already: true };
-    return { balance: SIGNUP_BONUS_TOKENS, already: true }; // shouldn't happen, but safe fallback
-  }
-
-  const blocked = await kv.get(`disposable_blocked:${userId}`);
-  const isExisting = await isExistingUser(kv, userId);
-
-  let bonus: number;
-  let reason: string;
-  let source: TransactionSource | undefined;
-  if (blocked === 'true') {
-    bonus = 0;
-    reason = 'disposable_email_no_bonus';
-    source = undefined;
-  } else if (isExisting) {
-    bonus = EARLY_ADOPTER_BONUS_TOKENS;
-    reason = 'early_adopter_bonus';
-    source = 'early_adopter';
-  } else {
-    bonus = SIGNUP_BONUS_TOKENS;
-    reason = 'signup_bonus';
-    source = 'signup';
-  }
-
-  const now = new Date().toISOString();
-
-  const record: BalanceRecord = {
-    balance: bonus,
-    created_at: now,
-    last_updated: now,
-  };
-
-  await kv.put(`token_balance:${userId}`, JSON.stringify(record));
-  await kv.put(idemKey, '1', { expirationTtl: IDEMPOTENCY_TTL });
-  await writeTx(kv, userId, {
-    type: 'credit',
-    amount: bonus,
-    reason,
-    source,
-    balance_after: bonus,
-    timestamp: now,
-  });
-
-  // Persist the granted amount so the celebration modal can read it without
-  // scanning the tx log. No TTL — the modal might fire weeks after signup.
-  if (bonus > 0 && source) {
-    try {
-      await kv.put(
-        `signup_grant:${userId}`,
-        JSON.stringify({ amount: bonus, source, granted_at: now })
-      );
-    } catch {
-      // best effort
-    }
-  }
-
-  return { balance: bonus, already: false };
-}
-
-// ── Public API ──
-
-/**
- * Get the user's current token balance. Auto-creates balance on first use.
+ * The user's balance, opened by policy on first use (4.2). Paused:
+ * MoneyPausedError; unconfirmed: MoneyUnavailableError.
  */
 export async function getTokenBalance(userId: string): Promise<number> {
-  const kv = getKV();
-  if (!kv) return SIGNUP_BONUS_TOKENS; // Fail open with default
-
-  try {
-    const raw = await kv.get(`token_balance:${userId}`);
-    if (raw) return (JSON.parse(raw) as BalanceRecord).balance;
-    return await initBalance(kv, userId);
-  } catch (err) {
-    // A paused opening is not an error to paper over with a guessed number.
-    if (err instanceof MoneyPausedError) throw err;
-    return SIGNUP_BONUS_TOKENS;
-  }
+  return getBalance(userId);
 }
 
-/**
- * A strict, read-only balance read for the purchase banner (HQ-14,
- * n1-ledger-03 016): the stored balance, or null when it cannot be known (no
- * KV, a failed read, an absent or unreadable record). Unlike getTokenBalance it
- * never opens a balance and never answers a guessed number, so the banner
- * cannot take a fallback for evidence.
- */
+/** The stored balance only, no opening; null when it cannot be known. */
 export async function readBalanceStrict(userId: string): Promise<number | null> {
-  const kv = getKV();
-  if (!kv) return null;
-  try {
-    const raw = await kv.get(`token_balance:${userId}`);
-    if (!raw) return null;
-    const balance = (JSON.parse(raw) as BalanceRecord).balance;
-    return typeof balance === 'number' && Number.isFinite(balance) ? balance : null;
-  } catch {
-    return null;
-  }
-}
-
-export interface DebitResult {
-  success: boolean;
-  balance: number;
-  required?: number;
+  return readStrict(userId);
 }
 
 /**
- * Debit tokens for a generation. Returns the new balance on success,
- * or the current balance + required amount on failure.
- * Optional `ctx` (style/mode/size) is recorded on the tx row's KV metadata.
- */
-export async function debitTokens(
-  userId: string,
-  amount: number,
-  idempotencyKeyValue: string,
-  ctx?: TxContext
-): Promise<DebitResult> {
-  const kv = getKV();
-  if (!kv) return { success: true, balance: 0 }; // Fail open
-
-  try {
-    // Idempotency check
-    const idemKey = idempotencyKey(idempotencyKeyValue);
-    const existing = await kv.get(idemKey);
-    if (existing) {
-      const balance = await getTokenBalance(userId);
-      return { success: true, balance };
-    }
-
-    // Ensure balance exists (lazy init)
-    const raw = await kv.get(`token_balance:${userId}`);
-    let record: BalanceRecord;
-    if (!raw) {
-      const balance = await initBalance(kv, userId);
-      record = { balance, created_at: new Date().toISOString(), last_updated: new Date().toISOString() };
-    } else {
-      record = JSON.parse(raw) as BalanceRecord;
-    }
-
-    if (record.balance < amount) {
-      return { success: false, balance: record.balance, required: amount };
-    }
-
-    const newBalance = record.balance - amount;
-    const now = new Date().toISOString();
-    record.balance = newBalance;
-    record.last_updated = now;
-
-    await kv.put(`token_balance:${userId}`, JSON.stringify(record));
-    await kv.put(idemKey, '1', { expirationTtl: IDEMPOTENCY_TTL });
-    await writeTx(
-      kv,
-      userId,
-      {
-        type: 'debit',
-        amount,
-        reason: 'generation',
-        balance_after: newBalance,
-        timestamp: now,
-      },
-      ctx
-    );
-
-    return { success: true, balance: newBalance };
-  } catch (err) {
-    if (err instanceof MoneyPausedError) throw err;
-    return { success: true, balance: 0 }; // Fail open
-  }
-}
-
-export interface CreditResult {
-  success: boolean;
-  balance: number;
-  /** On failure only: true when this credit's balance write finished before
-   *  the failure, so the tokens already moved and only the idempotency key or
-   *  the tx row is missing (the ruling F window). Evidence for whoever settles
-   *  it (n1-ledger-02.md 002 ruling C). */
-  balanceWritten?: boolean;
-}
-
-/**
- * Credit tokens back (refund on failure, purchases, daily/streak rewards).
- * Optional `meta` is recorded on the tx log entry for analytics.
+ * A credit (4.1) under its key from 4.13's table, with its legacy evidence.
+ * Answers the movement's verified outcome; the caller acts only on `applied`
+ * (and, where the spec says so, `replayed`). A missing binding answers
+ * `error`, never a credit.
  */
 export async function creditTokens(
   userId: string,
   amount: number,
   reason: string,
-  idempotencyKeyValue: string,
-  meta?: CreditMeta
-): Promise<CreditResult> {
-  const kv = getKV();
-  // Nothing was credited, so say so (n1-ledger 007 section 4, ruling F).
-  if (!kv) return { success: false, balance: 0, balanceWritten: false };
-
-  let balanceWritten = false;
+  idem: string,
+  opts: { source: TransactionSource | null; legacy?: string | null; meta?: string | null }
+): Promise<MovementResult> {
+  let ctx;
   try {
-    // Idempotency check
-    const idemKey = idempotencyKey(idempotencyKeyValue);
-    const existing = await kv.get(idemKey);
-    if (existing) {
-      const balance = await getTokenBalance(userId);
-      return { success: true, balance };
-    }
-
-    const faults = (await devFault())?.split(',') ?? [];
-    if (faults.includes('credit_throw_before_balance')) throw new Error('dev fault: before the balance put');
-
-    const raw = await kv.get(`token_balance:${userId}`);
-    if (!raw) {
-      // No balance record — init first, then credit
-      await initBalance(kv, userId);
-      const rawAfterInit = await kv.get(`token_balance:${userId}`);
-      if (!rawAfterInit) return { success: false, balance: 0 };
-    }
-
-    const currentRaw = await kv.get(`token_balance:${userId}`);
-    if (!currentRaw) return { success: false, balance: 0 };
-
-    const record = JSON.parse(currentRaw) as BalanceRecord;
-    const newBalance = record.balance + amount;
-    const now = new Date().toISOString();
-    record.balance = newBalance;
-    record.last_updated = now;
-
-    await kv.put(`token_balance:${userId}`, JSON.stringify(record));
-    balanceWritten = true;
-    // Known release 1 window (ruling F): a failure here, between the balance
-    // put and the idempotency put, credits twice on a retry. Release 2's single
-    // transaction closes it.
-    if (faults.includes('credit_throw_after_balance')) throw new Error('dev fault: after the balance put');
-    await kv.put(idemKey, '1', { expirationTtl: IDEMPOTENCY_TTL });
-    await writeTx(
-      kv,
-      userId,
-      {
-        type: 'credit',
-        amount,
-        reason,
-        source: meta?.source,
-        streakDay: meta?.streakDay,
-        balance_after: newBalance,
-        timestamp: now,
-      },
-      meta
-    );
-
-    return { success: true, balance: newBalance };
-  } catch {
-    return { success: false, balance: 0, balanceWritten };
+    ctx = ledgerCtx();
+  } catch (err) {
+    if (err instanceof MoneyUnavailableError) return { outcome: 'error', id: '', balance: null };
+    throw err;
   }
+  return move(ctx, {
+    uid: userId, type: 'credit', amount, reason, source: opts.source, idem,
+    legacy1: opts.legacy ?? null, legacy2: null, meta: opts.meta ?? null,
+  }, 'user');
 }
 
 // ── Earn-back bonuses ──
 
 /**
- * Grant a one-time earn-back bonus if the corresponding flag is unset.
- * Idempotent — granting twice is a no-op (within the 50-day flag TTL).
- * Returns true if the bonus was newly granted, false if it had already been
- * granted (or KV was unavailable, or anything went wrong).
+ * Grant a one-time earn-back bonus if the corresponding flag is unset. No
+ * caller today; ported to 4.1 (`L 004` ruling 5): `earnback:{type}:{userId}`,
+ * its legacy `token_idempotency:` key the evidence. The flag is written only
+ * after `applied` or `replayed`. True only when this call applied the credit.
  */
 export async function grantEarnBackBonus(
   userId: string,
@@ -470,21 +131,15 @@ export async function grantEarnBackBonus(
     const existing = await kv.get(flagKey);
     if (existing) return false;
 
-    const amount = EARN_BACK_AMOUNT[type];
-    const reason = `earn_back_${type}`;
-    // Use the flag key as idempotency key for the credit too — guarantees the
-    // credit and the flag write share the same one-shot semantics.
-    const result = await creditTokens(
-      userId,
-      amount,
-      reason,
-      `earnback:${type}:${userId}`,
-      { source: EARN_BACK_SOURCE[type] }
-    );
-    if (!result.success) return false;
+    const key = `earnback:${type}:${userId}`;
+    const result = await creditTokens(userId, EARN_BACK_AMOUNT[type], `earn_back_${type}`, key, {
+      source: type,
+      legacy: `token_idempotency:${key}`,
+    });
+    if (result.outcome !== 'applied' && result.outcome !== 'replayed') return false;
 
     await kv.put(flagKey, '1', { expirationTtl: EARN_BACK_FLAG_TTL_SECONDS });
-    return true;
+    return result.outcome === 'applied';
   } catch {
     return false;
   }

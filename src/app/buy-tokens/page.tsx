@@ -7,7 +7,6 @@ import { Loader2, LogIn } from 'lucide-react';
 import { Show, SignInButton, useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { TOKEN_PACKS } from '@/lib/tokenPacks';
-import { clearBaseline, prepareBaseline } from '@/lib/purchaseBanner';
 import Button from '@/components/ui/Button';
 import EmailListPanel from '@/components/account/EmailListPanel';
 
@@ -59,12 +58,6 @@ export default function BuyTokensPage() {
         setError(data.error || 'Failed to create checkout session.');
         return;
       }
-      // HQ-14: the return banner's baseline, the balance read strictly just
-      // before leaving for Stripe. A failed or unknown read leaves none, so the
-      // banner never claims the tokens were added.
-      const pack = TOKEN_PACKS.find((p) => p.id === packId);
-      if (pack && userId) await prepareBaseline({ userId, tokens: pack.tokens, getToken });
-      else clearBaseline();
       // Redirect to Stripe Checkout
       window.location.href = data.url;
     } catch {
@@ -72,7 +65,7 @@ export default function BuyTokensPage() {
     } finally {
       setLoadingPack(null);
     }
-  }, [getToken, consentGiven, userId]);
+  }, [getToken, consentGiven]);
 
   return (
     <div className="max-w-3xl mx-auto space-y-8">

@@ -2,9 +2,8 @@ import { getAuthedUserId } from '@/lib/edgeAuth';
 import { getJobStateBucket, jobStateR2Key } from '@/lib/jobState';
 import { isMoneyPaused } from '@/lib/moneyPause';
 
-// S0's paused loader copy (n1-release-2-spec.md 5.5, O2). UNAPPROVED COPY
-// (HQ-1, `2026-10-03-008`): HQ's text, used on dev only until HQ approves it
-// for production (HQ-4).
+// S0's paused loader copy (n1-release-2-spec.md 5.5, O2): HQ-1
+// (`2026-10-03-008`), approved with S0's production go (HQ `2026-10-04-002`).
 const PAUSED_STATUS_COPY = "SpriteBrew is finishing some maintenance. Your generation will start when it's done, or its tokens will be returned.";
 
 /** A pending or running job older than this, while money is paused, shows the copy. */

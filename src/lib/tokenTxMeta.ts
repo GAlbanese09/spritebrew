@@ -6,10 +6,10 @@
  * row without a get() per key. The JSON value of the row is unchanged; the
  * metadata is an index, not the record of truth.
  *
- * Writers (keep in sync, same PR):
- *   - src/lib/tokenBalance.ts                 writeTx (generation debit + all credits)
- *   - src/lib/tokenDebit.ts                   debitTokensForRefund (Stripe refund/dispute)
- *   - spritebrew-rd-consumer/src/refund.ts    refundTokens (sibling repo, keeps its own copy)
+ * Writers: none from release 2 (n1-release-2-spec.md revision 9, 6.3; the
+ * `token_tx:` mirror is dropped, `L 007` 009 A). Release 1 wrote these rows in
+ * src/lib/tokenBalance.ts, src/lib/tokenDebit.ts and the consumer's
+ * src/refund.ts; they stay readable until phase C.
  * Reader:
  *   - src/app/api/admin/failure-rate/route.ts
  *
@@ -27,24 +27,4 @@ export interface TxMetadata {
   mode?: TxMode;
   /** Requested sprite size in px (square). Generation debits and refunds only. */
   size?: number;
-}
-
-/** The generation context a caller can attach to a debit or refund. */
-export type TxContext = Pick<TxMetadata, 'style' | 'mode' | 'size'>;
-
-/**
- * Build the metadata object. Undefined or invalid context fields are omitted
- * rather than written as null, so rows without generation context stay
- * compact and a `style` key on the metadata always means a real style.
- */
-export function txMetadata(
-  type: TxMetadata['type'],
-  reason: string,
-  ctx?: TxContext
-): TxMetadata {
-  const meta: TxMetadata = { type, reason };
-  if (typeof ctx?.style === 'string' && ctx.style.length > 0) meta.style = ctx.style;
-  if (ctx?.mode === 'create' || ctx?.mode === 'animate') meta.mode = ctx.mode;
-  if (typeof ctx?.size === 'number' && Number.isFinite(ctx.size)) meta.size = ctx.size;
-  return meta;
 }

@@ -1,16 +1,18 @@
 /**
- * One `generation.unrefunded` row in the D1 event ledger (`EVENTS_DB`,
- * `spritebrew-events`), written by the Pages app when a compensating refund
- * it owes could not be credited (n1-ledger.md 008 ruling G). The morning
- * digest lists these rows under "Dead letters not refunded" so George settles
- * each by hand.
+ * Rows the Pages app writes to the D1 event ledger (`EVENTS_DB`,
+ * `spritebrew-events`). The canonical object, stable JSON and SHA-256 mirror
+ * the consumer's writer (spritebrew-rd-consumer/src/events.ts).
  *
- * The row mirrors the consumer's writer (spritebrew-rd-consumer/src/events.ts:
- * the same canonical object, stable JSON and SHA-256), narrowed to this one
- * event. It never throws, but it is strict (n1-ledger-02.md 002 ruling B):
- * it answers whether a row with its dedupe key exists afterwards, so the
- * caller can log the debt when it does not.
+ * Release 2 (n1-release-2-spec.md revision 9, S4) writes one kind from Pages:
+ * the `ledger.alarm` row (4.0, O8), `error_code` = the alarm's kind, deduped
+ * by kind and subject (`{kind}:{jobId}`, `{kind}:{userId}` or
+ * `{kind}:{eventId}`). An alarm is best effort, never money proof (`S2 010`
+ * 6): the debt always lives in a `jobs` or `ledger` row. The writer never
+ * throws, and each statement is bounded (2 s), so a hung EVENTS_DB never
+ * holds a route.
  */
+
+import { withTimeout } from '@/lib/moneyPause';
 
 interface D1Like {
   prepare(sql: string): {
@@ -49,34 +51,36 @@ export async function sha256Hex(text: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-export async function recordUnrefundedAlarm(args: {
-  userId: string;
-  jobId?: string;
-  tokenCost: number;
-  reason: string;
-  /** The generate request, and its refund's idempotency key (`refund:{requestId}`),
-   *  so whoever settles it can check the evidence first (ruling C). */
-  requestId?: string;
-  idempotencyKey?: string;
-  balanceWritten?: boolean;
-  detail?: string;
+/** The kinds Pages raises (4.0's list; the consumer raises the others). */
+export type PagesAlarmKind =
+  | 'zero_alarm' | 'unique_mismatch' | 'stripe_no_evidence' | 'stripe_mapping_missing' | 'debit_missing';
+
+/**
+ * One `ledger.alarm` row. `subjectKind` says which id the subject is, so a
+ * job's alarm carries its `job_id`. Answers whether a row with its dedupe key
+ * exists afterwards (an earlier duplicate counts).
+ */
+export async function recordLedgerAlarm(args: {
+  kind: PagesAlarmKind;
+  subject: string;
+  subjectKind: 'job' | 'user' | 'event';
+  userId?: string | null;
+  fields?: Record<string, unknown>;
 }): Promise<boolean> {
+  const dedupeKey = `${args.kind}:${args.subject}`;
   try {
     const env = process.env as Record<string, unknown>;
     const db = env.EVENTS_DB as D1Like | undefined;
-    if (!db || typeof db.prepare !== 'function') {
-      console.error(JSON.stringify({ source: 'unrefunded-alarm', event: 'write_failed', reason: args.reason, error: 'EVENTS_DB unbound' }));
-      return false;
-    }
+    if (!db || typeof db.prepare !== 'function') throw new Error('EVENTS_DB unbound');
     const eventId = crypto.randomUUID();
     const occurredAtMs = Date.now();
     const environment = typeof env.APP_ENV === 'string' && env.APP_ENV ? env.APP_ENV : 'unknown';
-    const dedupeKey = `${args.jobId ?? `pages:${eventId}`}:generation.unrefunded`;
+    const jobId = args.subjectKind === 'job' ? args.subject : undefined;
     const canonical = {
       schemaVersion: 1,
       eventId,
       dedupeKey,
-      eventName: 'generation.unrefunded',
+      eventName: 'ledger.alarm',
       level: 'error',
       occurredAtMs,
       occurredAt: new Date(occurredAtMs).toISOString(),
@@ -84,44 +88,34 @@ export async function recordUnrefundedAlarm(args: {
       ingestedAtMs: occurredAtMs,
       environment,
       sourceService: 'spritebrew-pages',
-      userId: args.userId,
-      jobId: args.jobId,
-      requestId: args.requestId,
-      errorCode: args.reason,
-      extra: {
-        reason: args.reason,
-        tokenCost: args.tokenCost,
-        idempotencyKey: args.idempotencyKey,
-        balanceWritten: args.balanceWritten,
-        detail: args.detail?.slice(0, 500),
-      },
+      userId: args.userId ?? undefined,
+      jobId,
+      errorCode: args.kind,
+      extra: { subjectKind: args.subjectKind, subject: args.subject, ...args.fields },
     };
     const eventJson = stableStringify(canonical);
-    await db
+    await withTimeout(db
       .prepare(
         `INSERT OR IGNORE INTO events (event_id, dedupe_key, schema_version, event_name, level,
            occurred_at_ms, reporting_day, ingested_at_ms, environment, source_service,
            user_id, job_id, request_id, error_code, event_json, event_sha256)
-         VALUES (?1, ?2, 1, 'generation.unrefunded', 'error', ?3, ?4, ?3, ?5, 'spritebrew-pages',
-           ?6, ?7, ?8, ?9, ?10, ?11)`
+         VALUES (?1, ?2, 1, 'ledger.alarm', 'error', ?3, ?4, ?3, ?5, 'spritebrew-pages',
+           ?6, ?7, NULL, ?8, ?9, ?10)`
       )
       .bind(eventId, dedupeKey, occurredAtMs, canonical.reportingDay, environment,
-        args.userId, args.jobId ?? null, args.requestId ?? null, args.reason, eventJson, await sha256Hex(eventJson))
-      .run();
+        args.userId ?? null, jobId ?? null, args.kind, eventJson, await sha256Hex(eventJson))
+      .run(), 'ledger alarm insert');
     // INSERT OR IGNORE also ignores a failed CHECK: the row counts only if
-    // one holds the dedupe key now (a duplicate from an earlier try counts).
-    const row = await db
+    // one holds the dedupe key now.
+    const row = await withTimeout(db
       .prepare('SELECT 1 AS ok FROM events WHERE dedupe_key = ?1')
       .bind(dedupeKey)
-      .first<{ ok: number }>();
+      .first<{ ok: number }>(), 'ledger alarm read-back');
     if (row) return true;
-    console.error(JSON.stringify({ source: 'unrefunded-alarm', event: 'write_failed', reason: args.reason, error: 'insert ignored' }));
-    return false;
+    throw new Error('insert ignored');
   } catch (err) {
     console.error(JSON.stringify({
-      source: 'unrefunded-alarm',
-      event: 'write_failed',
-      reason: args.reason,
+      source: 'ledger-alarm', event: 'write_failed', dedupe_key: dedupeKey,
       error: err instanceof Error ? err.message.slice(0, 120) : 'unknown',
     }));
     return false;

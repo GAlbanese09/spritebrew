@@ -36,6 +36,12 @@ import {
   type AnimateTemplate,
 } from '@/lib/animateConfig';
 
+/** /api/generate's error codes whose message is the server's own account of
+ *  the tokens (n1-release-2-spec.md 5.1): shown verbatim. */
+const SERVER_COPY_ERRORS: ReadonlySet<string> = new Set([
+  'submission_failed', 'money_paused', 'not_charged', 'charge_unconfirmed', 'idempotency_conflict',
+]);
+
 const ACTIONS = [
   { id: 'walking', name: 'Walk', desc: 'Walking cycle animation' },
   { id: 'idle', name: 'Idle', desc: 'Breathing/subtle idle loop' },
@@ -896,10 +902,10 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         setTokenBalance(errObj.balance);
         return;
       }
-      if (errObj.error === 'submission_failed' || errObj.error === 'money_paused') {
+      if (errObj.error && SERVER_COPY_ERRORS.has(errObj.error)) {
         // The server's message states what happened to the tokens (refunded,
-        // to be returned by hand, or never charged): surface it verbatim, do
-        // NOT append the generic "(your tokens are safe)" copy.
+        // unconfirmed, or never charged): surface it verbatim, do NOT append
+        // the generic "(your tokens are safe)" copy (release 2, 5.1 and O4).
         setGenerationError(msg);
         // Refresh balance so the user sees the refund landed.
         void fetchBalance();

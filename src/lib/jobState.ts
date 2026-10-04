@@ -11,11 +11,6 @@
 
 export const JOB_TTL_S = 60 * 60;
 
-/** A record that carries an unpaid refund (`refundOwed`) must outlive the
- *  one-hour record so the consumer's sweep can still find it
- *  (n1-ledger-02.md 002 ruling B). */
-export const DEBT_TTL_S = 24 * 60 * 60;
-
 /** R2 answers a second write to one key inside about a second with error
  *  10058; one retry after this delay clears it. */
 const R2_RETRY_DELAY_MS = 1_100;
@@ -80,4 +75,29 @@ export async function putJobState(
   const body = JSON.stringify(state);
   await putJobStateR2(jobId, body);
   await kv.put(`job:${jobId}`, body, { expirationTtl: ttlS });
+}
+
+/**
+ * The strict terminal write (n1-release-2-spec.md revision 9, 4.10, O12): R2
+ * with one retry, then KV, and any failure throws, so the caller sets the
+ * row's `status_written_at_ms` marker only after both landed. A failed write
+ * leaves the marker NULL for the consumer's repair pass (4.11). R2 first, so
+ * a failed R2 put leaves no terminal KV copy behind it.
+ */
+export async function putJobStateStrict(
+  kv: JobStateKV,
+  jobId: string,
+  state: Record<string, unknown>
+): Promise<void> {
+  const bucket = getJobStateBucket();
+  if (!bucket) throw new Error('GALLERY_BUCKET unavailable');
+  const body = JSON.stringify(state);
+  const put = () => bucket.put(jobStateR2Key(jobId), body, { httpMetadata: { contentType: 'application/json' } });
+  try {
+    await put();
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, R2_RETRY_DELAY_MS));
+    await put();
+  }
+  await kv.put(`job:${jobId}`, body, { expirationTtl: JOB_TTL_S });
 }

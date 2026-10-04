@@ -120,7 +120,9 @@ export async function POST(request: Request) {
           message: 'By completing this purchase you confirm the consent you provided on SpriteBrew regarding immediate performance and loss of your 14-day right of withdrawal.',
         },
       },
-      success_url: `${origin}/generate?purchase=success`,
+      // R9-8: the return names its Checkout Session, so the banner's 'added'
+      // rests on this checkout's own credit (src/lib/purchaseEvidence.ts).
+      success_url: `${origin}/generate?purchase=success&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${origin}/generate?purchase=cancelled`,
     });
 

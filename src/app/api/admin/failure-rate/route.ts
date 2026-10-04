@@ -1,4 +1,6 @@
-// Admin-only failure-rate scan over the token_tx: KV namespace.
+// Admin-only failure-rate scan over the token_tx: KV namespace. From release
+// 2 it covers pre-switch rows only, and says so in its body (`scope`), until
+// phase C ports it to the D1 ledger (n1-release-2-spec.md 6.2, `L 007 5`).
 //
 // Auth: x-admin-token header must match env.ADMIN_TOKEN (set as a Worker
 // secret via `wrangler secret put ADMIN_TOKEN --env production`). No
@@ -221,6 +223,10 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   const body: Record<string, unknown> = {
+    // Release 2 writes no token_tx: rows (the mirror is dropped, `L 007` 009 A):
+    // this scan covers the rows written before the switch, until phase C
+    // ports it to the D1 ledger (n1-release-2-spec.md 6.2, `L 007 5`).
+    scope: 'pre-switch token_tx rows only',
     asOf: new Date().toISOString(),
     scanned: page.keys.length,
     attempts,

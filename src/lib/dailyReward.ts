@@ -8,8 +8,12 @@
  *
  * Strict reset: missing a single day collapses the streak to 0 (and the next
  * grant restarts it at 1). Every 7th consecutive day pays the doubled bonus.
- * Idempotency: same-day double-fire is rejected at the date check, and the
- * underlying creditTokens() also dedupes on the daily idempotency key.
+ *
+ * Release 2 (n1-release-2-spec.md revision 9, 6.2): the credit is one D1
+ * movement (4.1) under `daily_login:{userId}:{UTC day}`, its release 1
+ * `token_idempotency:` key the legacy evidence (4.13). Its outcomes stay
+ * distinct, and the streak keys (which stay in KV, 6.3) are written only
+ * after `applied`. Today and yesterday come from one clock read (FX-4).
  */
 
 import {
@@ -18,6 +22,7 @@ import {
   STREAK_INTERVAL_DAYS,
 } from '@/lib/constants';
 import { creditTokens } from '@/lib/tokenBalance';
+import type { MovementOutcome } from '@/lib/ledger';
 
 interface KV {
   get(key: string): Promise<string | null>;
@@ -35,11 +40,6 @@ function dayStamp(d: Date): string {
   return d.toISOString().split('T')[0];
 }
 
-function yesterdayStamp(): string {
-  const d = new Date(Date.now() - 86_400_000);
-  return dayStamp(d);
-}
-
 export interface DailyRewardResult {
   granted: number;
   streakDay: number;
@@ -48,16 +48,15 @@ export interface DailyRewardResult {
 }
 
 /**
- * What the helper did, filled in as it goes, for the caller's audit line
- * (Second's 040), even when the helper then answers null: the idempotency key
- * of the credit it attempted (`daily_login:{userId}:{day}`, the day being this
- * helper's own), and whether that credit's balance write finished
- * (CreditResult's balanceWritten; undefined when the credit threw).
+ * What the helper did, for the route: `applied` carries the reward; every
+ * other outcome shows none. `already` is today's streak key found;
+ * `replayed` the credit found under today's key (or its legacy evidence);
+ * `paused` and `error` as the movement answered (or a store that could not be
+ * read: `error`, never a guess).
  */
-export interface DailyRewardTrace {
-  rewardKey?: string;
-  balanceWritten?: boolean;
-}
+export type DailyRewardOutcome =
+  | { kind: 'applied'; reward: DailyRewardResult; rewardKey: string }
+  | { kind: 'already' | 'replayed' | 'paused' | 'error'; rewardKey?: string; movement?: MovementOutcome };
 
 export interface StreakSnapshot {
   count: number;
@@ -86,8 +85,9 @@ export async function getStreakSnapshot(userId: string): Promise<StreakSnapshot>
     // If the user has missed a day, the *display* count should already be 0.
     // We don't write the reset here (read-only), but we render it as 0.
     if (lastDate) {
-      const today = dayStamp(new Date());
-      const yesterday = yesterdayStamp();
+      const nowMs = Date.now();
+      const today = dayStamp(new Date(nowMs));
+      const yesterday = dayStamp(new Date(nowMs - 86_400_000));
       if (lastDate !== today && lastDate !== yesterday) {
         count = 0;
       }
@@ -105,76 +105,69 @@ export async function getStreakSnapshot(userId: string): Promise<StreakSnapshot>
 }
 
 /**
- * Idempotently grant the daily-login reward for `userId` (or null if already
- * claimed today / KV unavailable). Updates streak counters atomically *enough*
- * for our scale — KV has no transactions, but a same-day double-call is gated
- * by the date check on `last_reward_date`.
+ * Grant today's daily-login reward for `userId`, once. Today is UTC, read
+ * from one clock read with yesterday (FX-4).
  */
-export async function checkAndGrantDailyReward(
-  userId: string,
-  trace?: DailyRewardTrace
-): Promise<DailyRewardResult | null> {
+export async function checkAndGrantDailyReward(userId: string, nowMs: number = Date.now()): Promise<DailyRewardOutcome> {
   const kv = getKV();
-  if (!kv) return null;
+  if (!kv) return { kind: 'error' };
 
-  const today = dayStamp(new Date());
+  const today = dayStamp(new Date(nowMs));
+  const yesterday = dayStamp(new Date(nowMs - 86_400_000));
+  const rewardKey = `daily_login:${userId}:${today}`;
 
+  let lastRewardDate: string | null;
+  let prevCountRaw: string | null;
   try {
-    const lastRewardDate = await kv.get(`streak:${userId}:last_reward_date`);
-    if (lastRewardDate === today) return null; // already claimed today
+    lastRewardDate = await kv.get(`streak:${userId}:last_reward_date`);
+    if (lastRewardDate === today) return { kind: 'already' };
+    prevCountRaw = await kv.get(`streak:${userId}:count`);
+  } catch {
+    return { kind: 'error' };
+  }
+  const prevCount = prevCountRaw ? parseInt(prevCountRaw, 10) : 0;
 
-    const yesterday = yesterdayStamp();
-    const prevCountRaw = await kv.get(`streak:${userId}:count`);
-    const prevCount = prevCountRaw ? parseInt(prevCountRaw, 10) : 0;
+  const continuing = lastRewardDate === yesterday;
+  const streakCount = continuing && Number.isFinite(prevCount) && prevCount > 0
+    ? prevCount + 1
+    : 1;
 
-    const continuing = lastRewardDate === yesterday;
-    const streakCount = continuing && Number.isFinite(prevCount) && prevCount > 0
-      ? prevCount + 1
-      : 1;
+  const isStreakBonus = streakCount > 0 && streakCount % STREAK_INTERVAL_DAYS === 0;
+  const granted = isStreakBonus ? STREAK_WEEKLY_BONUS_TOKENS : DAILY_LOGIN_TOKENS;
+  const reason = isStreakBonus
+    ? `streak_bonus:${today}:day=${streakCount}`
+    : `daily_login:${today}:day=${streakCount}`;
 
-    const isStreakBonus =
-      streakCount > 0 && streakCount % STREAK_INTERVAL_DAYS === 0;
-    const granted = isStreakBonus ? STREAK_WEEKLY_BONUS_TOKENS : DAILY_LOGIN_TOKENS;
+  let credit;
+  try {
+    credit = await creditTokens(userId, granted, reason, rewardKey, {
+      source: isStreakBonus ? 'streak_bonus' : 'daily_login',
+      legacy: `token_idempotency:${rewardKey}`,
+    });
+  } catch {
+    return { kind: 'error', rewardKey };
+  }
+  if (credit.outcome === 'replayed') return { kind: 'replayed', rewardKey, movement: credit.outcome };
+  if (credit.outcome === 'paused') return { kind: 'paused', rewardKey, movement: credit.outcome };
+  if (credit.outcome !== 'applied' || credit.balance === null) return { kind: 'error', rewardKey, movement: credit.outcome };
 
-    // Credit tokens. The daily idempotency key prevents a same-day double-credit
-    // even if this function were somehow called twice in parallel before the
-    // date write below lands.
-    const reason = isStreakBonus
-      ? `streak_bonus:${today}:day=${streakCount}`
-      : `daily_login:${today}:day=${streakCount}`;
-    const rewardKey = `daily_login:${userId}:${today}`;
-    if (trace) trace.rewardKey = rewardKey;
-    const creditResult = await creditTokens(
-      userId,
-      granted,
-      reason,
-      rewardKey,
-      {
-        source: isStreakBonus ? 'streak_bonus' : 'daily_login',
-        streakDay: streakCount,
-      }
-    );
-
-    if (trace) trace.balanceWritten = creditResult.success || creditResult.balanceWritten === true;
-    if (!creditResult.success) return null;
-
-    // Persist streak state
+  // The streak markers, only after `applied` (6.3). The credit stands if one
+  // fails: the next day's streak then restarts, and nothing pays twice.
+  try {
     await kv.put(`streak:${userId}:last_reward_date`, today);
     await kv.put(`streak:${userId}:count`, String(streakCount));
-
     const lifetimeMaxRaw = await kv.get(`streak:${userId}:lifetime_max`);
     const lifetimeMax = lifetimeMaxRaw ? parseInt(lifetimeMaxRaw, 10) : 0;
     if (streakCount > (Number.isFinite(lifetimeMax) ? lifetimeMax : 0)) {
       await kv.put(`streak:${userId}:lifetime_max`, String(streakCount));
     }
-
-    return {
-      granted,
-      streakDay: streakCount,
-      isStreakBonus,
-      balance: creditResult.balance,
-    };
-  } catch {
-    return null;
+  } catch (err) {
+    console.error(JSON.stringify({ source: 'daily-reward', event: 'streak_write_failed', reward_key: rewardKey, error: err instanceof Error ? err.message.slice(0, 120) : 'unknown' }));
   }
+
+  return {
+    kind: 'applied',
+    rewardKey,
+    reward: { granted, streakDay: streakCount, isStreakBonus, balance: credit.balance },
+  };
 }

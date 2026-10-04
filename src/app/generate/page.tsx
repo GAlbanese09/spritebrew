@@ -12,13 +12,10 @@ import { useSpriteStore } from '@/stores/spriteStore';
 import type { AnimateGeneratedContext } from '@/components/sprites/AnimateForm';
 import {
   PURCHASE_BANNER_COPY,
-  clearBaseline,
   readPurchaseStatus,
   shownFor,
-  takeBaseline,
   watchPurchase,
   type BannerEntry,
-  type PurchaseBaseline,
 } from '@/lib/purchaseBanner';
 
 const EARLY_ACCESS_DISMISS_KEY = 'spritebrew_early_access_dismissed';
@@ -116,15 +113,15 @@ function PurchaseStatusContent() {
   const { userId, getToken } = useAuth();
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
   const [status, setStatus] = useState<'success' | 'cancelled' | null>(null);
-  // HQ-14: the banner says only what the evidence shows (src/lib/purchaseBanner.ts).
+  // HQ-14: the banner says only what the evidence shows (src/lib/purchaseBanner.ts):
+  // 'added' only on this checkout's own credit (R9-8), found by its session id.
   // The shown state is tagged with its user, so one user's state is never
   // shown to another (Second's 042), and the ref carries the latch (HQ
   // `2026-10-03-005`) across a restart of the watcher below.
   const [bannerEntry, setBannerEntry] = useState<BannerEntry | null>(null);
   const bannerRef = useRef<BannerEntry | null>(null);
-  // The baseline is taken once per return, so a re-run of the effect below
-  // keeps it rather than finding storage already emptied.
-  const baselineRef = useRef<{ taken: boolean; baseline: PurchaseBaseline | null }>({ taken: false, baseline: null });
+  // The Checkout Session id from the return URL, kept once the URL is cleaned.
+  const sessionRef = useRef<string | null>(null);
   // The return's first-read time, per user, so a restarted watcher keeps the
   // same one-minute window (Second's 044).
   const firstReadRef = useRef<{ userId: string; at: number } | null>(null);
@@ -132,25 +129,21 @@ function PurchaseStatusContent() {
   useEffect(() => {
     const purchase = searchParams.get('purchase');
     if (purchase === 'success' || purchase === 'cancelled') {
+      if (purchase === 'success') sessionRef.current = searchParams.get('session_id');
       setStatus(purchase);
       window.history.replaceState({}, '', '/generate');
-      if (purchase === 'cancelled') clearBaseline();
     }
   }, [searchParams]);
 
   useEffect(() => {
     if (status !== 'success' || !userId) return;
-    if (!baselineRef.current.taken) {
-      baselineRef.current = { taken: true, baseline: takeBaseline(userId) };
-    }
     // The late line ends this return's reads (HQ `2026-10-03-008`): no restart.
     if (shownFor(bannerRef.current, userId) === 'late') return;
     if (firstReadRef.current?.userId !== userId) firstReadRef.current = { userId, at: Date.now() };
     const controller = new AbortController();
-    const baseline = baselineRef.current.baseline;
+    const sessionId = sessionRef.current;
     void watchPurchase({
-      read: () => readPurchaseStatus(getToken, controller.signal),
-      baseline: baseline && baseline.userId === userId ? baseline : null,
+      read: () => readPurchaseStatus(getToken, sessionId, controller.signal),
       previous: shownFor(bannerRef.current, userId),
       startedAt: firstReadRef.current.at,
       onState: (state) => {

@@ -1,8 +1,16 @@
-// SSE-streaming API route for sprite generation.
+// API route for sprite generation: charge, then enqueue for the consumer.
 //
-// Both Create New and Animate My Character now use the Retro Diffusion direct
-// API. Replicate has been fully removed. SSE streaming with 15-second heartbeat
-// pings keeps the Cloudflare proxy alive during long generations.
+// Both Create New and Animate My Character use the Retro Diffusion direct
+// API, called by the queue consumer (spritebrew-rd-consumer). This route
+// charges the job and enqueues it; the browser polls /api/generation-status.
+// The SSE path is retired (n1-ledger 007 section 4).
+//
+// Release 2 (n1-release-2-spec.md revision 9, 5.1): the job id, the request
+// hash and the RD body exist before any money; the identity read answers a
+// replay before the cap and the debit; the debit is 4.3, one guarded D1
+// batch with the job's row; a charged job is sent, then marked enqueued
+// (4.4); an enqueue that fails is refunded by 4.8's 'pages' fence, whose
+// read-back decides the answer. No admission record, no KV money key.
 //
 // Authentication: Clerk session JWT in the Authorization Bearer header.
 
@@ -18,11 +26,8 @@ const AUTH_MESSAGES: AuthMessages = {
 
 // ── Constants ──
 
-const RD_API_URL = 'https://api.retrodiffusion.ai/v1/inferences';
-
 // Animate My Character: action → rd_advanced_animation__* prompt_style
 const VALID_ACTIONS = ['walking', 'idle', 'attack', 'jump', 'crouch', 'destroy', 'subtle_motion', 'custom_action'];
-const VALID_FRAME_DURATIONS = [4, 6, 8, 10, 12, 16];
 
 const ACTION_STYLE_MAP: Record<string, string> = {
   walking: 'rd_advanced_animation__walking',
@@ -35,23 +40,8 @@ const ACTION_STYLE_MAP: Record<string, string> = {
   custom_action: 'rd_advanced_animation__custom_action',
 };
 
-const ACTION_PROMPT_PREFIX: Record<string, string> = {
-  walking: 'walking animation, smooth steps',
-  idle: 'idle breathing animation, subtle movement',
-  attack: 'attack animation, melee swing',
-  jump: 'jump animation, rising and falling',
-  crouch: 'crouching animation, ducking down',
-  destroy: 'death animation, falling and fading',
-  subtle_motion: 'subtle ambient motion, wind effect',
-  custom_action: '',
-};
-
 const FALLBACK_STYLE = 'animation__any_animation';
 
-// RD API parameter name for reference images.
-// Wrapped in a constant per recon recommendation — if RD ever renames this,
-// change one line instead of hunting through the route.
-const RD_REFERENCE_IMAGES_PARAM = 'reference_images';
 const RD_MAX_REFERENCE_IMAGES = 9;
 // 12MB ceiling on total reference payload, expressed in base64 string length
 // (base64 inflates raw bytes by ~4/3, so 12MB raw ≈ 16MB base64 chars).
@@ -88,47 +78,27 @@ export interface GenerateBody {
   fallbackInputImage?: string;
 }
 
-// ── SSE helpers ──
-
-const encoder = new TextEncoder();
-function sseEvent(data: Record<string, unknown>): Uint8Array {
-  return encoder.encode(`data: ${JSON.stringify(data)}\n\n`);
-}
-function sseComment(text: string): Uint8Array {
-  return encoder.encode(`: ${text}\n\n`);
-}
-function sseDone(): Uint8Array {
-  return encoder.encode('data: [DONE]\n\n');
-}
-function startHeartbeat(writer: WritableStreamDefaultWriter<Uint8Array>, ms = 15_000) {
-  return setInterval(async () => {
-    try { await writer.write(sseComment('heartbeat')); } catch { /* closed */ }
-  }, ms);
-}
-
 // ── POST handler ──
 
 import { getAuthedUserId, type AuthMessages } from '@/lib/edgeAuth';
 import {
-  debitTokens,
-  creditTokens,
   getLifetimeFreeCount,
   incrementLifetimeFreeCount,
   hasUserPaid,
   type FreeTierBucket,
 } from '@/lib/tokenBalance';
-import type { TxContext } from '@/lib/tokenTxMeta';
 import { getTokenCost, getResolutionMode, getFreeTierBucket, GENERATION_STYLES } from '@/lib/styleRegistry';
 import { getAccountStatus } from '@/lib/accountLock';
 import { isAdminUser } from '@/lib/generationLimits';
 import { isQueueKickoffEnabled } from '@/lib/featureFlag';
 import { deriveJobId } from '@/lib/jobIdHelper';
-import { DEBT_TTL_S, putJobState } from '@/lib/jobState';
+import { putJobState, putJobStateStrict } from '@/lib/jobState';
 import { enqueueJob } from '@/lib/queueProducer';
 import { buildRdCreateBody, buildRdAnimateBody } from '@/lib/rdBodyBuilder';
-import { devDelay, devFault, MoneyPausedError, PAUSED_MESSAGE } from '@/lib/moneyPause';
-import { admitMoney } from '@/lib/moneyAdmission';
-import { recordUnrefundedAlarm } from '@/lib/unrefundedAlarm';
+import { devFaultScope, PAUSED_MESSAGE } from '@/lib/moneyPause';
+import * as L from '@/lib/ledger';
+import { chargeGeneration, ledgerCtx } from '@/lib/money';
+import { recordLedgerAlarm, sha256Hex, stableStringify } from '@/lib/eventsRow';
 import {
   FREE_TIER_LIFETIME_PRO_CAP,
   FREE_TIER_LIFETIME_FAST_CAP,
@@ -140,6 +110,39 @@ const FREE_TIER_CAP: Record<FreeTierBucket, number> = {
   pro: FREE_TIER_LIFETIME_PRO_CAP,
   fast: FREE_TIER_LIFETIME_FAST_CAP,
 };
+
+// UNAPPROVED COPY (HQ-2): the enqueue catch's refunded answer (5.1's r5 branch).
+export const REFUNDED_COPY = 'Could not start your generation. Your tokens were refunded. Please try again.';
+// UNAPPROVED COPY (HQ-2): the enqueue catch's unconfirmed answer; it promises
+// no refund and does not say the job never started (O4).
+export const UNCONFIRMED_COPY = 'We could not confirm what happened to this generation. Check your gallery and your balance in a few minutes.';
+// UNAPPROVED COPY (HQ-7): the 409 for a request key used for a different generation (4.3).
+export const CONFLICT_COPY = 'This request key was already used for a different generation.';
+// UNAPPROVED COPY (4.3, the spec's text): uncertain, and the identity read found no row.
+export const NOT_CHARGED_COPY = 'You were not charged.';
+// UNAPPROVED COPY (4.3, HQ's wording per HQ-2's note; content `L 004` ruling 3):
+// uncertain, and the identity read failed. Nothing is enqueued, so the
+// recovery sweep's candidate (1) refunds a charge that happened.
+export const UNCONFIRMED_CHARGE_COPY = 'We could not confirm whether you were charged. If you were, your tokens will be returned automatically.';
+
+/** 4.3's `:meta`: the width and height the RD body carries, as sent for a
+ *  create (absent when not sent, so its size is unknown), `width ?? 64` for
+ *  both on an animate (validated square). */
+export function debitMeta(mode: 'create' | 'animate', rdBody: { width?: number; height?: number }): string | null {
+  const dims: Record<string, number> = {};
+  if (Number.isInteger(rdBody.width)) dims.width = rdBody.width as number;
+  if (Number.isInteger(rdBody.height)) dims.height = rdBody.height as number;
+  if (mode === 'animate') return JSON.stringify({ width: dims.width ?? 64, height: dims.width ?? 64 });
+  return Object.keys(dims).length ? JSON.stringify(dims) : null;
+}
+
+/** 4.3's `:hash`: SHA-256 of the key-sorted JSON of { mode, tokenCost, rdBody }. */
+export async function requestHash(mode: string, tokenCost: number, rdBody: unknown): Promise<string> {
+  return sha256Hex(stableStringify({ mode, tokenCost, rdBody }));
+}
+
+const json = (body: Record<string, unknown>, status: number) =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 
 export async function POST(request: Request) {
@@ -193,15 +196,9 @@ export async function POST(request: Request) {
   const bucket: FreeTierBucket = getFreeTierBucket(promptStyle);
   const isAdmin = isAdminUser(userId);
 
-  // Generation context recorded on the debit and any refund tx rows (KV
-  // metadata) so the admin failure-rate scan can bucket by style/mode/size
-  // without a get() per row. Animate defaults to 64 when width is omitted,
-  // matching validateAnimateBody; create has no server-side default.
-  const txCtx: TxContext = {
-    style: promptStyle,
-    mode,
-    size: body.width ?? (mode === 'animate' ? 64 : undefined),
-  };
+  // 4.3's `:size`, the requested width: animate defaults to 64, matching
+  // validateAnimateBody; create has no server-side default.
+  const size = body.width ?? (mode === 'animate' ? 64 : undefined);
 
   // Queue-kickoff routing decision — hoisted so the pre-debit guards below
   // can short-circuit cleanly for users on the queue path without re-running
@@ -284,336 +281,274 @@ export async function POST(request: Request) {
   // bonus_email_verified:* and email_verified_cache:* KV keys untouched for
   // historical analytics; nothing here writes to them anymore.)
 
-  // S0 (n1-release-2-spec.md 6.2, R5-1): the request id and the job id exist
-  // before the admission, so the record and both log lines carry them. The
-  // job id is a pure hash of the user and the idempotency key validated above.
+  // The job id, the request hash and the RD body before any money (5.1, 4.3).
+  // The job id is a pure hash of the user and the idempotency key validated
+  // above; the request id names the request in its lines and pending record.
   const requestId = `gen:${userId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
   const idempotencyKey = body.idempotencyKey as string;
   const jobId = await deriveJobId(userId, idempotencyKey);
+  // Translate camelCase request body to the snake_case RD wire format: the
+  // consumer forwards it verbatim (Build #2A.1).
+  const rdBody = mode === 'animate' ? buildRdAnimateBody(body) : buildRdCreateBody(body);
+  const hash = await requestHash(mode, tokenCost, rdBody);
+  const log = (outcome: string, extra: Record<string, unknown> = {}) =>
+    console.log(JSON.stringify({ source: 'generate', request_id: requestId, job_id: jobId, user_id: userId, outcome, ...extra }));
 
-  // Money paused (n1-ledger 005 section 4): no fresh generation starts, so
-  // nothing is debited. S0's admission record replaces the pause read: zero
-  // rows is the paused answer, and the record is completed in the finally,
-  // after the last money write (the send, or the catch's refund and records).
-  const admission = await admitMoney({
-    route: 'generate',
-    kind: 'job',
-    subject: jobId,
-    userId,
-    meta: { mode, tokenCost, requestId },
-    ids: { request_id: requestId, job_id: jobId, user_id: userId },
-  });
-  let outcome = 'exception';
+  let ctx: L.LedgerCtx;
   try {
-    if (!admission.admitted) {
-      outcome = 'paused';
-      return Response.json(
-        { success: false, error: 'money_paused', message: PAUSED_MESSAGE },
-        { status: 503 }
-      );
-    }
+    ctx = ledgerCtx();
+  } catch {
+    log('ledger unbound (503)');
+    return json({ success: false, error: 'not_charged', message: NOT_CHARGED_COPY }, 503);
+  }
 
+  // The replay, before the pause and the cap (5.1): an imported or tombstone
+  // row of this user, or a d1 row with this user and hash, is answered from
+  // its row, never charged and never enqueued; any other identity is a 409.
+  let identity: L.JobIdentity | null;
+  try {
+    identity = await L.readGenerationIdentity(ctx, jobId);
+  } catch {
+    log('identity read failed (503)');
+    return json({ success: false, error: 'not_charged', message: NOT_CHARGED_COPY }, 503);
+  }
+  const known = L.classifyIdentity((identity ?? undefined) as Record<string, unknown> | undefined, userId, hash, null);
+  if (known === 'old_request' || known === 'replay') {
+    log(`${known} (202)`);
+    return json({ jobId, replayed: true }, 202);
+  }
+  if (known === 'conflict') {
+    log('conflict (409)');
+    return json({ success: false, error: 'idempotency_conflict', message: CONFLICT_COPY }, 409);
+  }
 
-    // Free-tier lifetime cap enforcement, only for users who haven't paid.
-    // Admins are exempt. Plus / Pro / Animation roll up under the `pro` bucket;
-    // Fast has its own counter.
-    if (!isAdmin) {
-      const paid = await hasUserPaid(userId);
-      if (!paid) {
-        const used = await getLifetimeFreeCount(userId, bucket);
-        if (used >= FREE_TIER_CAP[bucket]) {
-          outcome = 'free_tier_cap (402)';
-          return Response.json(
-            {
-              success: false,
-              error: 'free_tier_cap_reached',
-              code: 'free_tier_cap_reached',
-              message: `You've used all free generations for this style tier. Top up to continue.`,
-              tier: bucket,
-            },
-            { status: 402 }
-          );
-        }
-      }
-    }
-
-    // Dev only (spec 10.3): hold the request before its debit.
-    await devDelay('delay_before_debit');
-
-    // Debit tokens before generation. A first-ever balance can still meet a
-    // pause that began after the gate above; nothing was debited then.
-    let debitResult: Awaited<ReturnType<typeof debitTokens>>;
-    try {
-      debitResult = await debitTokens(userId, tokenCost, requestId, txCtx);
-    } catch (err) {
-      if (err instanceof MoneyPausedError) {
-        outcome = 'paused (no balance to open)';
-        return Response.json(
-          { success: false, error: 'money_paused', message: PAUSED_MESSAGE },
-          { status: 503 }
-        );
-      }
-      throw err;
-    }
-    if (!debitResult.success) {
-      outcome = 'insufficient_tokens (402)';
-      return Response.json(
-        {
+  // Free-tier lifetime cap enforcement, only for users who haven't paid.
+  // Admins are exempt. Plus / Pro / Animation roll up under the `pro` bucket;
+  // Fast has its own counter.
+  if (!isAdmin) {
+    const paid = await hasUserPaid(userId);
+    if (!paid) {
+      const used = await getLifetimeFreeCount(userId, bucket);
+      if (used >= FREE_TIER_CAP[bucket]) {
+        log('free_tier_cap (402)');
+        return json({
           success: false,
-          error: 'Insufficient tokens',
-          balance: debitResult.balance,
-          required: debitResult.required,
-        },
-        { status: 402 }
-      );
-    }
-
-    // Dev only (spec 10.3): hold the request after its debit.
-    await devDelay('delay_after_debit');
-
-    // Free-tier lifetime counter: increment after successful debit, before the
-    // (potentially long) generation. A failed-and-refunded gen still counts as
-    // one free attempt; that's intentional to keep cap enforcement tight.
-    if (!isAdmin) {
-      try {
-        const paid = await hasUserPaid(userId);
-        if (!paid) {
-          await incrementLifetimeFreeCount(userId, bucket);
-        }
-      } catch { /* best effort */ }
-    }
-
-    // === QUEUE-KICKOFF FEATURE FLAG (Confluence 87490562 §14) ===
-    // When enabled for this user, return 202 {jobId} after enqueueing instead
-    // of opening the SSE stream. The consumer Worker (sibling repo) handles
-    // the long-running RD call out-of-band; browser polls /api/generation-status.
-    //
-    // Day-1+ rollout: env var stays 'false'; admin auto-included via isAdminUser, staged-rollout users via isQueueBetaUser.
-    // When flag is OFF, behavior below is byte-identical to pre-refactor.
-    // queueKickoff hoisted above the debit; idempotencyKey already validated.
-    if (queueKickoff) {
-      // Wrap everything from here through the 202 in try/catch so a throw at
-      // any step (KV get/put, RD body build, enqueueJob's binding check, or
-      // q.send) refunds the debit and returns a structured 503. Mirrors the
-      // SSE path's compensating refund at line ~342-343. Without this, a
-      // synchronous throw bubbles to the Edge runtime → bare 500 text/plain
-      // → consumer never runs → consumer-side refund never fires → debit
-      // orphaned (Day-21 incident).
-      let enqueuedAt: number | undefined;
-      try {
-        const env = process.env as Record<string, unknown>;
-        const kv = env.SPRITEBREW_KV as {
-          get: (k: string) => Promise<string | null>;
-          put: (k: string, v: string, opts?: unknown) => Promise<void>;
-        };
-
-        // Request-side idempotency: same jobId already exists → return it without re-enqueue.
-        const existing = await kv.get(`job:${jobId}`);
-        if (existing) {
-          outcome = 'replay (202, no new job)';
-          return new Response(
-            JSON.stringify({ jobId, replayed: true }),
-            { status: 202, headers: { 'content-type': 'application/json' } }
-          );
-        }
-
-        const now = Date.now();
-        enqueuedAt = now;
-        // S0 (spec 5.1, A3, N4): the pending record carries its cost and request
-        // id, both or neither, so an import can tie it to its debit.
-        await putJobState(kv, jobId, {
-          status: 'pending',
-          userId,
-          mode,
-          enqueuedAt: now,
-          tokenCost,
-          requestId,
-        });
-
-        // Translate camelCase request body → snake_case RD wire format BEFORE
-        // enqueueing. The consumer forwards body verbatim to RD, so the producer
-        // must hand it the exact RD shape (Build #2A.1). Mirrors runCreate/runAnimate.
-        const rdBody = mode === 'animate'
-          ? buildRdAnimateBody(body)
-          : buildRdCreateBody(body);
-
-        // fallbackInputImage: envelope-only (never sent to RD directly). Consumer
-        // uses it as the animation__any_animation fallback input for oversized
-        // primaries. Cloudflare Queues cap is 128KB per message; the primary
-        // inputImage already spends up to ANIMATE_INPUT_B64_SERVER_MAX (124KB),
-        // leaving ~4KB headroom. A 64×64 nearest-neighbor PNG is typically
-        // ~1-2KB base64, so the fallback fits in the common case, but we
-        // budget-check defensively and omit it if the combined size would
-        // approach the cap. Consumer degrades gracefully when absent.
-        const QUEUE_MSG_BUDGET_B64 = 125_000;
-        const primaryLen = typeof body.inputImage === 'string' ? body.inputImage.length : 0;
-        const fallbackLen =
-          typeof body.fallbackInputImage === 'string' ? body.fallbackInputImage.length : 0;
-        const includeFallback =
-          mode === 'animate' &&
-          typeof body.fallbackInputImage === 'string' &&
-          body.fallbackInputImage.length > 0 &&
-          primaryLen + fallbackLen <= QUEUE_MSG_BUDGET_B64;
-        if (
-          mode === 'animate' &&
-          typeof body.fallbackInputImage === 'string' &&
-          body.fallbackInputImage.length > 0 &&
-          !includeFallback
-        ) {
-          console.warn(
-            '[enqueue] fallbackInputImage omitted: total b64 would exceed queue budget',
-            JSON.stringify({ jobId, primaryLen, fallbackLen, budget: QUEUE_MSG_BUDGET_B64 })
-          );
-        }
-
-        // Dev-only fault for ruling G's test: the enqueue fails after the debit.
-        if ((await devFault())?.split(',').includes('enqueue_throw')) {
-          throw new Error('dev fault: enqueue');
-        }
-
-        // Dev only (spec 10.3): hold the request before its queue send.
-        await devDelay('delay_before_send');
-
-        await enqueueJob(env.RD_QUEUE, {
-          jobId,
-          userId,
-          idempotencyKey,
-          tokenCost,
-          mode,
-          body: rdBody,
-          enqueuedAt: now,
-          ...(includeFallback ? { fallbackInputImage: body.fallbackInputImage } : {}),
-        });
-
-        outcome = 'enqueued (202)';
-        return new Response(
-          JSON.stringify({ jobId }),
-          { status: 202, headers: { 'content-type': 'application/json' } }
-        );
-      } catch {
-        // Compensating refund. Same idempotency seed as the SSE path so a
-        // retry that lands in this branch (or in SSE) dedupes correctly via
-        // tokenBalance's token_idempotency:* check. Not gated by the money
-        // pause: it undoes this request's own debit.
-        const refundKey = `refund:${requestId}`;
-        const refund = await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey, txCtx);
-        // Ruling G, as amended by n1-ledger-02.md 002 B and C: claim no refund
-        // that was not confirmed. The record carries the debt with its evidence
-        // (24 h) so the consumer's sweep settles it once stores recover; the
-        // alarm row puts it on the morning digest as the fallback.
-        const refundOwed = refund.success
-          ? undefined
-          : {
-              tokenCost,
-              reason: 'refund_credit_failed',
-              requestId,
-              idempotencyKey: refundKey,
-              balanceWritten: refund.balanceWritten === true,
-            };
-
-        // Best-effort: write the job record as a terminal error, shaped like
-        // the consumer's error records, so the status route serves it and a
-        // resumed poll ends with the refund message instead of polling
-        // "pending" until it abandons. Inner try/catch: must never mask the
-        // refund return path above.
-        {
-          try {
-            const env = process.env as Record<string, unknown>;
-            const kv = env.SPRITEBREW_KV as {
-              put: (k: string, v: string, opts?: unknown) => Promise<void>;
-            } | undefined;
-            if (kv && typeof kv.put === 'function') {
-              const failedAt = Date.now();
-              await putJobState(kv, jobId, {
-                status: 'error',
-                userId,
-                mode,
-                enqueuedAt: enqueuedAt ?? failedAt,
-                failedAt,
-                error: 'Could not start your generation.',
-                errorCode: 'submission_failed',
-                attempts: 0,
-                refunded: refund.success,
-                ...(refundOwed ? { refundOwed } : {}),
-              }, refundOwed ? DEBT_TTL_S : undefined);
-            }
-          } catch { /* best-effort cleanup */ }
-        }
-
-        if (refundOwed) {
-          const alarmed = await recordUnrefundedAlarm({
-            userId,
-            jobId,
-            tokenCost,
-            reason: 'refund_credit_failed',
-            requestId,
-            idempotencyKey: refundKey,
-            balanceWritten: refundOwed.balanceWritten,
-          });
-          if (!alarmed) {
-            // The record of last resort. No email, no token.
-            console.error(JSON.stringify({
-              source: 'generate',
-              event: 'unrefunded_alarm_not_written',
-              jobId,
-              userId,
-              tokenCost,
-              requestId,
-              balanceWritten: refundOwed.balanceWritten,
-            }));
-          }
-        }
-
-        outcome = refundOwed ? 'refund_owed (503)' : 'refunded (503)';
-        return new Response(
-          JSON.stringify({
-            success: false,
-            error: 'submission_failed',
-            // balanceWritten: the refund's balance write landed before the
-            // failure, so the tokens are back even though it is unconfirmed.
-            message: refund.success || refund.balanceWritten === true
-              ? 'Could not start your generation. Your tokens were refunded. Please try again.'
-              : 'Could not start your generation. We could not confirm your refund yet; your tokens will be returned. Please try again later.',
-          }),
-          { status: 503, headers: { 'content-type': 'application/json' } }
-        );
+          error: 'free_tier_cap_reached',
+          code: 'free_tier_cap_reached',
+          message: `You've used all free generations for this style tier. Top up to continue.`,
+          tier: bucket,
+        }, 402);
       }
     }
-    // === END QUEUE-KICKOFF GATE ===
+  }
 
-    // Open SSE stream
-    const { readable, writable } = new TransformStream<Uint8Array>();
-    const writer = writable.getWriter();
+  // The debit with its job intent (4.3), its identity rules (A5).
+  const debit = await chargeGeneration(ctx, {
+    uid: userId, job: jobId, cost: tokenCost, mode, ckey: idempotencyKey, hash,
+    style: promptStyle, size: size ?? null, meta: debitMeta(mode, rdBody),
+  });
+  switch (debit.outcome) {
+    case 'charged':
+      break;
+    case 'old_request':
+    case 'replay':
+      log(`${debit.outcome} (202, never enqueued here)`);
+      return json({ jobId, replayed: true }, 202);
+    case 'conflict':
+      log('conflict (409)');
+      return json({ success: false, error: 'idempotency_conflict', message: CONFLICT_COPY }, 409);
+    case 'paused':
+      log('paused (503)');
+      return json({ success: false, error: 'money_paused', message: PAUSED_MESSAGE }, 503);
+    case 'insufficient':
+      log('insufficient_tokens (402)');
+      return json({ success: false, error: 'Insufficient tokens', balance: debit.balance, required: tokenCost }, 402);
+    case 'not_charged':
+      log('not charged (503)');
+      return json({ success: false, error: 'not_charged', message: NOT_CHARGED_COPY }, 503);
+    default:
+      // unconfirmed, or an error: nothing is enqueued, so candidate (1)
+      // refunds a charge that happened (`L 004` ruling 3).
+      log(`${debit.outcome} (503)`);
+      return json({ success: false, error: 'charge_unconfirmed', message: UNCONFIRMED_CHARGE_COPY }, 503);
+  }
 
-    (async () => {
-      const heartbeat = startHeartbeat(writer);
-      try {
-        await writer.write(sseEvent({ type: 'status', message: 'Starting generation...' }));
-        const result = mode === 'animate' ? await runAnimate(body) : await runCreate(body);
-        await writer.write(sseEvent({ type: 'result', data: result }));
-      } catch (err) {
-        // RD API failure: refund the tokens
-        const refundKey = `refund:${requestId}`;
-        await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey, txCtx);
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        await writer.write(sseEvent({ type: 'error', message })).catch(() => {});
-      } finally {
-        clearInterval(heartbeat);
-        await writer.write(sseDone()).catch(() => {});
-        await writer.close().catch(() => {});
-      }
-    })();
+  // Free-tier lifetime counter: only when this execution charged (5.1). A
+  // failed-and-refunded gen still counts as one free attempt.
+  if (!isAdmin) {
+    try {
+      const paid = await hasUserPaid(userId);
+      if (!paid) await incrementLifetimeFreeCount(userId, bucket);
+    } catch { /* best effort */ }
+  }
 
-    return new Response(readable, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
-      },
+  let enqueuedAt: number | undefined;
+  try {
+    const env = process.env as Record<string, unknown>;
+    const kv = env.SPRITEBREW_KV as {
+      get: (k: string) => Promise<string | null>;
+      put: (k: string, v: string, opts?: unknown) => Promise<void>;
+    };
+
+    const now = Date.now();
+    enqueuedAt = now;
+    // The pending record carries its cost and request id, both or neither
+    // (S0, A3, N4).
+    await putJobState(kv, jobId, {
+      status: 'pending',
+      userId,
+      mode,
+      enqueuedAt: now,
+      tokenCost,
+      requestId,
     });
 
-  } finally {
-    await admission.complete(outcome);
+    // fallbackInputImage: envelope-only (never sent to RD directly). Consumer
+    // uses it as the animation__any_animation fallback input for oversized
+    // primaries. Cloudflare Queues cap is 128KB per message; the primary
+    // inputImage already spends up to ANIMATE_INPUT_B64_SERVER_MAX (124KB),
+    // leaving ~4KB headroom. A 64x64 nearest-neighbor PNG is typically
+    // ~1-2KB base64, so the fallback fits in the common case, but we
+    // budget-check defensively and omit it if the combined size would
+    // approach the cap. Consumer degrades gracefully when absent.
+    const QUEUE_MSG_BUDGET_B64 = 125_000;
+    const primaryLen = typeof body.inputImage === 'string' ? body.inputImage.length : 0;
+    const fallbackLen =
+      typeof body.fallbackInputImage === 'string' ? body.fallbackInputImage.length : 0;
+    const includeFallback =
+      mode === 'animate' &&
+      typeof body.fallbackInputImage === 'string' &&
+      body.fallbackInputImage.length > 0 &&
+      primaryLen + fallbackLen <= QUEUE_MSG_BUDGET_B64;
+    if (
+      mode === 'animate' &&
+      typeof body.fallbackInputImage === 'string' &&
+      body.fallbackInputImage.length > 0 &&
+      !includeFallback
+    ) {
+      console.warn(
+        '[enqueue] fallbackInputImage omitted: total b64 would exceed queue budget',
+        JSON.stringify({ jobId, primaryLen, fallbackLen, budget: QUEUE_MSG_BUDGET_B64 })
+      );
+    }
+
+    // Dev only (10.3): `send_skip` ends the request before its send, as a
+    // Pages instance dying there would (candidate (1) refunds it, T7).
+    if ((await devFaultScope('send_skip')) !== undefined) {
+      log('dev fault send_skip (202, never sent)');
+      return json({ jobId }, 202);
+    }
+
+    await enqueueJob(env.RD_QUEUE, {
+      jobId,
+      userId,
+      idempotencyKey,
+      tokenCost,
+      mode,
+      body: rdBody,
+      enqueuedAt: now,
+      ...(includeFallback ? { fallbackInputImage: body.fallbackInputImage } : {}),
+    });
+
+    // Dev only (10.3): `send_throw_after`, a send that delivered and then
+    // threw (T16: the consumer claims first; 202 uncertain, no refund).
+    if ((await devFaultScope('send_throw_after')) !== undefined) {
+      throw new Error('dev fault: send_throw_after');
+    }
+
+    // 4.4, best effort: a failure is logged by the library.
+    await L.markEnqueued(ctx, jobId);
+
+    log('enqueued (202)');
+    return json({ jobId }, 202);
+  } catch (err) {
+    return enqueueCatch(ctx, {
+      jobId, userId, mode, enqueuedAt, log,
+      errMsg: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * The enqueue catch (5.1): 4.8's 'pages' fence with `submission_failed`, then
+ * r5's branch. Refunded now: the strict error status record (a failed write
+ * leaves the marker NULL for the repair pass) and 503 with the refunded copy.
+ * Claimed by a consumer: no record, no refund, 202 uncertain. Finished: from
+ * its outcome. Fenced by the migrator's phase, or uncertain and unread: 503
+ * with the unconfirmed copy; the row is a debited debt the sweep settles.
+ */
+async function enqueueCatch(ctx: L.LedgerCtx, a: {
+  jobId: string;
+  userId: string;
+  mode: 'create' | 'animate';
+  enqueuedAt: number | undefined;
+  errMsg: string;
+  log: (outcome: string, extra?: Record<string, unknown>) => void;
+}): Promise<Response> {
+  let r: L.RefundResult;
+  try {
+    // Dev only (10.3): `catch_refund_fail`, the compensating refund failing.
+    if ((await devFaultScope('catch_refund_fail')) !== undefined) throw new Error('dev fault: catch_refund_fail');
+    r = await L.refundAndFinish(ctx, { job: a.jobId, fence: 'pages', code: 'submission_failed', msg: a.errMsg.slice(0, 500) });
+  } catch {
+    r = { outcome: 'error', id: '', amount: null, row: null };
+  }
+  const rowOutcome = (r.row as Record<string, unknown> | null)?.outcome;
+  const unconfirmed = () => json({ success: false, error: 'submission_failed', message: UNCONFIRMED_COPY }, 503);
+
+  if (r.outcome === 'refunded' || r.outcome === 'already_refunded_legacy') {
+    const written = await writeRefundedStatus(ctx, a, r);
+    a.log(`refunded (503)`, { refund: r.outcome, status_written: written });
+    return json({ success: false, error: 'submission_failed', message: REFUNDED_COPY }, 503);
+  }
+  if (r.outcome === 'live_owner') {
+    a.log('claimed by a consumer (202 uncertain)');
+    return json({ jobId: a.jobId, uncertain: true }, 202);
+  }
+  if (r.outcome === 'already_finished') {
+    a.log(`finished (${String(rowOutcome)})`);
+    if (rowOutcome === 'refunded' || rowOutcome === 'refunded_legacy') {
+      return json({ success: false, error: 'submission_failed', message: REFUNDED_COPY }, 503);
+    }
+    if (rowOutcome === 'succeeded' || rowOutcome === 'rescued') return json({ jobId: a.jobId }, 202);
+    return unconfirmed();
+  }
+  if (r.outcome === 'corruption') {
+    await recordLedgerAlarm({ kind: 'debit_missing', subject: a.jobId, subjectKind: 'job', userId: a.userId, fields: { fence: 'pages' } });
+  }
+  a.log(`refund ${r.outcome} (503 unconfirmed)`);
+  return unconfirmed();
+}
+
+/** The strict error status record after a verified refund, then the marker
+ *  (4.10). Answers whether the marker is set. */
+async function writeRefundedStatus(ctx: L.LedgerCtx, a: {
+  jobId: string; userId: string; mode: 'create' | 'animate'; enqueuedAt: number | undefined;
+}, r: L.RefundResult): Promise<boolean> {
+  try {
+    const kv = (process.env as Record<string, unknown>).SPRITEBREW_KV as { put: (k: string, v: string, opts?: unknown) => Promise<void> } | undefined;
+    if (!kv || typeof kv.put !== 'function') throw new Error('SPRITEBREW_KV unbound');
+    const failedAt = Date.now();
+    await putJobStateStrict(kv, a.jobId, {
+      status: 'error',
+      userId: a.userId,
+      mode: a.mode,
+      enqueuedAt: a.enqueuedAt ?? failedAt,
+      failedAt,
+      error: 'Could not start your generation.',
+      errorCode: 'submission_failed',
+      attempts: 0,
+      refunded: true,
+      ...(r.amount !== null ? { refundedAmount: r.amount } : {}),
+    });
+  } catch (err) {
+    console.error(JSON.stringify({ source: 'generate', event: 'status_write_failed', job_id: a.jobId, error: err instanceof Error ? err.message.slice(0, 120) : 'unknown' }));
+    return false;
+  }
+  try {
+    return await L.markStatusWritten(ctx, a.jobId);
+  } catch {
+    return false;
   }
 }
 
@@ -695,111 +630,4 @@ function validateAnimateBody(body: GenerateBody): string | null {
     }
   }
   return null;
-}
-
-// ── Runners ──
-
-async function callRD(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const rdToken = process.env.RETRO_DIFFUSION_API_KEY;
-  if (!rdToken) throw new Error('Retro Diffusion API key not configured — contact the administrator.');
-
-  const res = await fetch(RD_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-RD-Token': rdToken },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const errBody = await res.text().catch(() => 'Unknown');
-    throw new Error(`Retro Diffusion error (${res.status}): ${errBody.slice(0, 300)}`);
-  }
-
-  const data = await res.json();
-  if (!data.base64_images?.length) {
-    throw new Error('Generation completed but no image was returned.');
-  }
-
-  return {
-    success: true,
-    imageUrl: `data:image/png;base64,${data.base64_images[0]}`,
-    prediction: {
-      status: 'succeeded',
-      cost: data.balance_cost,
-      remaining_balance: data.remaining_balance,
-    },
-  };
-}
-
-/** Create New — text-to-sprite via RD direct API. */
-async function runCreate(body: GenerateBody): Promise<Record<string, unknown>> {
-  const promptStyle = body.promptStyle ?? body.style;
-  const isAnimation = promptStyle?.startsWith('animation__');
-
-  const payload: Record<string, unknown> = {
-    prompt: body.prompt!.trim(),
-    prompt_style: promptStyle,
-    width: body.width,
-    height: body.height,
-    num_images: 1,
-  };
-
-  if (body.removeBg) payload.remove_bg = true;
-  if (isAnimation) payload.return_spritesheet = true;
-
-  // Forward reference images only when present — keeps non-reference calls
-  // unchanged on the RD side.
-  if (body.referenceImages && body.referenceImages.length > 0) {
-    payload[RD_REFERENCE_IMAGES_PARAM] = body.referenceImages;
-  }
-
-  return callRD(payload);
-}
-
-/** Animate My Character — advanced animation via RD direct API. */
-async function runAnimate(body: GenerateBody): Promise<Record<string, unknown>> {
-  const { inputImage, action, framesDuration, motionPrompt } = body;
-  const duration = framesDuration && VALID_FRAME_DURATIONS.includes(framesDuration) ? framesDuration : 4;
-  const rawBase64 = inputImage!.replace(/^data:image\/[a-z]+;base64,/, '');
-  const animSize = body.width ?? 64;
-
-  const prefix = ACTION_PROMPT_PREFIX[action!] ?? '';
-  const userMotion = motionPrompt?.trim() ?? '';
-  const prompt = action === 'custom_action'
-    ? (userMotion || 'smooth animation')
-    : [prefix, userMotion].filter(Boolean).join(', ');
-
-  const promptStyle = ACTION_STYLE_MAP[action!] ?? FALLBACK_STYLE;
-
-  const payload: Record<string, unknown> = {
-    prompt, width: animSize, height: animSize, num_images: 1,
-    prompt_style: promptStyle, frames_duration: duration,
-    return_spritesheet: true, input_image: rawBase64,
-  };
-
-  // Fix a: RD honors remove_bg: true on rd_advanced_animation__* + the
-  // animation__any_animation fallback, returning genuine hard 1-bit alpha
-  // — no client-side keyer halo. Mirrors runCreate's gating at ~line 604.
-  // Both the initial call and the fallback branch below inherit this because
-  // remove_bg lives on the shared payload object.
-  if (body.removeBg) payload.remove_bg = true;
-
-  try {
-    return await callRD(payload);
-  } catch {
-    // Fallback to animation__any_animation if advanced style fails.
-    // The last-resort retry sheds untested parameters so a toggle-ON user
-    // degrades to today's opaque-plus-banner behavior rather than a hard
-    // double-charged failure — the July 7 RD confirmation covered
-    // rd_advanced_animation__* only, so we don't know that remove_bg is
-    // honored on animation__any_animation. Same rationale as dropping
-    // frames_duration: the fallback style has a different pipeline that may
-    // 400 on parameters the primary path accepts.
-    if (promptStyle !== FALLBACK_STYLE) {
-      payload.prompt_style = FALLBACK_STYLE;
-      delete payload.frames_duration;
-      delete payload.remove_bg;
-      return callRD(payload);
-    }
-    throw new Error('Animation generation failed.');
-  }
 }

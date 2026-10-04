@@ -5,14 +5,18 @@
 // failure-rate/route.ts does it. No Clerk session check; this is an
 // ops/observability surface.
 //
-// The ledger is written by the consumer Worker (spritebrew-rd-consumer,
-// src/events.ts) and is observability, not money: token_tx:* in KV stays the
-// source of truth for balances. This route only reads. Bound parameters only.
+// The event ledger is written by the consumer Worker (spritebrew-rd-consumer,
+// src/events.ts) and by the Pages app's own writers, and is observability,
+// not money: money truth is the D1 ledger, spritebrew-ledger. This route only
+// reads. Bound parameters only.
 //
-// Query: exactly one of ?userId= or ?jobId=. Optional ?day=YYYY-MM-DD (New
-// York calendar day, default today; ignored for jobId, a job's timeline is
-// small and has no day filter), ?format=json|ndjson (default json), ?limit=
-// (default 500, cap 2000).
+// Query: exactly one of ?userId=, ?jobId= or ?eventName=. Optional
+// ?day=YYYY-MM-DD (New York calendar day, default today; ignored for jobId,
+// a job's timeline is small and has no day filter), ?format=json|ndjson
+// (default json), ?limit= (default 500, cap 2000). ?eventName= takes one name
+// from EVENT_NAMES, newest first, over every day: S0's
+// `admission.late_completion` rows, each a review George owes before the
+// next switch's step 0 (n1-release-2-spec.md 8, R7-1).
 
 export const runtime = 'edge';
 
@@ -67,6 +71,10 @@ const COLUMNS =
 
 const SQL_BY_USER_DAY = `SELECT ${COLUMNS} FROM events WHERE user_id = ?1 AND reporting_day = ?2 ORDER BY occurred_at_ms, event_id LIMIT ?3`;
 const SQL_BY_JOB = `SELECT ${COLUMNS} FROM events WHERE job_id = ?1 ORDER BY occurred_at_ms, event_id LIMIT ?2`;
+const SQL_BY_NAME = `SELECT ${COLUMNS} FROM events WHERE event_name = ?1 ORDER BY occurred_at_ms DESC, event_id LIMIT ?2`;
+
+/** The event names ?eventName= accepts. */
+const EVENT_NAMES: ReadonlySet<string> = new Set(['admission.late_completion']);
 
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 2000;
@@ -123,8 +131,12 @@ export async function GET(request: Request): Promise<Response> {
   const params = new URL(request.url).searchParams;
   const userId = params.get('userId')?.trim() || null;
   const jobId = params.get('jobId')?.trim() || null;
-  if ((userId && jobId) || (!userId && !jobId)) {
-    return badRequest('Exactly one of userId or jobId is required.');
+  const eventName = params.get('eventName')?.trim() || null;
+  if ([userId, jobId, eventName].filter(Boolean).length !== 1) {
+    return badRequest('Exactly one of userId, jobId or eventName is required.');
+  }
+  if (eventName && !EVENT_NAMES.has(eventName)) {
+    return badRequest(`eventName must be one of: ${[...EVENT_NAMES].join(', ')}.`);
   }
 
   const dayParam = params.get('day')?.trim();
@@ -144,7 +156,9 @@ export async function GET(request: Request): Promise<Response> {
   try {
     const result = userId
       ? await db.prepare(SQL_BY_USER_DAY).bind(userId, day, limit).all<EventRow>()
-      : await db.prepare(SQL_BY_JOB).bind(jobId, limit).all<EventRow>();
+      : eventName
+        ? await db.prepare(SQL_BY_NAME).bind(eventName, limit).all<EventRow>()
+        : await db.prepare(SQL_BY_JOB).bind(jobId, limit).all<EventRow>();
     rows = result.results ?? [];
   } catch (err) {
     return Response.json(
@@ -153,7 +167,7 @@ export async function GET(request: Request): Promise<Response> {
     );
   }
 
-  const subject = userId ?? (jobId as string);
+  const subject = userId ?? eventName ?? (jobId as string);
 
   if (format === 'ndjson') {
     // One canonical event per line, exactly as the writer serialized it.
@@ -171,7 +185,7 @@ export async function GET(request: Request): Promise<Response> {
   return Response.json(
     {
       success: true,
-      query: userId ? { userId, day, limit } : { jobId, day, limit },
+      query: userId ? { userId, day, limit } : eventName ? { eventName, limit } : { jobId, day, limit },
       count: rows.length,
       rows,
     },

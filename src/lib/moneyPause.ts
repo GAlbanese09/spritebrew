@@ -6,6 +6,12 @@
  * fault can never let an old-money write through during a switch.
  *
  * Consumer copy: spritebrew-rd-consumer/src/moneyPause.ts. Keep them in step.
+ *
+ * Release 2 (n1-release-2-spec.md revision 9, 6.2) keeps this read for the
+ * email-list check, the daily-reward read, the Stripe webhook's first step
+ * and the status route's paused copy; every money statement carries its own
+ * pause predicate (4.0). The dev faults are 10.3's, scoped; release 1's hold
+ * faults are retired with S0's admission records (7.1 rows 8 and 10).
  */
 
 interface D1Like {
@@ -21,11 +27,11 @@ export class MoneyPausedError extends Error {
 }
 
 /** The customer-facing copy for a paused money write. */
-// UNAPPROVED COPY (HQ-1, `2026-10-03-008`): HQ's text, built in S0; approval comes with S0's production go (HQ-4).
+// HQ-1 (`2026-10-03-008`), approved with S0's production go (HQ `2026-10-04-002`).
 export const PAUSED_MESSAGE = 'SpriteBrew is finishing some maintenance. Please try again in a little while. You were not charged.';
 
 /** The same, where nothing was being charged (a balance opening, a reward). */
-// UNAPPROVED COPY (HQ-1, `2026-10-03-008`): HQ's text, built in S0; approval comes with S0's production go (HQ-4).
+// HQ-1 (`2026-10-03-008`), approved with S0's production go (HQ `2026-10-04-002`).
 export const UPDATING_MESSAGE = 'SpriteBrew is finishing some maintenance. Please try again in a little while.';
 
 const PAUSE_READ_TIMEOUT_MS = 2_000;
@@ -119,18 +125,4 @@ export async function devFaultScope(name: string): Promise<string | null | undef
     if (faultName === name) return rest.length ? rest.join(':') : null;
   }
   return undefined;
-}
-
-/**
- * The four hold faults (10.3): `delay_before_debit:<minutes>`,
- * `delay_after_debit:<minutes>`, `delay_before_send:<minutes>` and
- * `delay_before_credit:<minutes>` hold the request that long, dev only, so the
- * drain tests can keep a request in flight across a pause.
- */
-export async function devDelay(name: string): Promise<void> {
-  const scope = await devFaultScope(name);
-  const minutes = scope == null ? NaN : Number(scope);
-  if (!Number.isFinite(minutes) || minutes <= 0) return;
-  console.log(JSON.stringify({ source: 'dev-fault', event: 'delay', fault: name, minutes }));
-  await new Promise((resolve) => setTimeout(resolve, minutes * 60_000));
 }

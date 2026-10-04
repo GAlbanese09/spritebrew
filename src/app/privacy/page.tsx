@@ -22,16 +22,17 @@ export default function PrivacyPage() {
               with us.
             </p>
             <p>
-              When an account is created, we check whether its email address belongs to a
-              disposable email service. If it does, the account does not receive free tokens.
+              When an account is created, we check whether its email address belongs to a known
+              disposable email service, to limit abuse of the free signup bonus.
             </p>
             <p>
               We keep your token balance for as long as your account exists, and a log of your token
               credits and debits for 90 days.
             </p>
             <p>
-              We also keep small records that run the free tier: your signup grant, your daily login
-              streak, and how many free generations you have used.
+              We also keep small records that run the free tier and bonuses: your signup grant, your
+              daily login streak, how many free generations you have used, and which one-time
+              bonuses you have claimed.
             </p>
           </div>
         </section>
@@ -54,15 +55,15 @@ export default function PrivacyPage() {
               (a day if we owe you a refund for it), and a copy that is deleted after one day.
             </p>
             <p>
-              An image you upload stays on our side only while its job waits in our queue, usually
-              minutes. A job that fails before it starts can wait up to 14 days before it is refunded
-              and removed.
+              An image you upload travels with its job through our processing queue and is removed
+              from the queue once the job is done.
             </p>
             <p>
               To find and fix failures, we record each generation&apos;s progress (when it started,
-              whether it finished, and any error message) with your account id. These records are
-              deleted when your account is deleted. Our server logs, which also carry your account
-              id, are deleted after 7 days.
+              whether it finished, any error message, the style and size, and any tokens refunded)
+              with your account id. These records are deleted when your account is deleted. Logs
+              from our processing service, which also carry your account id, are deleted after 7
+              days.
             </p>
             <p>
               The sprite slicer, preview, export tools and pixel editor run in your browser. Files
@@ -70,9 +71,10 @@ export default function PrivacyPage() {
             </p>
             <p>
               Some things are kept only on your device, in your browser: your recent generations (up
-              to 50, with images), your Animate settings and saved templates, editor drafts, and a
-              copy of your token balance. Clearing your browser data removes these. It does not
-              delete anything saved to your account.
+              to 50, with small previews, and full images for the most recent few), your Animate
+              settings and saved templates, editor drafts, and a copy of your token balance.
+              Clearing your browser data removes these. It does not delete anything saved to your
+              account.
             </p>
           </div>
         </section>
@@ -88,15 +90,22 @@ export default function PrivacyPage() {
               When you open a checkout, we record your account id, the time, your IP address, your
               browser&apos;s user agent, and your consent to receive the tokens right away. We keep
               this record for 400 days as evidence in case a payment is disputed, whether or not you
-              complete the purchase.
+              complete the purchase. We also send your account id, IP address and the time of your
+              consent to Stripe with the checkout.
             </p>
             <p>
               When a payment succeeds, we keep a record of it (your account id, the pack, the tokens,
               the amount and Stripe&apos;s payment ids) and mark your account as a paying account.
+              These records have no set expiry.
             </p>
             <p>
-              If a payment is refunded or disputed, we keep a record of it, and a disputed payment
-              can pause the account while it is resolved.
+              If a payment is refunded, we take back the tokens for the refunded amount and keep a
+              record of the refund. If that leaves your balance below zero, the account is locked
+              until you contact us. If a payment is disputed (a chargeback), we take back its tokens
+              and close the account. For refunds and disputes we keep evidence about the purchase,
+              including the checkout record above, for 400 days, and we may add the email address
+              and card fingerprint used for the payment (a code Stripe uses to recognize a card, not
+              the card number) to fraud-prevention lists in our Stripe account.
             </p>
             <p>Stripe keeps its own records of your payments, as the law requires.</p>
           </div>
@@ -109,7 +118,8 @@ export default function PrivacyPage() {
           <div className="space-y-3">
             <p>
               If you subscribe to the newsletter inside the app, we add your account email address
-              to our mailing list at Resend. Ask us at any time and we will remove you.
+              to our mailing list at Resend and give you a one-time token bonus. Ask us at any time
+              and we will remove you.
             </p>
             <p>
               If you join the Pixel Pass waitlist, we keep your email address until you ask us to
@@ -173,8 +183,9 @@ export default function PrivacyPage() {
           <h2 className="text-sm font-display text-text-primary mb-3">7. Deleting your data</h2>
           <div className="space-y-3">
             <p>
-              You can delete any generation from your gallery. This removes the image, its gallery
-              entry and its job record.
+              You can delete any generation from your gallery. This removes the image and its
+              gallery entry. A temporary record of the job, which also holds the image, expires on
+              its own within an hour of the generation finishing.
             </p>
             <p>
               To delete your account and everything tied to it, email{' '}
@@ -186,9 +197,10 @@ export default function PrivacyPage() {
               If you write from another address, we first confirm with your account email.
             </p>
             <p>
-              We keep a record that you asked and that we deleted. If you bought tokens, Stripe keeps
-              the payment record with your name and email removed. Backups and logs clear themselves
-              within 30 days.
+              We keep a record that you asked and that we deleted your data. Payment, refund and
+              dispute records, and the fraud-prevention entries described in section 3, may be kept
+              where we need them to handle disputes or prevent fraud. Stripe keeps its own payment
+              records. Backups clear themselves within 30 days, and logs within 7 days.
             </p>
             <p>You can also ask us for a copy of your data.</p>
             <p>Clearing your browser data removes only what is on your device (see section 2).</p>

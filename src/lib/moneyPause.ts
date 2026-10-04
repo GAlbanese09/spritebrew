@@ -21,10 +21,12 @@ export class MoneyPausedError extends Error {
 }
 
 /** The customer-facing copy for a paused money write. */
-export const PAUSED_MESSAGE = 'SpriteBrew is updating. Try again in a few minutes. You were not charged.';
+// UNAPPROVED COPY (HQ-1, `2026-10-03-008`): HQ's text, built in S0; approval comes with S0's production go (HQ-4).
+export const PAUSED_MESSAGE = 'SpriteBrew is finishing some maintenance. Please try again in a little while. You were not charged.';
 
 /** The same, where nothing was being charged (a balance opening, a reward). */
-export const UPDATING_MESSAGE = 'SpriteBrew is updating. Try again in a few minutes.';
+// UNAPPROVED COPY (HQ-1, `2026-10-03-008`): HQ's text, built in S0; approval comes with S0's production go (HQ-4).
+export const UPDATING_MESSAGE = 'SpriteBrew is finishing some maintenance. Please try again in a little while.';
 
 const PAUSE_READ_TIMEOUT_MS = 2_000;
 

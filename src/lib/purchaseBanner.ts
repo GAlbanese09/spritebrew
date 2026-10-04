@@ -11,6 +11,8 @@
  *   'pending'  otherwise. The banner re-reads for up to a minute and moves to
  *              'added' when the credit lands; it never claims a credit without
  *              the evidence.
+ *   'late'     'pending' when the minute ends without proof: a text swap only
+ *              (HQ `2026-10-03-008`), with no further read.
  *
  * Evidence wins: a balance already up by the pack is 'added' even while paused.
  * A latch (HQ `2026-10-03-005` decision 1, n1-ledger-03 020): once a return has
@@ -21,15 +23,17 @@
  * reads it.
  */
 
-export type PurchaseBannerState = 'added' | 'pending' | 'paused';
+export type PurchaseBannerState = 'added' | 'pending' | 'late' | 'paused';
 
 export const PURCHASE_BANNER_COPY: Record<PurchaseBannerState, string> = {
   // UNAPPROVED COPY (HQ-14): HQ's text, built in S0; approval comes with S0's production go (HQ-4).
   added: 'Payment received. Your tokens have been added.',
   // UNAPPROVED COPY (HQ-14): HQ's text, built in S0; approval comes with S0's production go (HQ-4).
   pending: 'Payment received. Your tokens will appear in a moment.',
-  // UNAPPROVED COPY (HQ-14): HQ's text (`2026-10-03-005` decision 1), built in S0; approval comes with S0's production go (HQ-4).
-  paused: "Payment received. We're finishing a short maintenance step, so your tokens may take a little while to appear. You don't need to do anything.",
+  // UNAPPROVED COPY (HQ-14, `2026-10-03-008`): HQ's text, built in S0; approval comes with S0's production go (HQ-4).
+  late: "Payment received. Your tokens are taking longer than usual to appear. You don't need to pay again.",
+  // UNAPPROVED COPY (HQ-14, `2026-10-03-008`): HQ's text, built in S0; approval comes with S0's production go (HQ-4).
+  paused: "Payment received. We're finishing some maintenance, so your tokens may take a little while to appear. You don't need to do anything.",
 };
 
 /** A shown state, tagged with the user it was shown to. */
@@ -241,8 +245,10 @@ async function readBalance(
  * Reads, shows the state, and re-reads every few seconds while the state is
  * not 'added'. No read starts more than `windowMs` after the first, counting
  * the reads' own time as well as the waits (Second's 042). Ends at 'added',
- * at the window's end, or on abort. `previous`, the state this return already
- * showed, carries the latch across a restart. Answers the last state shown.
+ * at the window's end, or on abort. At the window's end a 'pending' state is
+ * swapped for 'late', a text swap with no further read; 'paused' and 'added'
+ * stay. `previous`, the state this return already showed, carries the latch
+ * across a restart. Answers the last state shown.
  */
 export async function watchPurchase(opts: {
   read: () => Promise<PurchaseRead>;
@@ -262,15 +268,22 @@ export async function watchPurchase(opts: {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const started = now();
   let last: PurchaseBannerState | null = opts.previous ?? null;
+  let windowEnded = false;
   while (!opts.signal?.aborted) {
     const read = await opts.read();
     if (opts.signal?.aborted) break;
     if (read.ok && typeof read.balance === 'number') opts.onBalance?.(read.balance);
     last = nextBannerState(last, read, opts.baseline);
     opts.onState(last);
-    if (last === 'added' || now() - started + intervalMs > windowMs) break;
+    if (last === 'added') break;
+    if (now() - started + intervalMs > windowMs) { windowEnded = true; break; }
     await sleep(intervalMs);
-    if (now() - started > windowMs) break;
+    if (now() - started > windowMs) { windowEnded = true; break; }
+  }
+  // HQ `2026-10-03-008`: the late line, only from 'pending', only at the window's end.
+  if (windowEnded && !opts.signal?.aborted && last === 'pending') {
+    last = 'late';
+    opts.onState(last);
   }
   return last;
 }

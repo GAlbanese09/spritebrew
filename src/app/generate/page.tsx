@@ -140,6 +140,8 @@ function PurchaseStatusContent() {
     if (!baselineRef.current.taken) {
       baselineRef.current = { taken: true, baseline: takeBaseline(userId) };
     }
+    // The late line ends this return's reads (HQ `2026-10-03-008`): no restart.
+    if (shownFor(bannerRef.current, userId) === 'late') return;
     const controller = new AbortController();
     const baseline = baselineRef.current.baseline;
     void watchPurchase({

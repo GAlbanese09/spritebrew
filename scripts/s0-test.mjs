@@ -483,7 +483,7 @@ check('an opening while paused -> 503 as today, no admission row, nothing writte
 // ── 7. The status route's paused copy (O2, HQ-1's unapproved copy) ──
 
 const JOB = 'job_s0_status_test';
-const COPY = 'SpriteBrew is updating. Your generation will start in a few minutes, or its tokens will be returned.';
+const COPY = "SpriteBrew is finishing some maintenance. Your generation will start when it's done, or its tokens will be returned.";
 for (const [label, ageMs, setup, expectCopy] of [
   ['a fresh job, paused', 5_000, () => setPause('1'), false],
   ['a held job older than 60 s, paused', 120_000, () => setPause('1'), true],
@@ -588,15 +588,17 @@ check('setGenerationProgress stores the paused copy and replaces it with null', 
 // The swap: the copy replaces the expectation line while present; the usual line once absent.
 const USUAL = 'Sprites usually take about 30 seconds, sometimes up to a minute and a half';
 const ANIM_USUAL = 'Animations usually take about 2 minutes, sometimes up to 4';
+// React's static render escapes the copy's apostrophe; compare against the escaped form.
+const COPY_HTML = COPY.replace(/&/g, '&amp;').replace(/'/g, '&#x27;').replace(/"/g, '&quot;');
 const render = (props) => renderToStaticMarkup(createElement(BrewingLoader, { startedAt: Date.now(), serverStatus: 'pending', ...props }));
 const swapped = render({ mode: 'create', pausedMessage: COPY });
 const usual = render({ mode: 'create', pausedMessage: null });
 const animSwapped = render({ mode: 'animate', action: 'walking', pausedMessage: COPY });
 check('BrewingLoader shows the paused copy in place of its usual line while present',
-  swapped.includes(COPY) && !swapped.includes(USUAL) && animSwapped.includes(COPY) && !animSwapped.includes(ANIM_USUAL));
-check('BrewingLoader shows its usual line once the copy is absent', usual.includes(USUAL) && !usual.includes(COPY));
+  swapped.includes(COPY_HTML) && !swapped.includes(USUAL) && animSwapped.includes(COPY_HTML) && !animSwapped.includes(ANIM_USUAL));
+check('BrewingLoader shows its usual line once the copy is absent', usual.includes(USUAL) && !usual.includes(COPY_HTML));
 check('the swap changes only that line (headline and stage unchanged)',
-  swapped.replace(COPY, USUAL) === usual && swapped.includes('Brewing your sprites...') && swapped.includes('Queued'));
+  swapped.replace(COPY_HTML, USUAL) === usual && swapped.includes('Brewing your sprites...') && swapped.includes('Queued'));
 // Past the long threshold (create 92,378 ms, animate 225,994 ms), where a held
 // job usually is by the time the copy arrives: the copy replaces the long line too.
 const LONG = 'Taking longer than usual. Still brewing, hang on.';
@@ -605,7 +607,7 @@ for (const [mode, action, afterMs] of [['create', null, 92_378], ['animate', 'wa
   const lateCopy = late(COPY);
   const lateUsual = late(null);
   check(`BrewingLoader past the ${mode} long threshold: the copy in place of the long line, and the long line once absent`,
-    lateCopy.includes(COPY) && !lateCopy.includes(LONG) && lateUsual.includes(LONG) && !lateUsual.includes(COPY));
+    lateCopy.includes(COPY_HTML) && !lateCopy.includes(LONG) && lateUsual.includes(LONG) && !lateUsual.includes(COPY_HTML));
 }
 
 // ── 10. Daily-reward's key (Second's 040, n1-ledger-03 016) ──
@@ -718,9 +720,16 @@ const pb = await loadClient('purchaseBanner');
 const store11 = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), m }; };
 const BASE = { userId: USER, balance: 100, tokens: 500, atMs: Date.now() };
 const S = pb.bannerStateFor;
-check('the three strings are HQ-14 verbatim, state 3 as HQ 2026-10-03-005 reworded it', pb.PURCHASE_BANNER_COPY.added === 'Payment received. Your tokens have been added.'
+check('the four banner strings verbatim (HQ-14; state 3 and the late line as HQ 2026-10-03-008 worded them)',
+  pb.PURCHASE_BANNER_COPY.added === 'Payment received. Your tokens have been added.'
   && pb.PURCHASE_BANNER_COPY.pending === 'Payment received. Your tokens will appear in a moment.'
-  && pb.PURCHASE_BANNER_COPY.paused === "Payment received. We're finishing a short maintenance step, so your tokens may take a little while to appear. You don't need to do anything.");
+  && pb.PURCHASE_BANNER_COPY.late === "Payment received. Your tokens are taking longer than usual to appear. You don't need to pay again."
+  && pb.PURCHASE_BANNER_COPY.paused === "Payment received. We're finishing some maintenance, so your tokens may take a little while to appear. You don't need to do anything."
+  && Object.keys(pb.PURCHASE_BANNER_COPY).length === 4);
+check('the paused answers verbatim (HQ-1, HQ 2026-10-03-008), with no em dash',
+  mp.PAUSED_MESSAGE === 'SpriteBrew is finishing some maintenance. Please try again in a little while. You were not charged.'
+  && mp.UPDATING_MESSAGE === 'SpriteBrew is finishing some maintenance. Please try again in a little while.'
+  && ![mp.PAUSED_MESSAGE, mp.UPDATING_MESSAGE, COPY, ...Object.values(pb.PURCHASE_BANNER_COPY)].some((t) => t.includes('\u2014')));
 check('state 1 only on evidence: the balance up by the pack above the baseline', S({ ok: true, balance: 600, moneyPaused: false }, BASE) === 'added'
   && S({ ok: true, balance: 650, moneyPaused: false }, BASE) === 'added');
 check('no state 1 on a smaller rise (a daily reward, a refund) or none', S({ ok: true, balance: 599, moneyPaused: false }, BASE) === 'pending'
@@ -762,13 +771,73 @@ let w = await runWatch([{ ok: true, balance: 100, moneyPaused: false }, { ok: tr
 check('state 2, re-checked, then state 1 when the credit lands; the re-check stops there',
   w.last === 'added' && w.states.join() === 'pending,pending,added' && w.reads === 3 && w.balances.join() === '100,100,600');
 w = await runWatch([{ ok: true, balance: 100, moneyPaused: false }], BASE);
-check('the re-check is bounded: a minute at 3 s, then it rests on state 2 (21 reads)', w.last === 'pending' && w.reads === 21
-  && w.states.every((s) => s === 'pending'));
+check('the re-check is bounded: a minute at 3 s (21 reads), state 2 throughout, then the late line once at the window\'s end',
+  w.last === 'late' && w.reads === 21 && w.states.length === 22 && w.states.slice(0, 21).every((s) => s === 'pending') && w.states[21] === 'late');
 w = await runWatch([{ ok: true, balance: 100, moneyPaused: true }, { ok: true, balance: 100, moneyPaused: true }, { ok: true, balance: 100, moneyPaused: false }, { ok: true, balance: 600, moneyPaused: false }], BASE);
 check('the latch: state 3 while paused, held through the unpause (never state 2), state 1 when credited',
   w.states.join() === 'paused,paused,paused,added' && w.last === 'added');
 w = await runWatch([{ ok: true, balance: 100, moneyPaused: false }, { ok: true, balance: 600, moneyPaused: false }], null);
-check('without a baseline a credit never shows as state 1', w.last === 'pending' && !w.states.includes('added'));
+check('without a baseline a credit never shows as state 1', w.last === 'late' && !w.states.includes('added'));
+
+// The late line (HQ 2026-10-03-008): a text swap from state 2 only, at the window's end, with no read after it.
+const OPEN_R = { ok: true, balance: 100, moneyPaused: false };
+let tLate = 0;
+let lateReads = 0;
+const lateOrder = [];
+const lateLast = await pb.watchPurchase({
+  read: async () => { lateReads++; lateOrder.push('read'); return OPEN_R; }, baseline: BASE,
+  onState: (s) => lateOrder.push(s), intervalMs: 3_000, windowMs: 9_000, now: () => tLate, sleep: async (ms) => { tLate += ms; },
+});
+check('the late line comes once, after the last read, and no read follows it',
+  lateLast === 'late' && lateReads === 4 && lateOrder.at(-1) === 'late' && lateOrder.filter((x) => x === 'late').length === 1
+  && lateOrder.lastIndexOf('read') < lateOrder.indexOf('late'));
+w = await runWatch([{ ok: true, balance: 100, moneyPaused: true }], BASE, { windowMs: 9_000 });
+check('no late line from state 3: the window ends on state 3', w.last === 'paused' && !w.states.includes('late'));
+w = await runWatch([{ ok: true, balance: 100, moneyPaused: true }, { ok: true, balance: 100, moneyPaused: false }], BASE, { windowMs: 9_000 });
+check('no late line from a latched state 3, even when the last reads were open', w.last === 'paused' && !w.states.includes('late'));
+w = await runWatch([{ ok: true, balance: 100, moneyPaused: false }, { ok: true, balance: 600, moneyPaused: false }], BASE, { windowMs: 9_000 });
+check('no late line from state 1', w.last === 'added' && !w.states.includes('late'));
+const abortLate = new AbortController();
+const abortStates = [];
+let tAb = 0, nAb = 0;
+await pb.watchPurchase({
+  read: async () => { if (++nAb === 2) abortLate.abort(); return OPEN_R; }, baseline: BASE, onState: (s) => abortStates.push(s),
+  signal: abortLate.signal, intervalMs: 3_000, windowMs: 9_000, now: () => tAb, sleep: async (ms) => { tAb += ms; },
+});
+check('no late line when the watcher is stopped (dismissed, or another user)', !abortStates.includes('late'));
+
+// The window's other exit: a wait that ends past the window (a late timer).
+// Reads of 900 ms, each wait 400 ms late: the last read ends at 56.8 s, its
+// wait at 60.2 s, and the late line follows at once with no read after it.
+const lateExit = async ({ abortInLastWait = false } = {}) => {
+  let t = 0;
+  const order = [];
+  const ac = new AbortController();
+  const last = await pb.watchPurchase({
+    read: async () => { order.push(['read', t]); t += 900; return OPEN_R; }, baseline: BASE, signal: ac.signal,
+    onState: (s) => order.push([s, t]), intervalMs: 3_000, windowMs: 60_000, now: () => t,
+    sleep: async (ms) => { t += ms + 400; if (abortInLastWait && t > 60_000) ac.abort(); },
+  });
+  return { last, order };
+};
+const lx = await lateExit();
+const lxLate = lx.order.filter(([s]) => s === 'late');
+const lxReads = lx.order.filter(([s]) => s === 'read');
+check('the late line after a late wait: once, at the wait\'s end (60.2 s), with no read after it',
+  lx.last === 'late' && lxLate.length === 1 && lxLate[0][1] === 60_200 && lx.order.at(-1)[0] === 'late'
+  && Math.max(...lxReads.map(([, at]) => at)) <= 60_000);
+const lxAbort = await lateExit({ abortInLastWait: true });
+check('no late line when the watcher is stopped during its last wait', !lxAbort.order.some(([s]) => s === 'late'));
+// No timer beyond the window: the swap comes at the clock of the last read's end.
+let tNt = 0;
+const ntOrder = [];
+await pb.watchPurchase({
+  read: async () => { ntOrder.push(['read', tNt]); tNt += 500; return OPEN_R; }, baseline: BASE,
+  onState: (s) => ntOrder.push([s, tNt]), intervalMs: 3_000, windowMs: 60_000, now: () => tNt, sleep: async (ms) => { tNt += ms; },
+});
+const ntLastRead = Math.max(...ntOrder.filter(([s]) => s === 'read').map(([, at]) => at));
+check('no timer before the late line: it shows as the last read ends, with no wait between',
+  ntOrder.at(-1)[0] === 'late' && ntOrder.at(-1)[1] === ntLastRead + 500 && ntOrder.at(-2)[0] === 'pending' && ntOrder.at(-2)[1] === ntLastRead + 500);
 
 // The latch (HQ 2026-10-03-005 decision 1, n1-ledger-03 020).
 w = await runWatch([{ ok: false }, { ok: true, balance: 100, moneyPaused: false }, { ok: true, balance: 100, moneyPaused: false }], BASE, { windowMs: 6_000 });
@@ -905,7 +974,7 @@ const lastDef = await pb.watchPurchase({
   now: () => tDef, sleep: async (ms) => { sleeps.push(ms); tDef += ms; },
 });
 check('the shipped re-check: every 3 s for a minute (21 reads), each read bounded at 8 s',
-  lastDef === 'pending' && nDef === 21 && sleeps.every((ms) => ms === 3_000) && pb.RECHECK_INTERVAL_MS === 3_000
+  lastDef === 'late' && nDef === 21 && sleeps.length === 20 && sleeps.every((ms) => ms === 3_000) && pb.RECHECK_INTERVAL_MS === 3_000
   && pb.RECHECK_WINDOW_MS === 60_000 && pb.READ_TIMEOUT_MS === 8_000);
 const abortWatch = new AbortController();
 const afterAbort = [];

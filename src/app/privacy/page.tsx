@@ -4,116 +4,213 @@ export default function PrivacyPage() {
   return (
     <div className="max-w-2xl mx-auto px-6 py-12">
       <h1 className="text-lg font-display text-accent-amber mb-1">Privacy Policy</h1>
-      <p className="text-xs font-mono text-text-muted mb-8">Last updated: May 3, 2026</p>
+      <p className="text-xs font-mono text-text-muted mb-8">Last updated: October 3, 2026</p>
 
       <div className="space-y-6 text-sm font-mono text-text-secondary leading-relaxed">
         <p>
           SpriteBrew (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;) is a pixel art sprite
           sheet generator built by George Albanese. This policy explains what data we collect, why,
-          and how we handle it.
+          where it is kept, and how to delete it.
         </p>
 
         <section>
-          <h2 className="text-sm font-display text-text-primary mb-3">What We Collect</h2>
+          <h2 className="text-sm font-display text-text-primary mb-3">1. Your account</h2>
           <div className="space-y-3">
             <p>
-              <strong className="text-text-primary">Account Information:</strong> When you sign up,
-              we collect your email address and, if you use GitHub sign-in, your GitHub username and
-              profile photo. This is processed by Clerk (our authentication provider) and is
-              necessary to provide you with an account.
+              You sign in through Clerk, our authentication provider. Clerk holds your email address
+              and, if you sign in with GitHub, the name, username and profile photo GitHub shares
+              with us.
             </p>
             <p>
-              <strong className="text-text-primary">Generation Data:</strong> When you generate
-              sprites, we store the generated images in your browser&apos;s local session so you can
-              access your gallery. We store your token balance and a log of token transactions
-              (credits and debits with timestamps) in Cloudflare KV. Transaction records are
-              automatically deleted after 90 days. Your token balance persists indefinitely.
+              When an account is created, we check whether its email address belongs to a
+              disposable email service. If it does, the account does not receive free tokens.
             </p>
             <p>
-              <strong className="text-text-primary">Waitlist:</strong> If you join the Pro waitlist,
-              we store your email address in Cloudflare KV. You can request removal at any time by
-              contacting us.
+              We keep your token balance for as long as your account exists, and a log of your token
+              credits and debits for 90 days.
             </p>
             <p>
-              <strong className="text-text-primary">Usage Data:</strong> Cloudflare Pages
-              automatically collects standard web analytics (page views, country, browser type). We
-              do not add any additional tracking scripts, cookies, or analytics tools.
+              We also keep small records that run the free tier: your signup grant, your daily login
+              streak, and how many free generations you have used.
             </p>
           </div>
         </section>
 
         <section>
-          <h2 className="text-sm font-display text-text-primary mb-3">What We Don&apos;t Collect</h2>
+          <h2 className="text-sm font-display text-text-primary mb-3">2. What you create</h2>
+          <div className="space-y-3">
+            <p>
+              When you generate, your prompt, the style and size you chose, and any image you upload
+              (a character to animate or a reference image) are sent to Retro Diffusion, which
+              creates the art. We do not send them your name, email address or account id.
+            </p>
+            <p>
+              Each finished generation is saved to your account: the image in Cloudflare R2
+              storage, and a gallery entry in Cloudflare KV with the first 300 characters of your
+              prompt, the style and the date. Both stay until you delete them.
+            </p>
+            <p>
+              While a generation runs, we keep a job record, including the result, for up to an hour
+              (a day if we owe you a refund for it), and a copy that is deleted after one day.
+            </p>
+            <p>
+              An image you upload stays on our side only while its job waits in our queue, usually
+              minutes. A job that fails before it starts can wait up to 14 days before it is refunded
+              and removed.
+            </p>
+            <p>
+              To find and fix failures, we record each generation&apos;s progress (when it started,
+              whether it finished, and any error message) with your account id. These records are
+              deleted when your account is deleted. Our server logs, which also carry your account
+              id, are deleted after 7 days.
+            </p>
+            <p>
+              The sprite slicer, preview, export tools and pixel editor run in your browser. Files
+              you open in them are not uploaded to us.
+            </p>
+            <p>
+              Some things are kept only on your device, in your browser: your recent generations (up
+              to 50, with images), your Animate settings and saved templates, editor drafts, and a
+              copy of your token balance. Clearing your browser data removes these. It does not
+              delete anything saved to your account.
+            </p>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-display text-text-primary mb-3">3. Payments</h2>
+          <div className="space-y-3">
+            <p>
+              Token packs are paid through Stripe. You enter your card details on Stripe&apos;s
+              checkout page; we never see or store your card number.
+            </p>
+            <p>
+              When you open a checkout, we record your account id, the time, your IP address, your
+              browser&apos;s user agent, and your consent to receive the tokens right away. We keep
+              this record for 400 days as evidence in case a payment is disputed, whether or not you
+              complete the purchase.
+            </p>
+            <p>
+              When a payment succeeds, we keep a record of it (your account id, the pack, the tokens,
+              the amount and Stripe&apos;s payment ids) and mark your account as a paying account.
+            </p>
+            <p>
+              If a payment is refunded or disputed, we keep a record of it, and a disputed payment
+              can pause the account while it is resolved.
+            </p>
+            <p>Stripe keeps its own records of your payments, as the law requires.</p>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-display text-text-primary mb-3">
+            4. Newsletter, waitlist and feedback
+          </h2>
+          <div className="space-y-3">
+            <p>
+              If you subscribe to the newsletter inside the app, we add your account email address
+              to our mailing list at Resend. Ask us at any time and we will remove you.
+            </p>
+            <p>
+              If you join the Pixel Pass waitlist, we keep your email address until you ask us to
+              remove it.
+            </p>
+            <p>
+              If you send feedback through our feedback form, it is collected by Tally. If you email
+              us, we keep the conversation.
+            </p>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-display text-text-primary mb-3">5. Services we use</h2>
+          <div className="space-y-3">
+            <ul className="space-y-2 list-none">
+              <li>
+                <strong className="text-text-primary">Clerk</strong> (clerk.com): sign-in and
+                account management.
+              </li>
+              <li>
+                <strong className="text-text-primary">Retro Diffusion</strong> (retrodiffusion.ai):
+                creates the art from your prompts and uploaded images.
+              </li>
+              <li>
+                <strong className="text-text-primary">Stripe</strong> (stripe.com): payments.
+              </li>
+              <li>
+                <strong className="text-text-primary">Cloudflare</strong> (cloudflare.com): hosts
+                the site and stores the data described above (KV, R2, D1 and logs).
+              </li>
+              <li>
+                <strong className="text-text-primary">Resend</strong> (resend.com): the newsletter,
+                only if you subscribe.
+              </li>
+              <li>
+                <strong className="text-text-primary">Tally</strong> (tally.so): the feedback form.
+              </li>
+            </ul>
+            <p>Each service&apos;s own privacy policy applies to the data it handles.</p>
+            <p>
+              We use Cloudflare Web Analytics to count page visits. It does not use cookies. We add
+              no advertising scripts and no tracking cookies. Clerk sets the cookies that keep you
+              signed in.
+            </p>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-display text-text-primary mb-3">6. What we don&apos;t do</h2>
+          <div className="space-y-3">
+            <p>
+              We do not sell or rent your data, and we do not share it with anyone for marketing. We
+              do not track you across other websites.
+            </p>
+            <p>We do not use your prompts or images to train AI models.</p>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-display text-text-primary mb-3">7. Deleting your data</h2>
+          <div className="space-y-3">
+            <p>
+              You can delete any generation from your gallery. This removes the image, its gallery
+              entry and its job record.
+            </p>
+            <p>
+              To delete your account and everything tied to it, email{' '}
+              <a href="mailto:support@spritebrew.com" className="text-accent-amber hover:underline">
+                support@spritebrew.com
+              </a>{' '}
+              from your account&apos;s email address. We delete your account, balance and history,
+              images, newsletter subscription and generation records, and email you when it is done.
+              If you write from another address, we first confirm with your account email.
+            </p>
+            <p>
+              We keep a record that you asked and that we deleted. If you bought tokens, Stripe keeps
+              the payment record with your name and email removed. Backups and logs clear themselves
+              within 30 days.
+            </p>
+            <p>You can also ask us for a copy of your data.</p>
+            <p>Clearing your browser data removes only what is on your device (see section 2).</p>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-display text-text-primary mb-3">8. Contact</h2>
           <p>
-            We do not collect payment information (we don&apos;t have paid plans yet). We do not
-            track you across other websites. We do not sell, rent, or share your personal data with
-            third parties for marketing. We do not use your data to train AI models. We do not store
-            your generated images on our servers&nbsp;&mdash; they exist only in your browser session.
-          </p>
-        </section>
-
-        <section>
-          <h2 className="text-sm font-display text-text-primary mb-3">Third-Party Services</h2>
-          <ul className="space-y-2 list-none">
-            <li>
-              <strong className="text-text-primary">Clerk</strong> (clerk.com): Handles
-              authentication and account management. Their privacy policy applies to auth data.
-            </li>
-            <li>
-              <strong className="text-text-primary">Retro Diffusion</strong> (retrodiffusion.ai):
-              Processes your text prompts to generate pixel art. Your prompts are sent to their API.
-              Their privacy policy applies to prompt processing.
-            </li>
-            <li>
-              <strong className="text-text-primary">Cloudflare</strong> (cloudflare.com): Hosts the
-              site and provides KV storage. Their privacy policy applies to infrastructure-level
-              data.
-            </li>
-          </ul>
-        </section>
-
-        <section>
-          <h2 className="text-sm font-display text-text-primary mb-3">Your Rights</h2>
-          <p>
-            You can request deletion of your account and all associated data by emailing us. You can
-            request a copy of any data we hold about you. You can delete your generation history at
-            any time by clearing your browser data.
-          </p>
-        </section>
-
-        <section>
-          <h2 className="text-sm font-display text-text-primary mb-3">Data Retention</h2>
-          <ul className="space-y-2 list-none">
-            <li>
-              <strong className="text-text-primary">Token balances:</strong> Retained indefinitely.
-              Transaction records auto-deleted after 90 days.
-            </li>
-            <li>
-              <strong className="text-text-primary">Waitlist emails:</strong> Retained until you
-              request removal or we launch paid plans (whichever comes first).
-            </li>
-            <li>
-              <strong className="text-text-primary">Account data:</strong> Retained as long as your
-              Clerk account exists. Contact us to delete.
-            </li>
-          </ul>
-        </section>
-
-        <section>
-          <h2 className="text-sm font-display text-text-primary mb-3">Contact</h2>
-          <p>
-            For any privacy questions or data requests, email:{' '}
+            For privacy questions or data requests, email{' '}
             <a href="mailto:support@spritebrew.com" className="text-accent-amber hover:underline">
               support@spritebrew.com
             </a>
+            .
           </p>
         </section>
 
         <section>
-          <h2 className="text-sm font-display text-text-primary mb-3">Changes to This Policy</h2>
+          <h2 className="text-sm font-display text-text-primary mb-3">9. Changes to this policy</h2>
           <p>
-            We may update this policy as SpriteBrew evolves. Significant changes will be noted on the
-            site. Continued use after changes constitutes acceptance.
+            We update this policy when SpriteBrew changes how it handles data, and change the date at
+            the top. Significant changes are noted on the site.
           </p>
         </section>
       </div>

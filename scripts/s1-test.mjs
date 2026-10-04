@@ -14,14 +14,17 @@
 //   part, that it binds no queue and never sends.
 // - T1: release 1's KV balance code (src/lib/tokenBalance.ts) raced on an
 //   in-memory KV with latency, 5 runs: expected 10,500, actual recorded.
+//   S4 retires that code, so T1 bundles it from release 1's commit
+//   (R1_COMMIT, read with `git archive` into local/.s1-r1, gitignored).
 //
 // S1_MUTATION='{"from":"...","to":"..."}' mutates the route source at bundle
 // time (exit 1 caught, 0 survived, 3 target not found once). The consumer
 // checkout must hold S1 (its n1-s1 branch). Output: counts and case names.
 
 import { build } from 'esbuild';
+import { execSync } from 'node:child_process';
 import { webcrypto } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -59,11 +62,29 @@ const mutation = {
     });
   },
 };
+// T1's release 1 code: S1's commit, before S4 moved the balances to D1.
+const R1_COMMIT = '4ad2b7f';
+const R1 = path.join(ROOT, 'local', '.s1-r1');
+rmSync(R1, { recursive: true, force: true });
+mkdirSync(R1, { recursive: true });
+execSync(`git archive ${R1_COMMIT} src/lib | tar -x -C "${R1}"`, { cwd: ROOT });
+const releaseOne = {
+  name: 'release-1-lib',
+  setup(b) {
+    b.onResolve({ filter: /^@\/lib\// }, (a) => (a.importer.startsWith(R1)
+      ? { path: path.join(R1, 'src', 'lib', `${a.path.slice('@/lib/'.length)}.ts`) }
+      : undefined));
+  },
+};
+await build({
+  entryPoints: { tokenBalance: path.join(R1, 'src/lib/tokenBalance.ts') },
+  bundle: true, platform: 'node', format: 'esm', outdir: OUT, logLevel: 'error',
+  tsconfig: path.join(ROOT, 'tsconfig.json'), outExtension: { '.js': '.mjs' }, plugins: [releaseOne],
+});
 await build({
   entryPoints: {
     route: path.join(ROOT, 'src/app/api/admin/ledger-harness/route.ts'),
     ledger: path.join(ROOT, 'src/lib/ledger.ts'),
-    tokenBalance: path.join(ROOT, 'src/lib/tokenBalance.ts'),
     limits: path.join(ROOT, 'src/lib/generationLimits.ts'),
   },
   bundle: true, platform: 'node', format: 'esm', outdir: OUT, logLevel: 'error',

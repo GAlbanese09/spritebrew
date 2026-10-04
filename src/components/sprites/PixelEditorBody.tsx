@@ -153,6 +153,8 @@ export default function PixelEditorBody({
   const router = useRouter();
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setOriginalCharacter = useSpriteStore((s) => s.setOriginalCharacter);
+  const setCurrentSheetMetadata = useSpriteStore((s) => s.setCurrentSheetMetadata);
+  const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
   const setPendingAnimatorHandoff = useSpriteStore((s) => s.setPendingAnimatorHandoff);
   const setPendingAnimatorSkipBgRemoval = useSpriteStore((s) => s.setPendingAnimatorSkipBgRemoval);
 
@@ -1003,12 +1005,14 @@ export default function PixelEditorBody({
     if (!dataUrl) return;
 
     setGeneratedImage(dataUrl, dataUrl);
+    setCurrentSheetMetadata(null);                 // the edit is a new image: no sheet hints
+    setGenerationStyle(null);
     setOriginalCharacter(null);                    // clear stale Animate-source if any
     setPendingAnimatorSkipBgRemoval(true);         // user just edited; respect what they made
     setPendingAnimatorHandoff(true);
 
     router.push('/generate');
-  }, [renderToDataUrl, setGeneratedImage, setOriginalCharacter, setPendingAnimatorSkipBgRemoval, setPendingAnimatorHandoff, router]);
+  }, [renderToDataUrl, setGeneratedImage, setCurrentSheetMetadata, setGenerationStyle, setOriginalCharacter, setPendingAnimatorSkipBgRemoval, setPendingAnimatorHandoff, router]);
 
   // PNG download via <a download>. Editor stays open. Backs page-mode Save
   // and the modal header's Download ("keep a copy") action.

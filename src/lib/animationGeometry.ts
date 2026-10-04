@@ -57,12 +57,15 @@ export function sheetGeometry({
   const cols = imageW / size;
   const rows = imageH / size;
   const cells = cols * rows;
+  // A sheet with fewer cells than the frames it should hold is not that
+  // generation (for example a single character left under stale hints).
+  if (count !== undefined && cells < count) return null;
   return {
     frameW: size,
     frameH: size,
     cols,
     rows,
-    frames: Math.min(count ?? cells, cells),
+    frames: count ?? cells,
   };
 }
 

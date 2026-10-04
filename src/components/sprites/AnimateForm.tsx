@@ -156,6 +156,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setRescueInfo = useSpriteStore((s) => s.setRescueInfo);
   const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
+  const setCurrentSheetMetadata = useSpriteStore((s) => s.setCurrentSheetMetadata);
   const setOriginalCharacter = useSpriteStore((s) => s.setOriginalCharacter);
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
   const tokenBalance = useSpriteStore((s) => s.tokenBalance);
@@ -999,6 +1000,12 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             }
           );
           inFlightRef.current = null;
+        } else {
+          // Resumed job (form remounted mid-poll): onGenerated does not run,
+          // so drop the previous generation's style and hints rather than
+          // let /upload apply them to this sheet.
+          setGenerationStyle(null);
+          setCurrentSheetMetadata(null);
         }
         setGenerating(false);
         setGeneratingAction(null);

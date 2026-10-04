@@ -59,9 +59,15 @@ check('10 frames in a 4x3 grid @64 (256x192) -> 4x3, 10 frames',
 check('frameSize without frameCount keeps every cell',
   same(sheetGeometry({ imageW: 256, imageH: 192, frameSize: 64 }),
     { cols: 4, rows: 3, frames: 12 }));
-check('frameCount above the cell count is capped',
-  same(sheetGeometry({ imageW: 128, imageH: 128, frameSize: 64, frameCount: 8 }),
-    { cols: 2, rows: 2, frames: 4 }));
+check('fewer cells than frameCount -> null (128x128 @64 n=8)',
+  same(sheetGeometry({ imageW: 128, imageH: 128, frameSize: 64, frameCount: 8 }), null));
+check('single character under stale hints -> null (128x128 @128 n=4)',
+  same(sheetGeometry({ imageW: 128, imageH: 128, frameSize: 128, frameCount: 4 }), null));
+check('stale 16-frame hints on a 4-frame sheet -> null (256x256 @128 n=16)',
+  same(sheetGeometry({ imageW: 256, imageH: 256, frameSize: 128, frameCount: 16 }), null));
+check('frameCount equal to the cell count is kept (256x256 @64 n=16)',
+  same(sheetGeometry({ imageW: 256, imageH: 256, frameSize: 64, frameCount: 16 }),
+    { cols: 4, rows: 4, frames: 16 }));
 check('non-dividing size -> null (200x200 @64)',
   same(sheetGeometry({ imageW: 200, imageH: 200, frameSize: 64, frameCount: 4 }), null));
 check('non-dividing on one side -> null (256x200 @64)',

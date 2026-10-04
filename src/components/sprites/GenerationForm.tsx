@@ -64,6 +64,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const setGenerationError = useSpriteStore((s) => s.setGenerationError);
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
+  const setCurrentSheetMetadata = useSpriteStore((s) => s.setCurrentSheetMetadata);
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
   const tokenBalance = useSpriteStore((s) => s.tokenBalance);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
@@ -297,6 +298,12 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         void fetchBalance();
         onGenerated(dataUrl, ctx.prompt, ctx.styleId);
         inFlightRef.current = null;
+      } else {
+        // Resumed job (form remounted mid-poll): onGenerated does not run,
+        // so drop the previous generation's style and hints rather than
+        // let /upload apply them to this image.
+        setGenerationStyle(null);
+        setCurrentSheetMetadata(null);
       }
       setGenerating(false);
       setGeneratingAction(null);

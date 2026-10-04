@@ -248,12 +248,17 @@ async function readBalance(
  * at the window's end, or on abort. At the window's end a 'pending' state is
  * swapped for 'late', a text swap with no further read; 'paused' and 'added'
  * stay. `previous`, the state this return already showed, carries the latch
- * across a restart. Answers the last state shown.
+ * across a restart, and `startedAt`, the time of this return's first read,
+ * carries its window (Second's 044): a restart reads only within the time
+ * left, and once it is spent starts no read at all, keeping the shown state
+ * ('pending' becomes 'late', as at the window's end). Answers the last state
+ * shown.
  */
 export async function watchPurchase(opts: {
   read: () => Promise<PurchaseRead>;
   baseline: PurchaseBaseline | null;
   previous?: PurchaseBannerState | null;
+  startedAt?: number;
   onState: (state: PurchaseBannerState) => void;
   onBalance?: (balance: number) => void;
   signal?: AbortSignal;
@@ -266,10 +271,11 @@ export async function watchPurchase(opts: {
   const windowMs = opts.windowMs ?? RECHECK_WINDOW_MS;
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const started = now();
+  const started = opts.startedAt ?? now();
   let last: PurchaseBannerState | null = opts.previous ?? null;
-  let windowEnded = false;
-  while (!opts.signal?.aborted) {
+  // A restart after this return's window has run out starts no read.
+  let windowEnded = now() - started > windowMs;
+  while (!windowEnded && !opts.signal?.aborted) {
     const read = await opts.read();
     if (opts.signal?.aborted) break;
     if (read.ok && typeof read.balance === 'number') opts.onBalance?.(read.balance);

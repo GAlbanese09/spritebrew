@@ -125,6 +125,9 @@ function PurchaseStatusContent() {
   // The baseline is taken once per return, so a re-run of the effect below
   // keeps it rather than finding storage already emptied.
   const baselineRef = useRef<{ taken: boolean; baseline: PurchaseBaseline | null }>({ taken: false, baseline: null });
+  // The return's first-read time, per user, so a restarted watcher keeps the
+  // same one-minute window (Second's 044).
+  const firstReadRef = useRef<{ userId: string; at: number } | null>(null);
 
   useEffect(() => {
     const purchase = searchParams.get('purchase');
@@ -142,12 +145,14 @@ function PurchaseStatusContent() {
     }
     // The late line ends this return's reads (HQ `2026-10-03-008`): no restart.
     if (shownFor(bannerRef.current, userId) === 'late') return;
+    if (firstReadRef.current?.userId !== userId) firstReadRef.current = { userId, at: Date.now() };
     const controller = new AbortController();
     const baseline = baselineRef.current.baseline;
     void watchPurchase({
       read: () => readPurchaseStatus(getToken, controller.signal),
       baseline: baseline && baseline.userId === userId ? baseline : null,
       previous: shownFor(bannerRef.current, userId),
+      startedAt: firstReadRef.current.at,
       onState: (state) => {
         const entry = { userId, state };
         bannerRef.current = entry;

@@ -839,6 +839,41 @@ const ntLastRead = Math.max(...ntOrder.filter(([s]) => s === 'read').map(([, at]
 check('no timer before the late line: it shows as the last read ends, with no wait between',
   ntOrder.at(-1)[0] === 'late' && ntOrder.at(-1)[1] === ntLastRead + 500 && ntOrder.at(-2)[0] === 'pending' && ntOrder.at(-2)[1] === ntLastRead + 500);
 
+// A restart keeps the return's window (Second's 044): reads only in the time
+// left, and none once it is spent, keeping the shown state.
+const restart = async ({ previous, startedAt, at, read = OPEN_R, abort = false }) => {
+  let t = at;
+  const starts = [], states = [];
+  const ac = new AbortController();
+  if (abort) ac.abort();
+  const last = await pb.watchPurchase({
+    read: async () => { starts.push(t); return read; }, baseline: BASE, previous, startedAt, signal: ac.signal,
+    onState: (s) => states.push(s), intervalMs: 3_000, windowMs: 60_000, now: () => t, sleep: async (ms) => { t += ms; },
+  });
+  return { last, starts, states };
+};
+let rs = await restart({ previous: 'pending', startedAt: 0, at: 30_000 });
+check('a restart from state 2 before expiry reads only in the time left (30 s to 60 s), then the late line',
+  rs.starts.length === 11 && rs.starts[0] === 30_000 && Math.max(...rs.starts) <= 60_000 && rs.last === 'late' && rs.states.at(-1) === 'late');
+rs = await restart({ previous: 'pending', startedAt: 0, at: 61_000 });
+check('a restart from state 2 after expiry starts no read and shows the late line', rs.starts.length === 0 && rs.last === 'late'
+  && rs.states.join() === 'late');
+rs = await restart({ previous: 'paused', startedAt: 0, at: 45_000 });
+check('a restart from a latched state 3 before expiry: reads in the time left, still state 3', rs.starts.length > 0
+  && Math.max(...rs.starts) <= 60_000 && rs.last === 'paused' && rs.states.every((x) => x === 'paused'));
+rs = await restart({ previous: 'paused', startedAt: 0, at: 61_000 });
+check('a restart from a latched state 3 after expiry starts no read and keeps state 3', rs.starts.length === 0
+  && rs.last === 'paused' && rs.states.length === 0);
+rs = await restart({ previous: 'added', startedAt: 0, at: 30_000 });
+check('a restart from state 1 before expiry keeps state 1 and stops after one read', rs.starts.length === 1 && rs.last === 'added');
+rs = await restart({ previous: 'added', startedAt: 0, at: 61_000 });
+check('a restart from state 1 after expiry starts no read and keeps state 1', rs.starts.length === 0 && rs.last === 'added'
+  && rs.states.length === 0);
+rs = await restart({ previous: 'pending', startedAt: 0, at: 61_000, abort: true });
+check('a stopped restart after expiry shows no late line', rs.starts.length === 0 && !rs.states.includes('late'));
+rs = await restart({ previous: 'late', startedAt: 0, at: 61_000 });
+check('a restart after the late line starts no read and keeps it', rs.starts.length === 0 && rs.last === 'late' && rs.states.length === 0);
+
 // The latch (HQ 2026-10-03-005 decision 1, n1-ledger-03 020).
 w = await runWatch([{ ok: false }, { ok: true, balance: 100, moneyPaused: false }, { ok: true, balance: 100, moneyPaused: false }], BASE, { windowMs: 6_000 });
 check('the latch holds after a failed read too: state 3 to the window\'s end, never state 2',

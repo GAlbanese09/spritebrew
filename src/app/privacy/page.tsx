@@ -60,7 +60,8 @@ export default function PrivacyPage() {
               An image you upload travels with its job through our processing queue and is removed
               from the queue when the job finishes. If a job runs into problems, its message, with
               your image, can move to a second queue that checks the result was delivered or your
-              tokens were refunded, and can stay there for up to a few hours after the job ends.
+              tokens were refunded. The message is removed from that queue once that check is done,
+              which normally takes no more than a few hours.
             </p>
             <p>
               To find and fix failures, we record each generation&apos;s progress (when it started,
@@ -104,8 +105,8 @@ export default function PrivacyPage() {
               These records have no set expiry.
             </p>
             <p>
-              If a payment is refunded, we take back the tokens for the refunded amount and keep a
-              record of the refund. If that leaves your balance below zero, your account cannot
+              If a payment is refunded, we take back tokens from your balance and keep a record of
+              the refund. If that leaves your balance below zero, your account cannot
               generate until we lift the block by hand, so contact us to resolve it. If a payment is
               disputed (a chargeback), we take back its tokens and permanently stop the account from
               generating. Neither step deletes your account or your data. For refunds and disputes

@@ -30,9 +30,10 @@ export default function PrivacyPage() {
               credits and debits for 90 days.
             </p>
             <p>
-              We also keep small records that run the free tier and bonuses: your signup grant, your
-              daily login streak, how many free generations you have used, and which one-time
-              bonuses you have claimed.
+              We also keep small records that run the free tier and bonuses, for as long as your
+              account exists: your signup grant, your daily login streak, how many free generations
+              you have used, which one-time bonuses you have claimed, and whether your signup email
+              matched our list of disposable email services.
             </p>
           </div>
         </section>
@@ -51,17 +52,20 @@ export default function PrivacyPage() {
               prompt, the style and the date. Both stay until you delete them.
             </p>
             <p>
-              While a generation runs, we keep a job record, including the result, for up to an hour
-              (a day if we owe you a refund for it), and a copy that is deleted after one day.
+              While a generation runs and for up to an hour after it finishes (about a day if we owe
+              you a refund for it), we keep a job record, including the result. A copy of the
+              record is deleted after one day.
             </p>
             <p>
               An image you upload travels with its job through our processing queue and is removed
-              from the queue once the job is done.
+              from the queue when the job finishes. If a job runs into problems, its message, with
+              your image, can move to a second queue that checks the result was delivered or your
+              tokens were refunded, and can stay there for up to a few hours after the job ends.
             </p>
             <p>
               To find and fix failures, we record each generation&apos;s progress (when it started,
-              whether it finished, any error message, the style and size, and any tokens refunded)
-              with your account id. These records are deleted when your account is deleted. Logs
+              whether it finished, any error message, the style and size, and any tokens refunded
+              along with your token balance after the refund) with your account id. These records are deleted when your account is deleted. Logs
               from our processing service, which also carry your account id, are deleted after 7
               days.
             </p>
@@ -70,11 +74,12 @@ export default function PrivacyPage() {
               you open in them are not uploaded to us.
             </p>
             <p>
-              Some things are kept only on your device, in your browser: your recent generations (up
-              to 50, with small previews, and full images for the most recent few), your Animate
-              settings and saved templates, editor drafts, and a copy of your token balance.
-              Clearing your browser data removes these. It does not delete anything saved to your
-              account.
+              Some things are kept only on your device, in your browser: a list of your recent
+              generations (up to 50, each with its prompt and a small preview, and full images for
+              up to the 10 most recent), your Animate settings and saved templates, editor drafts,
+              and a copy of your token balance. Deleting a generation from your gallery does not
+              remove it from this list. Clearing your browser data removes these. It does not delete
+              anything saved to your account.
             </p>
           </div>
         </section>
@@ -100,12 +105,16 @@ export default function PrivacyPage() {
             </p>
             <p>
               If a payment is refunded, we take back the tokens for the refunded amount and keep a
-              record of the refund. If that leaves your balance below zero, the account is locked
-              until you contact us. If a payment is disputed (a chargeback), we take back its tokens
-              and close the account. For refunds and disputes we keep evidence about the purchase,
-              including the checkout record above, for 400 days, and we may add the email address
-              and card fingerprint used for the payment (a code Stripe uses to recognize a card, not
-              the card number) to fraud-prevention lists in our Stripe account.
+              record of the refund. If that leaves your balance below zero, your account cannot
+              generate until we lift the block by hand, so contact us to resolve it. If a payment is
+              disputed (a chargeback), we take back its tokens and permanently stop the account from
+              generating. Neither step deletes your account or your data. For refunds and disputes
+              we keep evidence about the purchase, including a copy of the checkout record above,
+              for 400 days from the refund or dispute. We also keep, with no set expiry, how many
+              refunds you have had, the date of the last one, a record of any dispute and any block
+              on the account. We may add the email address and card fingerprint used for the
+              payment (a code Stripe uses to recognize a card, not the card number) to
+              fraud-prevention lists in our Stripe account.
             </p>
             <p>Stripe keeps its own records of your payments, as the law requires.</p>
           </div>
@@ -149,7 +158,8 @@ export default function PrivacyPage() {
               </li>
               <li>
                 <strong className="text-text-primary">Cloudflare</strong> (cloudflare.com): hosts
-                the site and stores the data described above (KV, R2, D1 and logs).
+                the site, runs our processing queue, and stores the data described above (KV, R2,
+                D1 and logs).
               </li>
               <li>
                 <strong className="text-text-primary">Resend</strong> (resend.com): the newsletter,
@@ -172,8 +182,8 @@ export default function PrivacyPage() {
           <h2 className="text-sm font-display text-text-primary mb-3">6. What we don&apos;t do</h2>
           <div className="space-y-3">
             <p>
-              We do not sell or rent your data, and we do not share it with anyone for marketing. We
-              do not track you across other websites.
+              We do not sell or rent your data, and we do not share it with anyone for their own
+              marketing. We do not track you across other websites.
             </p>
             <p>We do not use your prompts or images to train AI models.</p>
           </div>
@@ -183,9 +193,11 @@ export default function PrivacyPage() {
           <h2 className="text-sm font-display text-text-primary mb-3">7. Deleting your data</h2>
           <div className="space-y-3">
             <p>
-              You can delete any generation from your gallery. This removes the image and its
+              You can delete generations from your gallery, one at a time or all at once. The
+              gallery shows your 50 most recent generations, and Clear all on the All tab also
+              deletes any older ones saved to your account. Deleting removes the image and its
               gallery entry. A temporary record of the job, which also holds the image, expires on
-              its own within an hour of the generation finishing.
+              its own about an hour after the generation finishes.
             </p>
             <p>
               To delete your account and everything tied to it, email{' '}

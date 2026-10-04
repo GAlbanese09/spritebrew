@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.6.0';
+export const CURRENT_VERSION = '0.6.1';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.6.1: Privacy policy updated (Oct 3, 2026) ──
+  {
+    releaseLabel: 'OCT 3, 2026: PRIVACY POLICY UPDATED',
+    emoji: '🔒',
+    title: 'Privacy policy updated',
+    description:
+      'We rewrote our privacy policy to match how SpriteBrew handles your data today, including payments, your saved generations and what you can delete. You can read it on the Privacy page.',
+  },
   // ── 0.6.0 — Mobile Editing & Edit Recovery (Jun 18, 2026) ──
   {
     releaseLabel: 'JUN 18, 2026 — MOBILE EDITING AND EDIT RECOVERY',

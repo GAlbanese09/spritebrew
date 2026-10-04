@@ -163,8 +163,9 @@ export default function PrivacyPage() {
                 D1 and logs).
               </li>
               <li>
-                <strong className="text-text-primary">Resend</strong> (resend.com): the newsletter,
-                only if you subscribe.
+                <strong className="text-text-primary">Resend</strong> (resend.com): sends the
+                newsletter if you subscribe, and a daily operations report to our own inbox that
+                includes shortened generation-job identifiers and failure and refund details.
               </li>
               <li>
                 <strong className="text-text-primary">Tally</strong> (tally.so): the feedback form.
@@ -194,10 +195,11 @@ export default function PrivacyPage() {
           <h2 className="text-sm font-display text-text-primary mb-3">7. Deleting your data</h2>
           <div className="space-y-3">
             <p>
-              You can delete generations from your gallery, one at a time or all at once. The
-              gallery shows your 50 most recent generations, and Clear all on the All tab also
-              deletes any older ones saved to your account. Deleting removes the image and its
-              gallery entry. A temporary record of the job, which also holds the image, expires on
+              You can delete generations from your gallery, one at a time or using Clear all. The
+              gallery shows your 50 most recent generations, and Clear all includes older
+              generations saved to your account. For very large histories, you may need to refresh
+              and clear again, or contact us for help. Deleting removes the image and its gallery
+              entry. A temporary record of the job, which also holds the image, expires on
               its own about an hour after the generation finishes.
             </p>
             <p>
@@ -213,7 +215,9 @@ export default function PrivacyPage() {
               We keep a record that you asked and that we deleted your data. Payment, refund and
               dispute records, and the fraud-prevention entries described in section 3, may be kept
               where we need them to handle disputes or prevent fraud. Stripe keeps its own payment
-              records. Backups clear themselves within 30 days, and logs within 7 days.
+              records. Operations reports already emailed to our own inbox, which name jobs only by
+              shortened identifiers, are not deleted. Backups clear themselves within 30 days, and
+              logs within 7 days.
             </p>
             <p>You can also ask us for a copy of your data.</p>
             <p>Clearing your browser data removes only what is on your device (see section 2).</p>

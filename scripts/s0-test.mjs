@@ -718,9 +718,9 @@ const pb = await loadClient('purchaseBanner');
 const store11 = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), m }; };
 const BASE = { userId: USER, balance: 100, tokens: 500, atMs: Date.now() };
 const S = pb.bannerStateFor;
-check('the three strings are HQ-14 verbatim', pb.PURCHASE_BANNER_COPY.added === 'Payment received. Your tokens have been added.'
+check('the three strings are HQ-14 verbatim, state 3 as HQ 2026-10-03-005 reworded it', pb.PURCHASE_BANNER_COPY.added === 'Payment received. Your tokens have been added.'
   && pb.PURCHASE_BANNER_COPY.pending === 'Payment received. Your tokens will appear in a moment.'
-  && pb.PURCHASE_BANNER_COPY.paused === "Payment received. We're finishing a short maintenance step, so your tokens will appear when it's done. You don't need to do anything.");
+  && pb.PURCHASE_BANNER_COPY.paused === "Payment received. We're finishing a short maintenance step, so your tokens may take a little while to appear. You don't need to do anything.");
 check('state 1 only on evidence: the balance up by the pack above the baseline', S({ ok: true, balance: 600, moneyPaused: false }, BASE) === 'added'
   && S({ ok: true, balance: 650, moneyPaused: false }, BASE) === 'added');
 check('no state 1 on a smaller rise (a daily reward, a refund) or none', S({ ok: true, balance: 599, moneyPaused: false }, BASE) === 'pending'
@@ -765,9 +765,57 @@ w = await runWatch([{ ok: true, balance: 100, moneyPaused: false }], BASE);
 check('the re-check is bounded: a minute at 3 s, then it rests on state 2 (21 reads)', w.last === 'pending' && w.reads === 21
   && w.states.every((s) => s === 'pending'));
 w = await runWatch([{ ok: true, balance: 100, moneyPaused: true }, { ok: true, balance: 100, moneyPaused: true }, { ok: true, balance: 100, moneyPaused: false }, { ok: true, balance: 600, moneyPaused: false }], BASE);
-check('state 3 while paused, state 2 once open, state 1 when credited', w.states.join() === 'paused,paused,pending,added');
+check('the latch: state 3 while paused, held through the unpause (never state 2), state 1 when credited',
+  w.states.join() === 'paused,paused,paused,added' && w.last === 'added');
 w = await runWatch([{ ok: true, balance: 100, moneyPaused: false }, { ok: true, balance: 600, moneyPaused: false }], null);
 check('without a baseline a credit never shows as state 1', w.last === 'pending' && !w.states.includes('added'));
+
+// The latch (HQ 2026-10-03-005 decision 1, n1-ledger-03 020).
+w = await runWatch([{ ok: false }, { ok: true, balance: 100, moneyPaused: false }, { ok: true, balance: 100, moneyPaused: false }], BASE, { windowMs: 6_000 });
+check('the latch holds after a failed read too: state 3 to the window\'s end, never state 2',
+  w.states.join() === 'paused,paused,paused' && w.last === 'paused');
+w = await runWatch([{ ok: true, balance: 100, moneyPaused: true }, { ok: true, balance: 100, moneyPaused: false }], null, { windowMs: 3_000 });
+check('the latch without a baseline: state 3 stays (state 1 is unreachable without evidence)', w.states.join() === 'paused,paused');
+const NB = pb.nextBannerState;
+const OPEN = { ok: true, balance: 100, moneyPaused: false };
+check('nextBannerState: paused holds over open and failed reads; added holds; evidence moves paused to added; no latch from pending',
+  NB('paused', OPEN, BASE) === 'paused'
+  && NB('paused', { ok: false }, BASE) === 'paused' && NB('paused', { ok: true, balance: 600, moneyPaused: true }, BASE) === 'added'
+  && NB('added', { ok: true, balance: 100, moneyPaused: true }, BASE) === 'added' && NB('added', { ok: false }, null) === 'added'
+  && NB('pending', { ok: true, balance: 100, moneyPaused: true }, BASE) === 'paused' && NB('pending', OPEN, BASE) === 'pending'
+  && NB(null, OPEN, BASE) === 'pending');
+let tR = 0;
+const restarted = [];
+const lastR = await pb.watchPurchase({
+  read: async () => OPEN, baseline: BASE, previous: 'paused', onState: (s) => restarted.push(s),
+  windowMs: 3_000, intervalMs: 3_000, now: () => tR, sleep: async (ms) => { tR += ms; },
+});
+check('a restarted watcher keeps the latch it is given (the page passes the state already shown)',
+  lastR === 'paused' && restarted.length > 0 && restarted.every((s) => s === 'paused'));
+
+// The strict window (Second's 042): no read starts after the window, read time counted.
+const windowStarts = async (readMs, lateMs = 0, intervalMs = 3_000, windowMs = 60_000) => {
+  let t = 0;
+  const starts = [];
+  await pb.watchPurchase({
+    read: async () => { starts.push(t); t += readMs; return OPEN; }, baseline: BASE, onState: () => {},
+    intervalMs, windowMs, now: () => t, sleep: async (ms) => { t += ms + lateMs; },
+  });
+  return starts;
+};
+const ws0 = await windowStarts(0), ws1 = await windowStarts(1_000), ws25 = await windowStarts(2_500), ws7 = await windowStarts(7_000);
+check('the strict window: no read starts more than 60 s after the first, read time counted',
+  [ws0, ws1, ws25, ws7].every((s) => s.length > 1 && Math.max(...s) <= 60_000)
+  && ws0.length === 21 && ws1.length === 16 && ws25.length === 11 && ws7.length === 7);
+// Each wait 2.5 s late: after the read at 55 s the next would start at 60.5 s.
+const wsLate = await windowStarts(0, 2_500);
+check('the strict window holds when a timer fires late (each wait 2.5 s long): the read due at 60.5 s never starts',
+  wsLate.length === 11 && Math.max(...wsLate) === 55_000);
+
+// One user's state is never shown to another (Second's 042).
+check('shownFor: the state only for the user it was shown to', pb.shownFor({ userId: USER, state: 'added' }, USER) === 'added'
+  && pb.shownFor({ userId: USER, state: 'added' }, NEWUSER) === null && pb.shownFor({ userId: USER, state: 'paused' }, null) === null
+  && pb.shownFor(null, USER) === null);
 
 // The return read, through the real /api/token-balance.
 let pauseReads = 0;

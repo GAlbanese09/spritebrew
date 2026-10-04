@@ -14,9 +14,10 @@ import {
   PURCHASE_BANNER_COPY,
   clearBaseline,
   readPurchaseStatus,
+  shownFor,
   takeBaseline,
   watchPurchase,
-  type PurchaseBannerState,
+  type BannerEntry,
   type PurchaseBaseline,
 } from '@/lib/purchaseBanner';
 
@@ -116,7 +117,11 @@ function PurchaseStatusContent() {
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
   const [status, setStatus] = useState<'success' | 'cancelled' | null>(null);
   // HQ-14: the banner says only what the evidence shows (src/lib/purchaseBanner.ts).
-  const [bannerState, setBannerState] = useState<PurchaseBannerState | null>(null);
+  // The shown state is tagged with its user, so one user's state is never
+  // shown to another (Second's 042), and the ref carries the latch (HQ
+  // `2026-10-03-005`) across a restart of the watcher below.
+  const [bannerEntry, setBannerEntry] = useState<BannerEntry | null>(null);
+  const bannerRef = useRef<BannerEntry | null>(null);
   // The baseline is taken once per return, so a re-run of the effect below
   // keeps it rather than finding storage already emptied.
   const baselineRef = useRef<{ taken: boolean; baseline: PurchaseBaseline | null }>({ taken: false, baseline: null });
@@ -140,12 +145,19 @@ function PurchaseStatusContent() {
     void watchPurchase({
       read: () => readPurchaseStatus(getToken, controller.signal),
       baseline: baseline && baseline.userId === userId ? baseline : null,
-      onState: setBannerState,
+      previous: shownFor(bannerRef.current, userId),
+      onState: (state) => {
+        const entry = { userId, state };
+        bannerRef.current = entry;
+        setBannerEntry(entry);
+      },
       onBalance: setTokenBalance,
       signal: controller.signal,
     });
     return () => controller.abort();
   }, [status, userId, getToken, setTokenBalance]);
+
+  const bannerState = shownFor(bannerEntry, userId);
 
   if (status === 'success') {
     if (!bannerState) return null;

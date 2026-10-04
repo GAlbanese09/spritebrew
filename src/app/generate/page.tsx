@@ -334,7 +334,7 @@ export default function GeneratePage() {
             </button>
           </SignInButton>
           <p className="mt-4 text-[10px] font-mono text-text-muted">
-            Google, GitHub, or email — takes 10 seconds
+            GitHub or email. Takes 10 seconds.
           </p>
         </div>
       </Show>

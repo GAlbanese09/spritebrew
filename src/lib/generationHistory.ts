@@ -21,6 +21,12 @@ export interface SlicerHints {
    * successes leave this undefined and behave identically.
    */
   rescued?: true;
+  /**
+   * Cell size in px the sheet was delivered at (animate only): the size the
+   * request was sent at, or the delivered cell size on a rescue. Additive;
+   * absent on gallery hints and older entries.
+   */
+  frameSize?: number;
 }
 
 export interface GenerationHistoryEntry {

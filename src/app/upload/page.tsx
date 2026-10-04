@@ -65,6 +65,9 @@ export default function UploadPage() {
   // the user navigate back to /generate and still see their last result with
   // all controls (zoom, background removal, download, Send to Slicer).
   // The result is only cleared explicitly via "Generate Another".
+  // The generation's style and slicer hints survive the clearSpriteSheet()
+  // below so SlicerConfig and AnimationPanel can read them; a user upload
+  // (handleImageLoaded) and handleRemove still clear them.
   useEffect(() => {
     if (generatedImageDataUrl && !uploaded) {
       const img = new Image();
@@ -78,7 +81,11 @@ export default function UploadPage() {
         });
         setFromGenerated(true);
         setSizeAcknowledged(true);
+        const { generationStyle, currentSheetMetadata, setGenerationStyle, setCurrentSheetMetadata } =
+          useSpriteStore.getState();
         clearSpriteSheet();
+        setGenerationStyle(generationStyle);
+        setCurrentSheetMetadata(currentSheetMetadata);
         // NOTE: intentionally NOT calling clearGeneratedImage() here
       };
       img.src = generatedImageDataUrl;
@@ -181,9 +188,13 @@ export default function UploadPage() {
 
         const frames: SpriteFrame[] = [];
         const urls = new Map<string, string>();
+        // Generated sheets may end in empty cells; maxFrames keeps the first
+        // N cells, read row-major.
+        const maxFrames = config.maxFrames ?? config.rows * config.columns;
 
         for (let r = 0; r < config.rows; r++) {
           for (let c = 0; c < config.columns; c++) {
+            if (frames.length >= maxFrames) break;
             const x = config.offsetX + c * (config.frameWidth + config.padding);
             const y = config.offsetY + r * (config.frameHeight + config.padding);
 

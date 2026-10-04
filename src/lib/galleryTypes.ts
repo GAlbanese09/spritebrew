@@ -71,6 +71,7 @@ export interface DerivedSlicerHints {
   frameCount: number;
   directional: boolean;
   rows?: number;
+  frameSize?: number;
 }
 
 /**
@@ -79,10 +80,11 @@ export interface DerivedSlicerHints {
  * - create-mode → null (matches today's behavior; slicer auto-detects from canvas)
  * - animate-mode with action → reconstructed hints
  *
- * The frameCount/directional/rows values are constants here because AnimationPanel.tsx's
- * computeAutoAssignProposal only reads animationType and directional from hints — the
- * other fields are vestigial in the consumer. This matches the byte shape that
- * generate/page.tsx wrote to localStorage pre-Phase-4.
+ * The frameCount/directional values are constants here because AnimationPanel.tsx's
+ * computeAutoAssignProposal only reads animationType and directional from hints.
+ * The entry records no frame size or frame count, so frameSize is left unset and
+ * frameCount is a placeholder: SlicerConfig guesses the size from the image and
+ * keeps every cell at that size instead of trusting this frameCount.
  */
 export function deriveSlicerHints(entry: GalleryEntryV1): DerivedSlicerHints | null {
   if (entry.mode !== 'animate' || !entry.action) return null;
@@ -91,6 +93,5 @@ export function deriveSlicerHints(entry: GalleryEntryV1): DerivedSlicerHints | n
     animationType: ANIMATE_ACTION_TO_SLICER_TYPE[entry.action] ?? 'custom',
     frameCount: 4,
     directional: false,
-    rows: 2,
   };
 }

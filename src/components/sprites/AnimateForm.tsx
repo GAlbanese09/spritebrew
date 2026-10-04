@@ -25,6 +25,7 @@ import {
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
 import { ANIMATE_INPUT_B64_CLIENT_MAX } from '@/lib/constants';
+import { generatedFrameSize } from '@/lib/animationGeometry';
 import {
   loadLatestConfig,
   saveLatestConfig,
@@ -127,9 +128,13 @@ async function despillIfTransparent(dataUrl: string, fillHex: string): Promise<s
  *   - rescueInfo: full descriptor when the consumer's fallback path
  *     delivered the sheet; undefined otherwise. When present, its
  *     deliveredFrames wins over frameCount for slicer hints.
+ *   - frameSize: cell size in px of the delivered sheet: the size the
+ *     request was sent at, or on a rescue the delivered cell size (64 when
+ *     the consumer did not report one). The slicer slices at this size.
  */
 export interface AnimateGeneratedContext {
   frameCount: number;
+  frameSize: number;
   rescueInfo?: RescueInfo;
 }
 
@@ -219,6 +224,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     motionPrompt: string;
     bgColor: string;
     frameCount: number;
+    frameSize: number;
   } | null>(null);
 
   // 1s click-debounce (one-render race window beyond isGenerating).
@@ -792,6 +798,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       motionPrompt: motionPrompt.trim(),
       bgColor: DEFAULT_BG_COLOR,
       frameCount,
+      frameSize: selectedResolution,
     };
 
     let tookPollPath = false;
@@ -871,7 +878,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         dataUrl,
         reqCtx.motionPrompt || reqCtx.action,
         `any_animation_${reqCtx.action}`,
-        { frameCount }
+        { frameCount, frameSize: reqCtx.frameSize }
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -987,6 +994,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             `any_animation_${reqCtx.action}`,
             {
               frameCount: reqCtx.frameCount,
+              frameSize: generatedFrameSize(reqCtx.frameSize, rescueInfo),
               ...(rescueInfo ? { rescueInfo } : {}),
             }
           );

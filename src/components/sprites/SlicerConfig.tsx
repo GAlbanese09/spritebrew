@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Grid3X3, Scan, Scissors, AlertTriangle, Lock, X } from 'lucide-react';
+import { Grid3X3, Scan, Scissors, AlertTriangle, X } from 'lucide-react';
 import { SLICER_FRAME_PRESETS } from '@/lib/constants';
 import { detectFrameGrid, loadImage, imageToCanvas } from '@/lib/spriteUtils';
+import { sheetGeometry, galleryFrameSizeGuess, type SheetGeometry } from '@/lib/animationGeometry';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { useCanvasFitScale } from '@/lib/useCanvasFitScale';
 import Button from '@/components/ui/Button';
@@ -31,7 +32,13 @@ export interface SliceConfig {
   padding: number;
   offsetX: number;
   offsetY: number;
+  /** Keep only the first maxFrames cells, read row-major (a generated sheet
+   *  whose last row is part empty). Undefined keeps every cell. */
+  maxFrames?: number;
 }
+
+/** One-tap sizes for a gallery animation, whose entry records no frame size. */
+const GALLERY_FRAME_SIZES = [128, 64] as const;
 
 export default function SlicerConfig({
   imageUrl,
@@ -41,7 +48,7 @@ export default function SlicerConfig({
   initialFrameWidth,
   initialFrameHeight,
 }: SlicerConfigProps) {
-  const generationStyle = useSpriteStore((s) => s.generationStyle);
+  const currentSheetMetadata = useSpriteStore((s) => s.currentSheetMetadata);
   const [frameWidth, setFrameWidth] = useState(initialFrameWidth ?? 32);
   const [frameHeight, setFrameHeight] = useState(initialFrameHeight ?? 32);
   const [padding, setPadding] = useState(0);
@@ -49,10 +56,14 @@ export default function SlicerConfig({
   const [offsetY, setOffsetY] = useState(0);
   const [detecting, setDetecting] = useState(false);
   const [sanityWarning, setSanityWarning] = useState<SanityWarning | null>(null);
-  // Local override gate: when true, the user has bypassed the any_animation_*
-  // 64x64 lock and can edit dimensions freely. Does NOT modify generationStyle
-  // in the store — purely a UI gate.
-  const [overrideAnyAnimationLock, setOverrideAnyAnimationLock] = useState(false);
+  // Frame cap from a generated sheet's geometry (trailing empty cells are
+  // dropped). Null keeps every cell; a manual size edit clears it.
+  const [frameLimit, setFrameLimit] = useState<number | null>(null);
+  // True once the size in the fields came from the generation, until the
+  // user edits it. Drives the note under the Frame Size label.
+  const [fromGeneration, setFromGeneration] = useState(false);
+  // Gallery animations: true after the user taps Other in the frame-size row.
+  const [otherSizeChosen, setOtherSizeChosen] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Wave M2: measure the canvas wrapper's actual width so mobile-portrait
   // (~270-300px) doesn't paint a 600px canvas that then needs horizontal
@@ -66,10 +77,25 @@ export default function SlicerConfig({
   const safeStep = (size: number) => (size > 0 ? size + padding : 1);
   const columns = Math.max(0, Math.floor((imageWidth - offsetX) / safeStep(frameWidth)));
   const rows = Math.max(0, Math.floor((imageHeight - offsetY) / safeStep(frameHeight)));
-  const totalFrames = columns * rows;
+  const totalFrames = frameLimit !== null ? Math.min(columns * rows, frameLimit) : columns * rows;
 
-  const isAnyAnimationStyle = !!(generationStyle && generationStyle.startsWith('any_animation_'));
-  const isAnyAnimationLockActive = isAnyAnimationStyle && !overrideAnyAnimationLock;
+  // Generated animations carry their geometry in the sheet hints. The result
+  // card sets frameSize; a gallery entry has none, so its size is guessed
+  // and the user picks from the frame-size row. Its frameCount is a
+  // placeholder and is not trusted. Anything else auto-detects.
+  const isAnimateSheet = currentSheetMetadata?.source === 'animate';
+  const hintedFrameSize = isAnimateSheet ? currentSheetMetadata?.frameSize : undefined;
+  const showFrameSizeRow = isAnimateSheet && hintedFrameSize === undefined;
+
+  const applyGeometry = useCallback((g: SheetGeometry) => {
+    setFrameWidth(g.frameW);
+    setFrameHeight(g.frameH);
+    setPadding(0);
+    setOffsetX(0);
+    setOffsetY(0);
+    setFrameLimit(g.frames);
+    setFromGeneration(true);
+  }, []);
 
   // Auto-detect on mount — unless the caller pre-populated frame dimensions
   // (e.g. from FrameSizeResizer), in which case trust those and skip detect.
@@ -77,6 +103,8 @@ export default function SlicerConfig({
     if (initialFrameWidth && initialFrameHeight) {
       setFrameWidth(initialFrameWidth);
       setFrameHeight(initialFrameHeight);
+      setFrameLimit(null);
+      setFromGeneration(false);
       setPadding(0);
       setOffsetX(0);
       setOffsetY(0);
@@ -90,18 +118,28 @@ export default function SlicerConfig({
     setDetecting(true);
     setSanityWarning(null);
     try {
-      // Animate My Character results use rd_advanced_animation__* styles which
-      // output 64x64 frames in a 2-row grid (cols = frames/2). Force 64x64
-      // unless the user has explicitly overridden the lock.
-      if (isAnyAnimationStyle && !overrideAnyAnimationLock) {
-        setFrameWidth(64);
-        setFrameHeight(64);
-        setPadding(0);
-        setOffsetX(0);
-        setOffsetY(0);
-        return;
+      // Generated animations: slice at the size the sheet was generated with
+      // (result card) or the guessed size (gallery). Skips KNOWN_LAYOUTS and
+      // gutter detection, which guess wrong for these sheets.
+      if (isAnimateSheet) {
+        const size = hintedFrameSize ?? galleryFrameSizeGuess(imageWidth, imageHeight);
+        const g = size
+          ? sheetGeometry({
+              imageW: imageWidth,
+              imageH: imageHeight,
+              frameSize: size,
+              frameCount: hintedFrameSize !== undefined ? currentSheetMetadata?.frameCount : undefined,
+            })
+          : null;
+        if (g) {
+          applyGeometry(g);
+          setOtherSizeChosen(false);
+          return;
+        }
       }
 
+      setFrameLimit(null);
+      setFromGeneration(false);
       const img = await loadImage(imageUrl);
       const canvas = imageToCanvas(img);
       const ctx = canvas.getContext('2d')!;
@@ -146,7 +184,7 @@ export default function SlicerConfig({
     } finally {
       setDetecting(false);
     }
-  }, [imageUrl, isAnyAnimationStyle, overrideAnyAnimationLock, imageWidth, imageHeight]);
+  }, [imageUrl, isAnimateSheet, hintedFrameSize, currentSheetMetadata, applyGeometry, imageWidth, imageHeight]);
 
   // Draw preview with grid overlay
   useEffect(() => {
@@ -179,6 +217,7 @@ export default function SlicerConfig({
       let frameNum = 0;
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < columns; c++) {
+          if (frameNum >= totalFrames) break;
           const x = (offsetX + c * (frameWidth + padding)) * scale;
           const y = (offsetY + r * (frameHeight + padding)) * scale;
           const w = frameWidth * scale;
@@ -202,11 +241,27 @@ export default function SlicerConfig({
       }
     };
     img.src = imageUrl;
-  }, [imageUrl, imageWidth, imageHeight, frameWidth, frameHeight, columns, rows, padding, offsetX, offsetY, previewScale]);
+  }, [imageUrl, imageWidth, imageHeight, frameWidth, frameHeight, columns, rows, totalFrames, padding, offsetX, offsetY, previewScale]);
 
   const handleSlice = () => {
-    onSlice({ frameWidth, frameHeight, columns, rows, padding, offsetX, offsetY });
+    onSlice({
+      frameWidth,
+      frameHeight,
+      columns,
+      rows,
+      padding,
+      offsetX,
+      offsetY,
+      ...(frameLimit !== null ? { maxFrames: totalFrames } : {}),
+    });
   };
+
+  /** Gallery frame-size row: geometry for a one-tap size, or null when the
+   *  image does not split evenly at it. */
+  const galleryGeometry = useCallback(
+    (size: number) => sheetGeometry({ imageW: imageWidth, imageH: imageHeight, frameSize: size }),
+    [imageWidth, imageHeight]
+  );
 
   /** Compute how many frames a given preset would produce on the current image. */
   const presetFrameCount = useCallback(
@@ -218,10 +273,13 @@ export default function SlicerConfig({
     [imageWidth, imageHeight, offsetX, offsetY, padding]
   );
 
-  /** Wrap a setter so manual edits clear the sanity warning. */
+  /** Wrap a setter so manual size edits clear the sanity warning and drop
+   *  the generated geometry's frame cap. */
   const setSizeAndClearWarning = useCallback(
     (next: () => void) => {
       next();
+      setFrameLimit(null);
+      setFromGeneration(false);
       if (sanityWarning) setSanityWarning(null);
     },
     [sanityWarning]
@@ -229,45 +287,17 @@ export default function SlicerConfig({
 
   return (
     <div className="space-y-6">
-      {/* any_animation_* lock banner — surfaces the implicit 64x64 override */}
-      {isAnyAnimationStyle && (
-        <div className="flex items-start gap-2 rounded-lg border border-accent-amber/30 bg-accent-amber-glow px-4 py-3">
-          <Lock size={14} className="text-accent-amber flex-shrink-0 mt-0.5" />
-          <div className="flex-1 text-xs font-mono text-accent-amber leading-relaxed">
-            {isAnyAnimationLockActive ? (
-              <>
-                <strong>Locked to 64×64</strong> because this came from an &ldquo;Any
-                Animation&rdquo; generation. Retro Diffusion&apos;s{' '}
-                <code className="bg-bg-primary/40 px-1 rounded">animation__any_animation</code>{' '}
-                style always produces 64×64 frames.
-                <button
-                  onClick={() => setOverrideAnyAnimationLock(true)}
-                  className="block mt-1 underline hover:text-accent-amber-strong cursor-pointer"
-                >
-                  Override and edit manually
-                </button>
-              </>
-            ) : (
-              <>
-                <strong>Lock overridden.</strong> You can edit frame size below.
-                <button
-                  onClick={() => setOverrideAnyAnimationLock(false)}
-                  className="block mt-1 underline hover:text-accent-amber-strong cursor-pointer"
-                >
-                  Re-enable 64×64 lock
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Frame size */}
       <div>
         <label className="flex items-center gap-2 text-xs font-mono text-text-secondary uppercase tracking-wider mb-3">
           <Grid3X3 size={14} />
           Frame Size
         </label>
+        {fromGeneration && hintedFrameSize !== undefined && (
+          <p className="text-[10px] font-mono text-text-muted -mt-2 mb-3">
+            Set from this generation.
+          </p>
+        )}
 
         <div className="flex gap-3 mb-3">
           <div className="flex-1">
@@ -277,11 +307,9 @@ export default function SlicerConfig({
               min={1}
               max={imageWidth}
               value={frameWidth}
-              disabled={isAnyAnimationLockActive}
               onChange={(e) => setSizeAndClearWarning(() => setFrameWidth(Math.max(1, Number(e.target.value))))}
               className="w-full rounded bg-bg-elevated border border-border-default px-3 py-2
-                text-sm font-mono text-text-primary focus:outline-none focus:border-accent-amber
-                disabled:opacity-50 disabled:cursor-not-allowed"
+                text-sm font-mono text-text-primary focus:outline-none focus:border-accent-amber"
             />
           </div>
           <div className="flex-1">
@@ -291,40 +319,31 @@ export default function SlicerConfig({
               min={1}
               max={imageHeight}
               value={frameHeight}
-              disabled={isAnyAnimationLockActive}
               onChange={(e) => setSizeAndClearWarning(() => setFrameHeight(Math.max(1, Number(e.target.value))))}
               className="w-full rounded bg-bg-elevated border border-border-default px-3 py-2
-                text-sm font-mono text-text-primary focus:outline-none focus:border-accent-amber
-                disabled:opacity-50 disabled:cursor-not-allowed"
+                text-sm font-mono text-text-primary focus:outline-none focus:border-accent-amber"
             />
           </div>
         </div>
 
-        {/* Quick-select sizes — disabled while any_animation lock is active */}
+        {/* Quick-select sizes */}
         <div className="flex flex-wrap gap-1.5">
           {SLICER_FRAME_PRESETS.map((s) => {
             const count = presetFrameCount(s.width, s.height);
-            const lockedTip = isAnyAnimationLockActive
-              ? 'Locked to 64×64 — click "Override and edit manually" above to change.'
-              : `→ ${count} frame${count !== 1 ? 's' : ''} at ${s.label}`;
             return (
               <button
                 key={s.label}
                 onClick={() => {
-                  if (isAnyAnimationLockActive) return;
                   setSizeAndClearWarning(() => {
                     setFrameWidth(s.width);
                     setFrameHeight(s.height);
                   });
                 }}
-                title={lockedTip}
-                disabled={isAnyAnimationLockActive}
-                className={`px-2 py-1 rounded text-[10px] font-mono transition-colors
-                  ${isAnyAnimationLockActive
-                    ? 'bg-bg-elevated text-text-muted/50 cursor-not-allowed border border-border-subtle/50'
-                    : frameWidth === s.width && frameHeight === s.height
-                      ? 'bg-accent-amber text-bg-primary cursor-pointer'
-                      : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover hover:text-text-primary border border-border-subtle cursor-pointer'
+                title={`→ ${count} frame${count !== 1 ? 's' : ''} at ${s.label}`}
+                className={`px-2 py-1 rounded text-[10px] font-mono transition-colors cursor-pointer
+                  ${frameWidth === s.width && frameHeight === s.height
+                    ? 'bg-accent-amber text-bg-primary'
+                    : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover hover:text-text-primary border border-border-subtle'
                   }
                 `}
               >
@@ -428,6 +447,57 @@ export default function SlicerConfig({
           </div>
         </div>
       </div>
+
+      {/* Gallery animations: one-tap frame size. The gallery entry records
+          no size, so the guess may be wrong (a 256x256 sheet is 4 frames of
+          128 or 16 of 64). Other leaves the fields above to edit by hand. */}
+      {showFrameSizeRow && (
+        <div>
+          <label className="text-xs font-mono text-text-secondary uppercase tracking-wider mb-3 block">
+            Animation frame size
+          </label>
+          <div className="flex flex-wrap gap-1.5">
+            {GALLERY_FRAME_SIZES.map((size) => {
+              const g = galleryGeometry(size);
+              const active = !otherSizeChosen && frameWidth === size && frameHeight === size;
+              return (
+                <button
+                  key={size}
+                  onClick={() => {
+                    if (!g) return;
+                    applyGeometry(g);
+                    setOtherSizeChosen(false);
+                    setSanityWarning(null);
+                  }}
+                  disabled={!g}
+                  className={`px-3 py-1.5 rounded text-xs font-mono transition-colors
+                    ${!g
+                      ? 'bg-bg-elevated text-text-muted/50 cursor-not-allowed border border-border-subtle/50'
+                      : active
+                        ? 'bg-accent-amber text-bg-primary cursor-pointer'
+                        : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover hover:text-text-primary border border-border-subtle cursor-pointer'
+                    }
+                  `}
+                >
+                  {size} px
+                </button>
+              );
+            })}
+            <button
+              onClick={() => setOtherSizeChosen(true)}
+              className={`px-3 py-1.5 rounded text-xs font-mono transition-colors cursor-pointer
+                ${otherSizeChosen ||
+                  !GALLERY_FRAME_SIZES.some((size) => frameWidth === size && frameHeight === size)
+                  ? 'bg-accent-amber text-bg-primary'
+                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover hover:text-text-primary border border-border-subtle'
+                }
+              `}
+            >
+              Other
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Grid overlay preview */}
       <div>

@@ -207,6 +207,7 @@ export default function GeneratePage() {
   const { userId } = useAuth();
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
   const setAnimateMode = useSpriteStore((s) => s.setAnimateMode);
+  const setCurrentSheetMetadata = useSpriteStore((s) => s.setCurrentSheetMetadata);
 
   const [tab, setTab] = useState<GenerateTab>('create');
   const [showForm, setShowForm] = useState(true);
@@ -260,7 +261,9 @@ export default function GeneratePage() {
     // the AnimateForm's animateContext (previously hardcoded to 4). When
     // the sheet was rescued (consumer commit 0d71a88), prefer
     // deliveredFrames — the rescue is a fixed 64×64 output whose actual
-    // frame count differs from what the user requested.
+    // frame count differs from what the user requested. frameSize is the
+    // delivered cell size from animateContext; rows is left unset so the
+    // slicer derives the grid from frameSize and the image.
     const ANIMATE_ACTION_TO_SLICER_TYPE: Record<string, string> = {
       walking: 'walk', idle: 'idle', attack: 'attack', jump: 'jump',
       crouch: 'crouch', destroy: 'destroy', subtle_motion: 'subtle', custom_action: 'custom',
@@ -274,15 +277,20 @@ export default function GeneratePage() {
         typeof rescuedFrames === 'number' && rescuedFrames > 0
           ? rescuedFrames
           : requestedFrames;
+      const frameSize = animateContext?.frameSize;
       slicerHints = {
         source: 'animate',
         animationType: ANIMATE_ACTION_TO_SLICER_TYPE[action] ?? 'custom',
         frameCount,
         directional: false,
-        rows: 2,
+        ...(typeof frameSize === 'number' ? { frameSize } : {}),
         ...(rescueInfo ? { rescued: true } : {}),
       };
     }
+
+    // Carry the hints to the slicer on the result card's Send to Slicer.
+    // Create results clear any hints left from an earlier animation.
+    setCurrentSheetMetadata(slicerHints ?? null);
 
     await addToHistory({
       userId,
@@ -293,7 +301,7 @@ export default function GeneratePage() {
       fullImageDataUrl: dataUrl,
       slicerHints,
     });
-  }, [userId]);
+  }, [userId, setCurrentSheetMetadata]);
 
   const handleReset = useCallback(() => {
     setShowForm(true);

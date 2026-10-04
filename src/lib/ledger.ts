@@ -1038,6 +1038,17 @@ export function classifySuccess(r: Row | undefined, claim: string, outcome: stri
   return 'ownership_lost';
 }
 
+/** The read after a thrown or uncertain success update (`L4 023` ruling 1):
+ *  a row still unfinished, under this claim and not released, with money
+ *  open, is a doubt (the update may not have run), never ownership lost; the
+ *  caller retries the message (4.9). Every other row reads as 4.7's table. */
+export function classifySuccessAfterDoubt(r: Row | undefined, claim: string, outcome: string): SuccessOutcome {
+  if (r && r.state !== 'finished' && r.claim_id === claim && r.released_at_ms == null && !isPausedValue(r.pause_value)) {
+    return 'error';
+  }
+  return classifySuccess(r, claim, outcome);
+}
+
 /** The success update (A4), guarded like every settling transition. */
 export async function successUpdate(ctx: LedgerCtx, s: { job: string; claim: string; outcome: 'succeeded' | 'rescued' }):
   Promise<SuccessOutcome> {
@@ -1051,6 +1062,7 @@ export async function successUpdate(ctx: LedgerCtx, s: { job: string; claim: str
     } catch {
       return 'error';
     }
+    return classifySuccessAfterDoubt(r, s.claim, s.outcome);
   }
   return classifySuccess(r, s.claim, s.outcome);
 }

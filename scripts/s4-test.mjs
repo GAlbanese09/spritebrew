@@ -370,8 +370,8 @@ const postSwitch = (w, at = Date.now() - 86_400_000) => setCtl(w, 'switch_at_ms'
   check('T4', 'one key twice: one debit, one send; the second 202 replayed', a.res.status === 202 && b.res.status === 202 && b.b?.replayed === true
     && rows(w, "SELECT 1 FROM ledger WHERE type = 'debit'").length === 1 && w.sends.length === 1 && balanceOf(w, U1) === 84);
   const c = await gen(U1, { idempotencyKey: key, prompt: 'a different knight' });
-  check('T4', 'the same key with a changed prompt: 409 with HQ-7\'s copy, never charged or sent', c.res.status === 409 && c.b?.error === 'idempotency_conflict'
-    && c.b?.message === 'This request key was already used for a different generation.' && balanceOf(w, U1) === 84 && w.sends.length === 1);
+  check('T4', 'the same key with a changed prompt: 409 with HQ-7\'s approved copy, never charged or sent', c.res.status === 409 && c.b?.error === 'idempotency_conflict'
+    && c.b?.message === 'This request was already used for a different generation. Please refresh and try again.' && balanceOf(w, U1) === 84 && w.sends.length === 1);
 }
 {
   // two different payloads with one key at once, one uncertain
@@ -1203,7 +1203,7 @@ for (const [label, value] of [["'1'", '1'], ['absent', undefined], ["'x'", 'x'],
   const s0 = ['src/lib/moneyPause.ts', 'src/lib/purchaseBanner.ts', 'src/app/api/generation-status/[jobId]/route.ts'].map(read).join('\n');
   check('copy', "S0's seven approved strings carry no 'UNAPPROVED COPY' marker (HQ `2026-10-04-002`)", !s0.includes('UNAPPROVED COPY') && (s0.match(/approved with S0's production go/g) ?? []).length === 7);
   const gen = read('src/app/api/generate/route.ts');
-  check('copy', "every new customer string in generate is marked unapproved (HQ-2 twice, HQ-7, 4.3 twice)", (gen.match(/UNAPPROVED COPY/g) ?? []).length === 5);
+  check('copy', "generate's five strings carry HQ's approval (`2026-10-04-004`), none marked unapproved", !gen.includes('UNAPPROVED COPY') && (gen.match(/Approved by HQ, `2026-10-04-004`/g) ?? []).length === 5);
   const { existsSync: ex } = await import('node:fs');
   check('retired', 'release 1 money modules are gone (admission records, the KV refund debit, the unrefunded alarm, the refusal writer)',
     ['moneyAdmission', 'lateCompletionAlarm', 'tokenDebit', 'unrefundedAlarm', 'stripeHeld'].every((m) => !ex(path.join(ROOT, 'src/lib', `${m}.ts`))));

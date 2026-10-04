@@ -111,16 +111,16 @@ const FREE_TIER_CAP: Record<FreeTierBucket, number> = {
   fast: FREE_TIER_LIFETIME_FAST_CAP,
 };
 
-// UNAPPROVED COPY (HQ-2): the enqueue catch's refunded answer (5.1's r5 branch).
+// Approved by HQ, `2026-10-04-004` (HQ-2): the enqueue catch's refunded answer (5.1's r5 branch).
 export const REFUNDED_COPY = 'Could not start your generation. Your tokens were refunded. Please try again.';
-// UNAPPROVED COPY (HQ-2): the enqueue catch's unconfirmed answer; it promises
+// Approved by HQ, `2026-10-04-004` (HQ-2): the enqueue catch's unconfirmed answer; it promises
 // no refund and does not say the job never started (O4).
 export const UNCONFIRMED_COPY = 'We could not confirm what happened to this generation. Check your gallery and your balance in a few minutes.';
-// UNAPPROVED COPY (HQ-7): the 409 for a request key used for a different generation (4.3).
-export const CONFLICT_COPY = 'This request key was already used for a different generation.';
-// UNAPPROVED COPY (4.3, the spec's text): uncertain, and the identity read found no row.
+// Approved by HQ, `2026-10-04-004` (HQ-7): the 409 for a request key used for a different generation (4.3).
+export const CONFLICT_COPY = 'This request was already used for a different generation. Please refresh and try again.';
+// Approved by HQ, `2026-10-04-004` (4.3): uncertain, and the identity read found no row.
 export const NOT_CHARGED_COPY = 'You were not charged.';
-// UNAPPROVED COPY (4.3, HQ's wording per HQ-2's note; content `L 004` ruling 3):
+// Approved by HQ, `2026-10-04-004` (4.3; content `L 004` ruling 3):
 // uncertain, and the identity read failed. Nothing is enqueued, so the
 // recovery sweep's candidate (1) refunds a charge that happened.
 export const UNCONFIRMED_CHARGE_COPY = 'We could not confirm whether you were charged. If you were, your tokens will be returned automatically.';

@@ -11,6 +11,8 @@ import { loadHistory, type GenerationHistoryEntry } from '@/lib/generationHistor
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
+import SheetLoop from '@/components/sprites/SheetLoop';
+import { sheetGeometry, galleryFrameSizeGuess } from '@/lib/animationGeometry';
 
 type FilterMode = 'all' | 'create' | 'animate';
 
@@ -478,6 +480,23 @@ interface GalleryCardProps {
 
 function GalleryCard({ entry, imageUrl, onDownload, onSendToSlicer, onDelete }: GalleryCardProps) {
   const ready = !!imageUrl;
+
+  // Animated entries loop on the card once the image has loaded and its
+  // size gives a sheet geometry (the entry records no frame size, so it is
+  // guessed as the slicer does). Fine pointers play on hover; coarse
+  // pointers toggle with a tap on the image. Otherwise the plain img shows.
+  const [loadedDims, setLoadedDims] = useState<{ src: string; w: number; h: number } | null>(null);
+  const [hovered, setHovered] = useState(false);
+  const [tapped, setTapped] = useState(false);
+  const [finePointer] = useState(
+    () => typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(pointer: fine)').matches
+  );
+  const loopGeometry = useMemo(() => {
+    if (entry.mode !== 'animate' || !imageUrl || loadedDims?.src !== imageUrl) return null;
+    const size = galleryFrameSizeGuess(loadedDims.w, loadedDims.h);
+    return size ? sheetGeometry({ imageW: loadedDims.w, imageH: loadedDims.h, frameSize: size }) : null;
+  }, [entry.mode, imageUrl, loadedDims]);
+
   return (
     <div className="group bg-bg-elevated rounded-lg border border-border-subtle overflow-hidden flex flex-col">
       <div className="relative aspect-square bg-bg-primary flex items-center justify-center">
@@ -512,13 +531,49 @@ function GalleryCard({ entry, imageUrl, onDownload, onSendToSlicer, onDelete }: 
 
         {/* Image OR loading placeholder */}
         {imageUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={imageUrl}
-            alt={entry.prompt}
-            className="max-w-full max-h-full object-contain pixel-art-render"
-            style={{ imageRendering: 'pixelated' }}
-          />
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={imageUrl}
+              alt={entry.prompt}
+              className={loopGeometry ? 'hidden' : 'max-w-full max-h-full object-contain pixel-art-render'}
+              style={{ imageRendering: 'pixelated' }}
+              onLoad={(e) => {
+                if (entry.mode !== 'animate') return;
+                setLoadedDims({
+                  src: imageUrl,
+                  w: e.currentTarget.naturalWidth,
+                  h: e.currentTarget.naturalHeight,
+                });
+              }}
+            />
+            {loopGeometry && (
+              <div
+                className="w-full h-full"
+                onMouseEnter={finePointer ? () => setHovered(true) : undefined}
+                onMouseLeave={finePointer ? () => setHovered(false) : undefined}
+                onClick={
+                  finePointer
+                    ? undefined
+                    : (e) => {
+                        e.stopPropagation();
+                        setTapped((t) => !t);
+                      }
+                }
+                role={finePointer ? undefined : 'button'}
+                aria-pressed={finePointer ? undefined : tapped}
+                aria-label={finePointer ? entry.prompt : 'Play or pause animation'}
+              >
+                <SheetLoop
+                  src={imageUrl}
+                  geometry={loopGeometry}
+                  fps={8}
+                  playing={finePointer ? hovered : tapped}
+                  className="w-full h-full"
+                />
+              </div>
+            )}
+          </>
         ) : (
           <Loader2 size={16} className="animate-spin text-text-muted" />
         )}

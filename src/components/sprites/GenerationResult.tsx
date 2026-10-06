@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight, Eraser, Pencil, Film } from 'lucide-react';
@@ -9,6 +9,8 @@ import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import BrewingLoader from './BrewingLoader';
 import PixelEditor from './PixelEditor';
+import SheetLoop from './SheetLoop';
+import { sheetGeometry } from '@/lib/animationGeometry';
 import { loadImage, removeBackgroundColor } from '@/lib/spriteUtils';
 import {
   loadHistory,
@@ -17,6 +19,10 @@ import {
 } from '@/lib/generationHistory';
 
 const ZOOM_OPTIONS = [1, 2, 4, 8] as const;
+
+/** Target display width in px for the looping preview; the frame is scaled
+ *  by the largest whole number that fits, then capped to the box width. */
+const LOOP_TARGET_PX = 320;
 
 /** Fit-to-container default zoom — picks the largest value from ZOOM_OPTIONS
  *  such that naturalWidth × zoom fits within the measured container width.
@@ -48,6 +54,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
   const rescueInfo = useSpriteStore((s) => s.rescueInfo);
+  const currentSheetMetadata = useSpriteStore((s) => s.currentSheetMetadata);
   const setPendingAnimatorHandoff = useSpriteStore((s) => s.setPendingAnimatorHandoff);
   const setPendingAnimatorSkipBgRemoval = useSpriteStore((s) => s.setPendingAnimatorSkipBgRemoval);
 
@@ -69,6 +76,10 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   // rather than a hardcoded magic number.
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [history, setHistory] = useState<GenerationHistoryEntry[]>([]);
+  // Sheet / Playing toggle for animate results. Holds the source the user
+  // switched to Sheet for, so a new generation lands Playing again without
+  // resetting state in an effect.
+  const [sheetViewSrc, setSheetViewSrc] = useState<string | null>(null);
 
   // Background removal state
   const [bgRemovalActive, setBgRemovalActive] = useState(false);
@@ -131,6 +142,26 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   /** The image currently displayed and used for download / Send to Slicer */
   const displayImageDataUrl =
     bgRemovalActive && bgRemovedDataUrl ? bgRemovedDataUrl : generatedImageDataUrl;
+
+  // Animate results loop in place. Geometry comes from the sheet hints the
+  // generation set (frame size and count) and the loaded image's natural
+  // size; null (not animate, hints missing, or a size mismatch) shows the
+  // sheet only.
+  const isAnimateResult =
+    generationMode === 'animate' || currentSheetMetadata?.source === 'animate';
+  const loopGeometry = useMemo(
+    () =>
+      isAnimateResult
+        ? sheetGeometry({
+            imageW: naturalDims.w,
+            imageH: naturalDims.h,
+            frameSize: currentSheetMetadata?.frameSize,
+            frameCount: currentSheetMetadata?.frameCount,
+          })
+        : null,
+    [isAnimateResult, naturalDims.w, naturalDims.h, currentSheetMetadata]
+  );
+  const showLoop = !!loopGeometry && sheetViewSrc !== generatedImageDataUrl;
 
   const handleDownload = useCallback(() => {
     if (!displayImageDataUrl) return;
@@ -425,12 +456,56 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           content > container). Image uses explicit width/height (not
           transform: scale) so the layout box matches the visual size — that's
           what makes overflow-auto compute scroll correctly. */}
+      {loopGeometry && (
+        <div className="flex gap-1 rounded-lg bg-bg-secondary p-1 w-fit" role="group" aria-label="Result view">
+          {([['sheet', 'Sheet'], ['loop', 'Playing']] as const).map(([view, label]) => {
+            const selected = view === 'loop' ? showLoop : !showLoop;
+            return (
+              <button
+                key={view}
+                onClick={() => setSheetViewSrc(view === 'sheet' ? generatedImageDataUrl : null)}
+                aria-pressed={selected}
+                className={`px-3 py-1.5 rounded-md text-[10px] font-mono cursor-pointer transition-colors
+                  ${selected
+                    ? 'bg-accent-amber text-bg-primary'
+                    : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                  }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div
         ref={containerRef}
         className="rounded-lg border border-border-default bg-bg-elevated p-4 overflow-auto"
       >
+        {showLoop && loopGeometry && (
+          <div
+            className="mx-auto"
+            style={{
+              width: `min(100%, ${Math.max(1, Math.floor(LOOP_TARGET_PX / loopGeometry.frameW)) * loopGeometry.frameW}px)`,
+              aspectRatio: `${loopGeometry.frameW} / ${loopGeometry.frameH}`,
+              backgroundImage:
+                'linear-gradient(45deg, #2a2725 25%, transparent 25%), linear-gradient(-45deg, #2a2725 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2725 75%), linear-gradient(-45deg, transparent 75%, #2a2725 75%)',
+              backgroundSize: '8px 8px',
+              backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0',
+            }}
+          >
+            <SheetLoop
+              src={displayImageDataUrl ?? generatedImageDataUrl}
+              geometry={loopGeometry}
+              fps={8}
+              className="w-full h-full"
+            />
+          </div>
+        )}
+        {/* The sheet image stays mounted while the loop shows (hidden) so
+            its onLoad keeps feeding naturalDims and the fit zoom. */}
         <div
-          className="inline-block mx-auto"
+          className={showLoop ? 'hidden' : 'inline-block mx-auto'}
           style={{
             backgroundImage:
               'linear-gradient(45deg, #2a2725 25%, transparent 25%), linear-gradient(-45deg, #2a2725 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2725 75%), linear-gradient(-45deg, transparent 75%, #2a2725 75%)',

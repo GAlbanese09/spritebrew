@@ -21,6 +21,7 @@ import {
 } from '@/lib/spriteUtils';
 import type { SpriteFrame, SpriteSheet } from '@/lib/types';
 import { exportRawFrames } from '@/lib/exportEngine';
+import { allFramesGroup } from '@/lib/allFramesGroup';
 
 type SliceMode = 'grid' | 'auto';
 
@@ -305,13 +306,15 @@ export default function UploadPage() {
 
   /** Shortcut export: invokes the same exportRawFrames path the /preview
    *  Export page uses, with no manifest and no resize. Transparency from
-   *  the bg-removal banner carries through end-to-end (PNG preserves alpha). */
+   *  the bg-removal banner carries through end-to-end (PNG preserves alpha).
+   *  Works right after slicing: with no group yet, it exports every sliced
+   *  frame through a synthetic all-frames group that is never stored. */
   const handleDownloadAllFrames = useCallback(async () => {
-    if (!spriteSheet || !canContinue || downloadingZip) return;
+    if (!spriteSheet || downloadingZip) return;
     setDownloadingZip(true);
     try {
       await exportRawFrames({
-        animations,
+        animations: canContinue ? animations : [allFramesGroup(spriteSheet)],
         frameDataUrls,
         frameWidth: spriteSheet.frameWidth,
         frameHeight: spriteSheet.frameHeight,
@@ -465,7 +468,7 @@ export default function UploadPage() {
           <Button
             variant="secondary"
             size="lg"
-            disabled={!canContinue || downloadingZip}
+            disabled={downloadingZip}
             onClick={handleDownloadAllFrames}
             aria-label="Download all sliced frames as a ZIP of transparent PNG files"
           >
@@ -481,10 +484,16 @@ export default function UploadPage() {
               </>
             )}
           </Button>
+          {!canContinue && (
+            <p id="continue-reason" className="text-xs font-mono text-text-secondary">
+              Add frames to a group to preview them.
+            </p>
+          )}
           <Button
             size="lg"
             disabled={!canContinue}
             onClick={() => router.push('/preview')}
+            aria-describedby={canContinue ? undefined : 'continue-reason'}
           >
             Continue to Preview
             <ArrowRight size={16} />

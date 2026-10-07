@@ -4,8 +4,8 @@ import { useState, useCallback, useEffect } from 'react';
 import {
   Plus,
   Trash2,
-  ChevronUp,
-  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   X,
   Wand2,
   Check,
@@ -16,6 +16,10 @@ import { useSpriteStore } from '@/stores/spriteStore';
 import type { SpriteAnimation, SpriteFrame } from '@/lib/types';
 import type { SlicerHints } from '@/lib/generationHistory';
 import Button from '@/components/ui/Button';
+
+// Per-frame move and remove buttons in a group's strip.
+const FRAME_CONTROL_CLASS =
+  'w-5 h-5 pointer-coarse:w-11 pointer-coarse:h-11 flex items-center justify-center rounded border border-border-default bg-bg-primary text-text-muted cursor-pointer disabled:opacity-30 disabled:cursor-default';
 
 interface AnimationPanelProps {
   frameDataUrls: Map<string, string>;
@@ -600,54 +604,63 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
                   return (
                     <div
                       key={`${idx}-${frame.id}`}
-                      className="group relative rounded border border-border-subtle bg-bg-elevated"
+                      className="flex flex-col items-center gap-1.5 rounded border border-border-subtle bg-bg-elevated p-0.5"
                     >
-                      <div
-                        className="w-10 h-10 overflow-hidden rounded"
-                        style={{
-                          backgroundImage:
-                            'linear-gradient(45deg, #e0e0e0 25%, transparent 25%), linear-gradient(-45deg, #e0e0e0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e0e0e0 75%), linear-gradient(-45deg, transparent 75%, #e0e0e0 75%)',
-                          backgroundSize: '6px 6px',
-                          backgroundPosition: '0 0, 0 3px, 3px -3px, -3px 0',
-                          backgroundColor: '#fff',
-                        }}
-                      >
-                        {dataUrl && (
-                          <img
-                            src={dataUrl}
-                            alt={`Frame ${idx}`}
-                            className="w-full h-full object-contain"
-                            style={{ imageRendering: 'pixelated' }}
-                          />
-                        )}
+                      <div className="relative">
+                        <div
+                          className="w-10 h-10 overflow-hidden rounded"
+                          style={{
+                            backgroundImage:
+                              'linear-gradient(45deg, #e0e0e0 25%, transparent 25%), linear-gradient(-45deg, #e0e0e0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e0e0e0 75%), linear-gradient(-45deg, transparent 75%, #e0e0e0 75%)',
+                            backgroundSize: '6px 6px',
+                            backgroundPosition: '0 0, 0 3px, 3px -3px, -3px 0',
+                            backgroundColor: '#fff',
+                          }}
+                        >
+                          {dataUrl && (
+                            <img
+                              src={dataUrl}
+                              alt={`Frame ${idx}`}
+                              className="w-full h-full object-contain"
+                              style={{ imageRendering: 'pixelated' }}
+                            />
+                          )}
+                        </div>
+
+                        <span className="absolute -bottom-1.5 left-0.5 text-[7px] font-mono text-text-muted leading-none">
+                          {idx + 1}
+                        </span>
                       </div>
 
-                      <span className="absolute -bottom-1.5 left-0.5 text-[7px] font-mono text-text-muted leading-none">
-                        {idx + 1}
-                      </span>
-
-                      <div className="absolute -top-1 -right-1 hidden group-hover:flex gap-0.5">
-                        {idx > 0 && (
-                          <button
-                            onClick={() => handleMoveFrame(anim.id, idx, -1)}
-                            className="w-4 h-4 flex items-center justify-center rounded-full bg-bg-primary border border-border-default text-text-muted hover:text-text-primary cursor-pointer"
-                          >
-                            <ChevronUp size={10} />
-                          </button>
-                        )}
-                        {idx < anim.frames.length - 1 && (
-                          <button
-                            onClick={() => handleMoveFrame(anim.id, idx, 1)}
-                            className="w-4 h-4 flex items-center justify-center rounded-full bg-bg-primary border border-border-default text-text-muted hover:text-text-primary cursor-pointer"
-                          >
-                            <ChevronDown size={10} />
-                          </button>
-                        )}
+                      {/* Always visible (no hover gate): compact on a mouse,
+                          44 px touch targets on a coarse pointer. Left and
+                          right arrows match the left-to-right strip. */}
+                      <div className="flex gap-0.5">
                         <button
-                          onClick={() => handleRemoveFrame(anim.id, idx)}
-                          className="w-4 h-4 flex items-center justify-center rounded-full bg-bg-primary border border-border-default text-text-muted hover:text-red-400 cursor-pointer"
+                          type="button"
+                          onClick={() => handleMoveFrame(anim.id, idx, -1)}
+                          disabled={idx === 0}
+                          aria-label={`Move frame ${idx + 1} earlier`}
+                          className={`${FRAME_CONTROL_CLASS} enabled:hover:text-text-primary`}
                         >
-                          <X size={10} />
+                          <ChevronLeft size={12} aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleMoveFrame(anim.id, idx, 1)}
+                          disabled={idx === anim.frames.length - 1}
+                          aria-label={`Move frame ${idx + 1} later`}
+                          className={`${FRAME_CONTROL_CLASS} enabled:hover:text-text-primary`}
+                        >
+                          <ChevronRight size={12} aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveFrame(anim.id, idx)}
+                          aria-label={`Remove frame ${idx + 1}`}
+                          className={`${FRAME_CONTROL_CLASS} hover:text-red-400`}
+                        >
+                          <X size={12} aria-hidden="true" />
                         </button>
                       </div>
                     </div>

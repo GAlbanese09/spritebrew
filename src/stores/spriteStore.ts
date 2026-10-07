@@ -95,6 +95,10 @@ interface SpriteStore {
 
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
+  /** Swap the sheet's source image and every frame's pixels while keeping
+   *  frame ids, rects and the user's groups (animations) untouched. Used by
+   *  background removal on /upload, which changes pixels but not the grid. */
+  replaceSheetSource: (sourceImage: string, urls: Map<string, string>) => void;
   setFrameDataUrls: (urls: Map<string, string>) => void;
   updateFrameOrder: (animationId: string, frames: SpriteFrame[]) => void;
   addAnimation: (animation: SpriteAnimation) => void;
@@ -179,6 +183,12 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
 
   clearSpriteSheet: () =>
     set({ spriteSheet: null, selectedFrames: [], animations: [], frameDataUrls: new Map(), generationStyle: null, currentSheetMetadata: null }),
+
+  replaceSheetSource: (sourceImage, urls) =>
+    set((state) => ({
+      spriteSheet: state.spriteSheet ? { ...state.spriteSheet, sourceImage } : null,
+      frameDataUrls: urls,
+    })),
 
   setFrameDataUrls: (urls) => set({ frameDataUrls: urls }),
 

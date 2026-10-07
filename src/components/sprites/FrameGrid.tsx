@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import { Pencil } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import PixelEditor from './PixelEditor';
+import { DRAG_TILE_STYLE, startFrameDrag, useFrameDrag } from './frameDrag';
 
 interface FrameGridProps {
   /** Map from frame ID → data URL for display */
@@ -18,6 +19,8 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
   const updateFrameData = useSpriteStore((s) => s.updateFrameData);
 
   const [editingFrameId, setEditingFrameId] = useState<string | null>(null);
+  const drag = useFrameDrag();
+  const draggingFrameId = drag?.source.kind === 'grid' ? drag.source.frameId : null;
 
   const allFrames = spriteSheet?.animations.flatMap((a) => a.frames) ?? [];
 
@@ -88,13 +91,20 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
         Tip: select frames, then Assign. A frame can be used more than once.
       </p>
 
-      <div className="grid gap-2"style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))' }}>
+      <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))' }}>
         {allFrames.map((frame, idx) => {
           const selected = selectedFrames.includes(frame.id);
           const dataUrl = frameDataUrls.get(frame.id);
 
           return (
-            <div key={frame.id} className="group relative">
+            // Dragging a tile into an animation group inserts a copy there;
+            // the frame stays here so it can be used again.
+            <div
+              key={frame.id}
+              className={`group relative ${draggingFrameId === frame.id ? 'opacity-50' : ''}`}
+              style={DRAG_TILE_STYLE}
+              onPointerDown={(e) => startFrameDrag(e, { kind: 'grid', frameId: frame.id })}
+            >
               <button
                 onClick={(e) => handleFrameClick(frame.id, idx, e)}
                 className={`
@@ -124,6 +134,7 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
                     <img
                       src={dataUrl}
                       alt={`Frame ${idx}`}
+                      draggable={false}
                       className="absolute inset-0 w-full h-full object-contain pixel-art-render"
                       style={{ imageRendering: 'pixelated' }}
                     />
@@ -143,6 +154,7 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
                   pixel spot as the original overlay: button p-1 = 4px +
                   checkerboard's original top-0.5/right-0.5 = 2px → 6px = 1.5. */}
               <button
+                data-frame-drag-ignore
                 onClick={(e) => {
                   e.stopPropagation();
                   setEditingFrameId(frame.id);

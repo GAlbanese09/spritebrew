@@ -16,6 +16,7 @@ import { useSpriteStore } from '@/stores/spriteStore';
 import type { SpriteAnimation, SpriteFrame } from '@/lib/types';
 import type { SlicerHints } from '@/lib/generationHistory';
 import Button from '@/components/ui/Button';
+import { DRAG_TILE_STYLE, FrameDragLayer, startFrameDrag, useFrameDrag } from './frameDrag';
 
 // Per-frame move and remove buttons in a group's strip.
 const FRAME_CONTROL_CLASS =
@@ -228,6 +229,7 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
   const [layoutOverride, setLayoutOverride] = useState<LayoutMode | null>(null);
   const [autoAssignPreview, setAutoAssignPreview] = useState<ProposedAnimation[] | null>(null);
   const [nameManuallyEdited, setNameManuallyEdited] = useState<boolean[]>([]);
+  const drag = useFrameDrag();
 
   // When sheet metadata arrives (gallery handoff), pre-select type and layout
   useEffect(() => {
@@ -534,9 +536,16 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
       {/* Animation groups */}
       <div className="space-y-3">
         {animations.map((anim) => (
+          // The whole card is a drop target for frames dragged from the
+          // Frames grid, and for reordering this group's own frames.
           <div
             key={anim.id}
-            className="rounded-lg border border-border-default bg-bg-surface p-4"
+            data-frame-drop-anim={anim.id}
+            className={`rounded-lg border bg-bg-surface p-4 ${
+              drag?.target?.animId === anim.id
+                ? 'border-accent-amber ring-2 ring-accent-amber/40'
+                : 'border-border-default'
+            }`}
           >
             {/* Header */}
             <div className="flex items-center justify-between mb-3">
@@ -601,10 +610,21 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
               <div className="flex flex-wrap gap-1.5">
                 {anim.frames.map((frame, idx) => {
                   const dataUrl = frameDataUrls.get(frame.id);
+                  const isDragSource =
+                    drag?.source.kind === 'group' &&
+                    drag.source.animId === anim.id &&
+                    drag.source.index === idx;
                   return (
                     <div
                       key={`${idx}-${frame.id}`}
-                      className="flex flex-col items-center gap-1.5 rounded border border-border-subtle bg-bg-elevated p-0.5"
+                      data-frame-drop-index={idx}
+                      onPointerDown={(e) =>
+                        startFrameDrag(e, { kind: 'group', animId: anim.id, index: idx, frameId: frame.id })
+                      }
+                      style={DRAG_TILE_STYLE}
+                      className={`flex flex-col items-center gap-1.5 rounded border border-border-subtle bg-bg-elevated p-0.5 cursor-grab ${
+                        isDragSource ? 'opacity-40' : ''
+                      }`}
                     >
                       <div className="relative">
                         <div
@@ -620,7 +640,8 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
                           {dataUrl && (
                             <img
                               src={dataUrl}
-                              alt={`Frame ${idx}`}
+                              alt={`Frame ${idx + 1}`}
+                              draggable={false}
                               className="w-full h-full object-contain"
                               style={{ imageRendering: 'pixelated' }}
                             />
@@ -634,8 +655,10 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
 
                       {/* Always visible (no hover gate): compact on a mouse,
                           44 px touch targets on a coarse pointer. Left and
-                          right arrows match the left-to-right strip. */}
-                      <div className="flex gap-0.5">
+                          right arrows match the left-to-right strip. They
+                          stay the keyboard path; presses here never start a
+                          drag. */}
+                      <div className="flex gap-0.5" data-frame-drag-ignore>
                         <button
                           type="button"
                           onClick={() => handleMoveFrame(anim.id, idx, -1)}
@@ -671,6 +694,8 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
           </div>
         ))}
       </div>
+
+      <FrameDragLayer frameDataUrls={frameDataUrls} />
     </div>
   );
 }

@@ -10,8 +10,10 @@ import AnimationPanel from '@/components/sprites/AnimationPanel';
 import FrameSizeResizer from '@/components/sprites/FrameSizeResizer';
 import SpriteDetector, { type SpriteDetectorExtractResult } from '@/components/sprites/SpriteDetector';
 import BgRemovalBanner from '@/components/sprites/BgRemovalBanner';
+import ConfirmDiscardDialog from '@/components/sprites/ConfirmDiscardDialog';
 import Button from '@/components/ui/Button';
 import { useSpriteStore } from '@/stores/spriteStore';
+import { useSheetLeaveGuard } from '@/hooks/useSheetLeaveGuard';
 import {
   generateFrameId,
   loadImage,
@@ -34,6 +36,27 @@ interface UploadedImage {
   isGif?: boolean;
 }
 
+/** The generated image this page last loaded from the store. Module scope so
+ *  it lives as long as the in-memory store does (client navigation keeps
+ *  both; a reload resets both). Lets the mount effect tell "back from
+ *  /preview with the same image" (keep the sheet) from "a new image was sent
+ *  to the slicer" (replace the sheet, asking first if groups exist). */
+let consumedGeneratedImage: string | null = null;
+
+/** Re-cut every existing frame rect from a new source image. Frame ids and
+ *  rects are unchanged, so groups that reference them stay valid. */
+async function reextractFrames(sourceUrl: string, sheet: SpriteSheet): Promise<Map<string, string>> {
+  const img = await loadImage(sourceUrl);
+  const sourceCanvas = imageToCanvas(img);
+  const urls = new Map<string, string>();
+  for (const frame of sheet.animations.flatMap((a) => a.frames)) {
+    if (urls.has(frame.id)) continue;
+    const frameCanvas = extractFrame(sourceCanvas, frame.x, frame.y, frame.width, frame.height);
+    urls.set(frame.id, frameToDataURL(frameCanvas));
+  }
+  return urls;
+}
+
 export default function UploadPage() {
   const router = useRouter();
   const spriteSheet = useSpriteStore((s) => s.spriteSheet);
@@ -42,6 +65,7 @@ export default function UploadPage() {
   const setSpriteSheet = useSpriteStore((s) => s.setSpriteSheet);
   const clearSpriteSheet = useSpriteStore((s) => s.clearSpriteSheet);
   const setFrameDataUrls = useSpriteStore((s) => s.setFrameDataUrls);
+  const replaceSheetSource = useSpriteStore((s) => s.replaceSheetSource);
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
 
   const [uploaded, setUploaded] = useState<UploadedImage | null>(null);
@@ -59,29 +83,62 @@ export default function UploadPage() {
   // True while a bulk-PNG ZIP is being assembled — disables the button + shows
   // a spinner. ZIP can take a few seconds on larger sheets.
   const [downloadingZip, setDownloadingZip] = useState(false);
+  // An action that would clear the user's groups, held until they answer
+  // the confirm dialog. Null while no confirm is open.
+  const [pendingDiscard, setPendingDiscard] = useState<{
+    run: () => void;
+    cancel?: () => void;
+  } | null>(null);
+
+  useSheetLeaveGuard();
+
+  /** Runs `run` now when there are no groups to lose; otherwise opens the
+   *  confirm dialog. `cancel` undoes any side work the caller already did
+   *  (e.g. revoking a new file's blob URL); everything else stays as is. */
+  const askBeforeDiscard = useCallback((run: () => void, cancel?: () => void) => {
+    if (useSpriteStore.getState().animations.length > 0) {
+      setPendingDiscard({ run, cancel });
+    } else {
+      run();
+    }
+  }, []);
 
   // Auto-load generated image from store on mount. We copy the data URL
   // into local state but do NOT clear it from the Zustand store — this lets
   // the user navigate back to /generate and still see their last result with
   // all controls (zoom, background removal, download, Send to Slicer).
   // The result is only cleared explicitly via "Generate Another".
+  //
+  // Coming back from /preview or /export with the same generated image keeps
+  // the sliced sheet (B4): the page shows it with "Replace sheet" instead.
   useEffect(() => {
     if (generatedImageDataUrl && !uploaded) {
-      const img = new Image();
-      img.onload = () => {
-        const blobUrl = generatedImageDataUrl;
-        setUploaded({
-          file: new File([], 'generated_sprite.png', { type: 'image/png' }),
-          blobUrl,
-          width: img.naturalWidth,
-          height: img.naturalHeight,
-        });
-        setFromGenerated(true);
-        setSizeAcknowledged(true);
-        clearSpriteSheet();
-        // NOTE: intentionally NOT calling clearGeneratedImage() here
+      if (useSpriteStore.getState().spriteSheet && generatedImageDataUrl === consumedGeneratedImage) {
+        return;
+      }
+      const load = () => {
+        consumedGeneratedImage = generatedImageDataUrl;
+        const img = new Image();
+        img.onload = () => {
+          const blobUrl = generatedImageDataUrl;
+          setUploaded({
+            file: new File([], 'generated_sprite.png', { type: 'image/png' }),
+            blobUrl,
+            width: img.naturalWidth,
+            height: img.naturalHeight,
+          });
+          setFromGenerated(true);
+          setSizeAcknowledged(true);
+          clearSpriteSheet();
+          // NOTE: intentionally NOT calling clearGeneratedImage() here
+        };
+        img.src = generatedImageDataUrl;
       };
-      img.src = generatedImageDataUrl;
+      // Cancel keeps the current sheet; mark the image seen so the next
+      // visit does not ask again for the same image.
+      askBeforeDiscard(load, () => {
+        consumedGeneratedImage = generatedImageDataUrl;
+      });
     }
     // Only run on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -89,33 +146,48 @@ export default function UploadPage() {
 
   const handleImageLoaded = useCallback(
     (file: File, blobUrl: string, width: number, height: number) => {
-      const isGif = file.type === 'image/gif';
-      setUploaded({ file, blobUrl, width, height, isGif });
-      setFromGenerated(false);
-      setPreferredFrameW(undefined);
-      setPreferredFrameH(undefined);
-      setBgBannerDismissed(false);
-      // If the image is larger than the threshold on any side, require acknowledgement
-      const needsAlert = width > LARGE_IMAGE_THRESHOLD || height > LARGE_IMAGE_THRESHOLD;
-      setSizeAcknowledged(!needsAlert);
-      clearSpriteSheet();
+      const apply = () => {
+        const isGif = file.type === 'image/gif';
+        setUploaded({ file, blobUrl, width, height, isGif });
+        setFromGenerated(false);
+        setPreferredFrameW(undefined);
+        setPreferredFrameH(undefined);
+        setBgBannerDismissed(false);
+        // If the image is larger than the threshold on any side, require acknowledgement
+        const needsAlert = width > LARGE_IMAGE_THRESHOLD || height > LARGE_IMAGE_THRESHOLD;
+        setSizeAcknowledged(!needsAlert);
+        clearSpriteSheet();
+      };
+      // Cancel drops the new file and keeps the current sheet.
+      askBeforeDiscard(apply, () => URL.revokeObjectURL(blobUrl));
     },
-    [clearSpriteSheet]
+    [clearSpriteSheet, askBeforeDiscard]
   );
 
   const handleRemove = useCallback(() => {
-    if (uploaded && !fromGenerated) {
-      URL.revokeObjectURL(uploaded.blobUrl);
-    }
-    setUploaded(null);
-    setFromGenerated(false);
-    setSizeAcknowledged(false);
-    setPreferredFrameW(undefined);
-    setPreferredFrameH(undefined);
-    setSliceMode('grid');
-    setBgBannerDismissed(false);
-    clearSpriteSheet();
-  }, [uploaded, fromGenerated, clearSpriteSheet]);
+    askBeforeDiscard(() => {
+      if (uploaded && !fromGenerated) {
+        URL.revokeObjectURL(uploaded.blobUrl);
+      }
+      setUploaded(null);
+      setFromGenerated(false);
+      setSizeAcknowledged(false);
+      setPreferredFrameW(undefined);
+      setPreferredFrameH(undefined);
+      setSliceMode('grid');
+      setBgBannerDismissed(false);
+      clearSpriteSheet();
+    });
+  }, [uploaded, fromGenerated, clearSpriteSheet, askBeforeDiscard]);
+
+  /** B4 view's "Replace sheet": clears the kept sheet so the dropzone shows. */
+  const handleReplaceSheet = useCallback(() => {
+    askBeforeDiscard(() => {
+      const source = useSpriteStore.getState().spriteSheet?.sourceImage;
+      if (source?.startsWith('blob:')) URL.revokeObjectURL(source);
+      clearSpriteSheet();
+    });
+  }, [clearSpriteSheet, askBeforeDiscard]);
 
   /** User accepted a resized sheet from FrameSizeResizer. Includes the chosen
    *  frame dimensions so the slicer can pre-populate its grid. */
@@ -147,27 +219,47 @@ export default function UploadPage() {
   }, []);
 
   /** User confirmed background removal. Replace the in-memory image with the
-   *  cleaned version; original file on disk is untouched. */
+   *  cleaned version; original file on disk is untouched. An existing sliced
+   *  sheet keeps its frame grid: every frame is re-cut from the cleaned image
+   *  at the same rect and id, so groups survive. */
   const handleBgRemoved = useCallback(
     (cleanedDataUrl: string) => {
       if (!uploaded) return;
-      if (!fromGenerated) URL.revokeObjectURL(uploaded.blobUrl);
       // Load the cleaned image to get its dimensions
       const img = new Image();
       img.onload = () => {
-        setUploaded({
-          ...uploaded,
-          blobUrl: cleanedDataUrl,
-          width: img.naturalWidth,
-          height: img.naturalHeight,
-        });
-        setFromGenerated(true); // data URL — don't revoke
-        setBgBannerDismissed(true);
-        clearSpriteSheet();
+        const width = img.naturalWidth;
+        const height = img.naturalHeight;
+        const swapImage = () => {
+          if (!fromGenerated) URL.revokeObjectURL(uploaded.blobUrl);
+          setUploaded({ ...uploaded, blobUrl: cleanedDataUrl, width, height });
+          setFromGenerated(true); // data URL, don't revoke
+          setBgBannerDismissed(true);
+        };
+        const swapAndClear = () => {
+          swapImage();
+          clearSpriteSheet();
+        };
+        const sheet = useSpriteStore.getState().spriteSheet;
+        if (!sheet) {
+          swapImage();
+          return;
+        }
+        if (width !== uploaded.width || height !== uploaded.height) {
+          // The grid no longer fits the image; the sheet has to go.
+          askBeforeDiscard(swapAndClear);
+          return;
+        }
+        reextractFrames(cleanedDataUrl, sheet)
+          .then((urls) => {
+            replaceSheetSource(cleanedDataUrl, urls);
+            swapImage();
+          })
+          .catch(() => askBeforeDiscard(swapAndClear));
       };
       img.src = cleanedDataUrl;
     },
-    [uploaded, fromGenerated, clearSpriteSheet]
+    [uploaded, fromGenerated, clearSpriteSheet, replaceSheetSource, askBeforeDiscard]
   );
 
   const handleSlice = useCallback(
@@ -347,11 +439,55 @@ export default function UploadPage() {
         </div>
       )}
 
-      {/* Upload zone */}
-      <UploadZone
-        onImageLoaded={handleImageLoaded}
-        currentImage={uploaded?.blobUrl ?? null}
-        onRemove={handleRemove}
+      {/* Upload zone. B4: back from /preview or /export the page has no
+          local image but the store still holds the sliced sheet, so show
+          that sheet instead of an empty dropzone. */}
+      {!uploaded && spriteSheet ? (
+        <div className="rounded-lg border border-border-default bg-bg-surface p-4">
+          <div className="flex flex-wrap items-start gap-4">
+            <div
+              className="relative flex-shrink-0 rounded border border-border-subtle overflow-hidden"
+              style={{
+                backgroundImage:
+                  'linear-gradient(45deg, #2a2725 25%, transparent 25%), linear-gradient(-45deg, #2a2725 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2725 75%), linear-gradient(-45deg, transparent 75%, #2a2725 75%)',
+                backgroundSize: '8px 8px',
+                backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0',
+              }}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={spriteSheet.sourceImage}
+                alt="Uploaded sprite sheet"
+                className="block max-w-[200px] max-h-[200px]"
+                style={{ imageRendering: 'pixelated' }}
+              />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-mono text-text-secondary">Sprite sheet loaded</p>
+            </div>
+            <Button variant="secondary" size="md" onClick={handleReplaceSheet}>
+              Replace sheet
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <UploadZone
+          onImageLoaded={handleImageLoaded}
+          currentImage={uploaded?.blobUrl ?? null}
+          onRemove={handleRemove}
+        />
+      )}
+
+      <ConfirmDiscardDialog
+        open={pendingDiscard !== null}
+        onCancel={() => {
+          pendingDiscard?.cancel?.();
+          setPendingDiscard(null);
+        }}
+        onContinue={() => {
+          pendingDiscard?.run();
+          setPendingDiscard(null);
+        }}
       />
 
       {/* Background removal banner — shown after upload if a solid background

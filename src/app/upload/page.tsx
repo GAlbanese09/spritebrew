@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Download, Grid3X3, Loader2, Scan, Sparkles } from 'lucide-react';
 import UploadZone from '@/components/sprites/UploadZone';
@@ -90,6 +90,11 @@ export default function UploadPage() {
     cancel?: () => void;
   } | null>(null);
 
+  // How the current sheet was cut. Background removal can re-cut grid
+  // frames in place; auto-detect frames may be padded or scaled, so their
+  // rects alone cannot rebuild them.
+  const sheetModeRef = useRef<SliceMode | null>(null);
+
   useSheetLeaveGuard();
 
   /** Runs `run` now when there are no groups to lose; otherwise opens the
@@ -147,6 +152,10 @@ export default function UploadPage() {
   const handleImageLoaded = useCallback(
     (file: File, blobUrl: string, width: number, height: number) => {
       const apply = () => {
+        // The user's own file replaces any generated image still in the
+        // store; mark that image seen so coming back from /preview keeps
+        // this sheet instead of reloading the old generation.
+        consumedGeneratedImage = useSpriteStore.getState().generatedImageDataUrl;
         const isGif = file.type === 'image/gif';
         setUploaded({ file, blobUrl, width, height, isGif });
         setFromGenerated(false);
@@ -245,8 +254,13 @@ export default function UploadPage() {
           swapImage();
           return;
         }
-        if (width !== uploaded.width || height !== uploaded.height) {
-          // The grid no longer fits the image; the sheet has to go.
+        if (
+          width !== uploaded.width ||
+          height !== uploaded.height ||
+          sheetModeRef.current !== 'grid'
+        ) {
+          // The grid no longer fits the image, or the frames came from
+          // auto-detect and cannot be re-cut from rects; the sheet has to go.
           askBeforeDiscard(swapAndClear);
           return;
         }
@@ -262,7 +276,7 @@ export default function UploadPage() {
     [uploaded, fromGenerated, clearSpriteSheet, replaceSheetSource, askBeforeDiscard]
   );
 
-  const handleSlice = useCallback(
+  const sliceGrid = useCallback(
     async (config: SliceConfig) => {
       if (!uploaded) return;
       setSlicing(true);
@@ -326,6 +340,7 @@ export default function UploadPage() {
 
         setSpriteSheet(sheet);
         setFrameDataUrls(urls);
+        sheetModeRef.current = 'grid';
       } finally {
         setSlicing(false);
       }
@@ -333,11 +348,22 @@ export default function UploadPage() {
     [uploaded, setSpriteSheet, setFrameDataUrls]
   );
 
+  /** Slicing again replaces the frames and resets groups (setSpriteSheet),
+   *  so ask first when groups exist. Cancel leaves everything as it was. */
+  const handleSlice = useCallback(
+    (config: SliceConfig) => {
+      askBeforeDiscard(() => {
+        void sliceGrid(config);
+      });
+    },
+    [sliceGrid, askBeforeDiscard]
+  );
+
   /** Handler for the Auto-detect Sprites mode's Extract button. Produces the
    *  same SpriteSheet + frameDataUrls format as the grid slicer, so the rest
    *  of the pipeline (FrameGrid, AnimationPanel, Preview, Export) works
    *  identically regardless of which mode was used. */
-  const handleAutoExtract = useCallback(
+  const autoExtract = useCallback(
     (result: SpriteDetectorExtractResult) => {
       if (!uploaded) return;
       setSlicing(true);
@@ -383,11 +409,20 @@ export default function UploadPage() {
 
         setSpriteSheet(sheet);
         setFrameDataUrls(urls);
+        sheetModeRef.current = 'auto';
       } finally {
         setSlicing(false);
       }
     },
     [uploaded, setSpriteSheet, setFrameDataUrls]
+  );
+
+  /** Same guard as handleSlice for the Auto-detect Extract button. */
+  const handleAutoExtract = useCallback(
+    (result: SpriteDetectorExtractResult) => {
+      askBeforeDiscard(() => autoExtract(result));
+    },
+    [autoExtract, askBeforeDiscard]
   );
 
   const canContinue = useMemo(

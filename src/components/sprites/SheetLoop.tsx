@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Play } from 'lucide-react';
 
 export interface SheetLoopGeometry {
@@ -17,8 +17,11 @@ interface SheetLoopProps {
   /** Grid of the sheet; frames are read row-major. */
   geometry: SheetLoopGeometry;
   fps?: number;
-  /** False shows frame 1 and stops. Defaults to true. */
+  /** False shows the first frame and stops. Defaults to true. */
   playing?: boolean;
+  /** Sheet frame indexes (row-major) played in this order. Absent plays
+   *  every frame in sheet order. Indexes outside the sheet are skipped. */
+  sequence?: number[];
   className?: string;
 }
 
@@ -27,14 +30,31 @@ interface SheetLoopProps {
  * CSS to fit its box. Standalone: reads nothing from the sprite store, so
  * it can sit on a result or gallery card without touching the sheet-tools
  * session. Pauses off screen and in a hidden tab. Under
- * prefers-reduced-motion it shows frame 1 until the user taps play.
+ * prefers-reduced-motion it shows the first frame until the user taps play.
  */
-export default function SheetLoop({ src, geometry, fps = 8, playing = true, className }: SheetLoopProps) {
+export default function SheetLoop({ src, geometry, fps = 8, playing = true, sequence, className }: SheetLoopProps) {
   const { frameW, frameH, cols, frames } = geometry;
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
+  // Current step: a position in the play list, not a sheet frame index.
   const frameRef = useRef(0);
+
+  // The play list, keyed by content so a new array with the same frames
+  // does not restart the loop. Null plays every frame in sheet order.
+  const sequenceKey = sequence ? sequence.join(',') : null;
+  const playList = useMemo(
+    () =>
+      sequenceKey === null
+        ? null
+        : sequenceKey
+            .split(',')
+            .filter((part) => part !== '')
+            .map(Number)
+            .filter((i) => Number.isInteger(i) && i >= 0 && i < frames),
+    [sequenceKey, frames]
+  );
+  const steps = playList ? playList.length : frames;
 
   // Keyed by src so a new sheet starts unloaded and, under reduced motion,
   // waits for a fresh tap, without resetting state inside an effect.
@@ -67,6 +87,22 @@ export default function SheetLoop({ src, geometry, fps = 8, playing = true, clas
     },
     [frameW, frameH, cols]
   );
+
+  // Draws the frame at a step of the play list.
+  const drawStep = useCallback(
+    (step: number) => {
+      if (steps < 1) return;
+      const s = step % steps;
+      drawFrame(playList ? playList[s] : s);
+    },
+    [steps, playList, drawFrame]
+  );
+
+  // A changed play list starts over at its first step. Declared before the
+  // still-frame and loop effects so they draw from step 0 in the same commit.
+  useEffect(() => {
+    frameRef.current = 0;
+  }, [playList]);
 
   // Load the sheet. A new src starts over at frame 1.
   useEffect(() => {
@@ -115,36 +151,37 @@ export default function SheetLoop({ src, geometry, fps = 8, playing = true, clas
 
   const active = loaded && playing && (onScreen || !ioSupported) && tabVisible && (!reducedMotion || userStarted);
 
-  // Still frame when not running: frame 1 when stopped by the caller or by
-  // reduced motion, otherwise hold the current frame (paused off screen).
+  // Still frame when not running: the first step when stopped by the caller
+  // or by reduced motion, otherwise hold the current step (paused off screen).
   useEffect(() => {
     if (!loaded || active) return;
     if (!playing || (reducedMotion && !userStarted)) frameRef.current = 0;
-    drawFrame(frameRef.current % Math.max(1, frames));
-  }, [loaded, active, playing, reducedMotion, userStarted, frames, drawFrame]);
+    drawStep(frameRef.current);
+  }, [loaded, active, playing, reducedMotion, userStarted, drawStep]);
 
   // Animation loop.
   useEffect(() => {
-    if (!active || frames < 1) return;
+    if (!active || steps < 1) return;
     const step = 1000 / Math.max(1, fps);
     let raf = 0;
     let last = performance.now();
     let acc = 0;
-    drawFrame(frameRef.current % frames);
+    frameRef.current %= steps;
+    drawStep(frameRef.current);
     const tick = (now: number) => {
       acc += now - last;
       last = now;
       if (acc >= step) {
         const advance = Math.floor(acc / step);
         acc -= advance * step;
-        frameRef.current = (frameRef.current + advance) % frames;
-        drawFrame(frameRef.current);
+        frameRef.current = (frameRef.current + advance) % steps;
+        drawStep(frameRef.current);
       }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [active, fps, frames, drawFrame]);
+  }, [active, fps, steps, drawStep]);
 
   const showPlayButton = loaded && playing && reducedMotion && !userStarted;
 

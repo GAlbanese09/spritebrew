@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Pencil, Eraser, Pipette, Undo2, Redo2, History, Save, X, ArrowLeft, Film, AlertCircle, Download } from 'lucide-react';
+import { Pencil, Eraser, Pipette, Undo2, Redo2, FlipHorizontal, History, Save, X, ArrowLeft, Film, AlertCircle, Download } from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import Button from '@/components/ui/Button';
 import {
@@ -170,6 +170,8 @@ export default function PixelEditorBody({
   const eyedrop = useEditorStore((s) => s.eyedrop);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
+  const flipHorizontal = useEditorStore((s) => s.flipHorizontal);
+  const hasPixels = useEditorStore((s) => s.pixels != null);
   const revertToOriginal = useEditorStore((s) => s.revertToOriginal);
   const reset = useEditorStore((s) => s.reset);
 
@@ -1246,6 +1248,15 @@ export default function PixelEditorBody({
           className="p-2 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0"
         >
           <Redo2 size={16} />
+        </button>
+        <button
+          onClick={flipHorizontal}
+          title="Flip horizontally"
+          aria-label="Flip horizontally"
+          disabled={!hasPixels}
+          className="p-2 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0"
+        >
+          <FlipHorizontal size={16} />
         </button>
 
         <div className="w-full h-px bg-border-subtle my-1 hidden md:block" />

@@ -11,9 +11,11 @@ import FrameSizeResizer from '@/components/sprites/FrameSizeResizer';
 import SpriteDetector, { type SpriteDetectorExtractResult } from '@/components/sprites/SpriteDetector';
 import BgRemovalBanner from '@/components/sprites/BgRemovalBanner';
 import ConfirmDiscardDialog from '@/components/sprites/ConfirmDiscardDialog';
+import SheetRestoreBanner from '@/components/sprites/SheetRestoreBanner';
 import Button from '@/components/ui/Button';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { useSheetLeaveGuard } from '@/hooks/useSheetLeaveGuard';
+import { forgetSheetSession, useSheetSession } from '@/hooks/useSheetSession';
 import {
   generateFrameId,
   loadImage,
@@ -96,15 +98,22 @@ export default function UploadPage() {
   const sheetModeRef = useRef<SliceMode | null>(null);
 
   useSheetLeaveGuard();
+  const sheetSession = useSheetSession();
+  const restoreSavedSheet = sheetSession.restore;
 
   /** Runs `run` now when there are no groups to lose; otherwise opens the
    *  confirm dialog. `cancel` undoes any side work the caller already did
-   *  (e.g. revoking a new file's blob URL); everything else stays as is. */
+   *  (e.g. revoking a new file's blob URL); everything else stays as is.
+   *  Going ahead also deletes the copy of the sheet saved on this device. */
   const askBeforeDiscard = useCallback((run: () => void, cancel?: () => void) => {
-    if (useSpriteStore.getState().animations.length > 0) {
-      setPendingDiscard({ run, cancel });
-    } else {
+    const forgetAndRun = () => {
+      forgetSheetSession();
       run();
+    };
+    if (useSpriteStore.getState().animations.length > 0) {
+      setPendingDiscard({ run: forgetAndRun, cancel });
+    } else {
+      forgetAndRun();
     }
   }, []);
 
@@ -197,6 +206,22 @@ export default function UploadPage() {
       clearSpriteSheet();
     });
   }, [clearSpriteSheet, askBeforeDiscard]);
+
+  /** Restore the saved session into the "Sprite sheet loaded" view. An
+   *  image the user dropped but never sliced gives way to it. */
+  const handleRestoreSheet = useCallback(async () => {
+    const local = uploaded;
+    const localIsBlob = !fromGenerated;
+    if (!(await restoreSavedSheet())) return;
+    if (local && localIsBlob) URL.revokeObjectURL(local.blobUrl);
+    setUploaded(null);
+    setFromGenerated(false);
+    setSizeAcknowledged(false);
+    setPreferredFrameW(undefined);
+    setPreferredFrameH(undefined);
+    setSliceMode('grid');
+    setBgBannerDismissed(false);
+  }, [uploaded, fromGenerated, restoreSavedSheet]);
 
   /** User accepted a resized sheet from FrameSizeResizer. Includes the chosen
    *  frame dimensions so the slicer can pre-populate its grid. */
@@ -463,6 +488,15 @@ export default function UploadPage() {
           individual frames for preview and export.
         </p>
       </div>
+
+      {/* A reload emptied the store: offer the session saved on this device. */}
+      {sheetSession.offerRestore && (
+        <SheetRestoreBanner
+          restoring={sheetSession.restoring}
+          onRestore={() => void handleRestoreSheet()}
+          onDiscard={sheetSession.discard}
+        />
+      )}
 
       {/* Generated image banner */}
       {fromGenerated && uploaded && (

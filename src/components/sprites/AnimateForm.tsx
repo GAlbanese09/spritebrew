@@ -262,6 +262,17 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const [pendingDataUrl, setPendingDataUrl] = useState<string | null>(null);
   const [pendingWidth, setPendingWidth] = useState(0);
   const [pendingHeight, setPendingHeight] = useState(0);
+  // The source the current character was Auto-Prepped from, kept after
+  // Use This so a later resolution change can reopen Auto-Prep at the new
+  // size (see the re-prep effect below). skipBgRemoval is the
+  // initialSkipBgRemoval that Auto-Prep was opened with. Cleared on Remove,
+  // a new upload, a new Animator handoff, and Auto-Prep cancel.
+  const [autoPrepSource, setAutoPrepSource] = useState<{
+    dataUrl: string;
+    width: number;
+    height: number;
+    skipBgRemoval: boolean;
+  } | null>(null);
   // bgColor + transparentBg state, refs, effects, and UI removed July 15.
   // Fill is now the DEFAULT_BG_COLOR module constant; remove_bg is
   // unconditional on every animate request. SavedAnimateConfig still
@@ -415,6 +426,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setCharacterDataUrl(null);
     setCharWidth(0);
     setCharHeight(0);
+    setAutoPrepSource(null);
 
     const img = new Image();
     img.onload = () => {
@@ -428,14 +440,33 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     img.src = generatedImageDataUrl;
   }, [pendingAnimatorHandoff, pendingAnimatorSkipBgRemoval, generatedImageDataUrl, clearPendingAnimatorHandoff, clearPendingAnimatorSkipBgRemoval]);
 
-  // When resolution changes after a character is already prepped, leave the
-  // character in place and let the sizeWarning/canGenerate gate (line ~1032)
-  // tell the user the dims don't match — they can either click back to the
-  // matching size, re-upload, or (if we ever add it) re-run Auto-Prep at
-  // the new size. Pre-July-16 this callback cleared the character AND
-  // never repopulated pendingDataUrl (the "Re-show the pending image"
-  // comment was aspirational, not implemented), which forced the user to
-  // re-upload just to inspect a different size option. Removed July 16.
+  // When the resolution changes after a character is already prepped, the
+  // re-prep effect below puts the kept Auto-Prep source back as the pending
+  // source and clears the character, so Auto-Prep reopens at the new size
+  // and the user clicks Use This again. This covers every path that changes
+  // selectedResolution (preset buttons, the mode snap, a template load).
+  // Before Use This, Auto-Prep is open and re-fits to the new size itself.
+  // With no kept source, the character stays, sizeWarning blocks Generate,
+  // and the card and the Generate title say why.
+  // Pre-July-16 this callback cleared the character AND never repopulated
+  // pendingDataUrl, which forced the user to re-upload. Removed July 16.
+  //
+  // No loop: the effect clears the character, so its next run returns
+  // early, and Use This then lands a character at selectedResolution. It
+  // never writes selectedResolution or the restore refs, so it cannot
+  // disturb their one-shot skip, and on mount there is no character yet.
+  useEffect(() => {
+    if (!characterDataUrl || !autoPrepSource) return;
+    if (charWidth === selectedResolution && charHeight === selectedResolution) return;
+    setHandoffSkipBgRemoval(autoPrepSource.skipBgRemoval);
+    setPendingDataUrl(autoPrepSource.dataUrl);
+    setPendingWidth(autoPrepSource.width);
+    setPendingHeight(autoPrepSource.height);
+    setCharacterDataUrl(null);
+    setCharWidth(0);
+    setCharHeight(0);
+  }, [characterDataUrl, charWidth, charHeight, selectedResolution, autoPrepSource]);
+
   const handleResolutionChange = useCallback((newRes: number) => {
     if (newRes === selectedResolution) return;
     setSelectedResolution(newRes);
@@ -487,6 +518,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         setCharacterDataUrl(null);
         setCharWidth(0);
         setCharHeight(0);
+        setAutoPrepSource(null);
       };
       img.onerror = () => {
         const lowerName = file.name.toLowerCase();
@@ -512,6 +544,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setPendingDataUrl(null);
     setPendingWidth(0);
     setPendingHeight(0);
+    setAutoPrepSource(null);
   }, []);
 
   const handleAutoPrepAccept = useCallback(
@@ -519,17 +552,31 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       setCharacterDataUrl(preparedDataUrl);
       setCharWidth(w);
       setCharHeight(h);
+      // Keep the source so a resolution change can re-prep it.
+      setAutoPrepSource(
+        pendingDataUrl
+          ? {
+              dataUrl: pendingDataUrl,
+              width: pendingWidth,
+              height: pendingHeight,
+              skipBgRemoval: handoffSkipBgRemoval,
+            }
+          : null
+      );
       setPendingDataUrl(null);
       setPendingWidth(0);
       setPendingHeight(0);
     },
-    []
+    [pendingDataUrl, pendingWidth, pendingHeight, handoffSkipBgRemoval]
   );
 
+  // Also clears the kept source, so cancelling a re-prep leaves the form
+  // empty, the same as cancelling a fresh upload.
   const handleAutoPrepCancel = useCallback(() => {
     setPendingDataUrl(null);
     setPendingWidth(0);
     setPendingHeight(0);
+    setAutoPrepSource(null);
   }, []);
 
   // Template handlers (v0.5.12 Piece B).
@@ -1053,6 +1100,17 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const sizeWarning = charWidth > 0 && (charWidth !== selectedResolution || charHeight !== selectedResolution);
   const isCustomAction = selectedAction === 'custom_action';
   const canGenerate = characterDataUrl && !sizeWarning && (!isCustomAction || motionPrompt.trim()) && !insufficientTokens;
+  // First reason Generate is disabled, in canGenerate's order. Null while
+  // generating or when Generate is enabled.
+  const generateBlockedReason = isGenerating || canGenerate
+    ? null
+    : !characterDataUrl
+      ? 'Add a character first'
+      : sizeWarning
+        ? `Character is ${charWidth}x${charHeight}; choose ${charWidth} or prepare it again`
+        : isCustomAction && !motionPrompt.trim()
+          ? 'Describe the motion first'
+          : `Need ${tokensNeeded} more tokens`;
 
   return (
     <>
@@ -1087,9 +1145,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
                 <p className="text-[10px] font-mono text-text-muted mt-1">
                   {charWidth}x{charHeight} · transparent background
                 </p>
-                <p className="text-[10px] font-mono text-green-400 mt-1">
-                  Ready for animation
-                </p>
+                {sizeWarning ? (
+                  <p className="text-[10px] font-mono text-red-400 mt-1">
+                    Prepared at {charWidth}x{charHeight}. Choose {charWidth} or upload again.
+                  </p>
+                ) : (
+                  <p className="text-[10px] font-mono text-green-400 mt-1">
+                    Ready for animation
+                  </p>
+                )}
               </div>
               <button
                 onClick={handleRemoveChar}
@@ -1464,7 +1528,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             onClick={handleGenerate}
             disabled={!canGenerate || isGenerating}
             className={`w-full sm:w-auto whitespace-nowrap ${!isGenerating && canGenerate ? 'animate-pulse' : ''}`}
-            title={insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
+            title={generateBlockedReason ?? (insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined)}
+            aria-describedby={generateBlockedReason ? 'animate-generate-blocked-reason' : undefined}
           >
             {isGenerating ? (
               <>
@@ -1483,6 +1548,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
               </>
             )}
           </Button>
+          {generateBlockedReason && (
+            <span id="animate-generate-blocked-reason" className="sr-only">
+              {generateBlockedReason}
+            </span>
+          )}
         </div>
       </div>
     </div>

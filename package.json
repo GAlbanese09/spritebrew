@@ -12,6 +12,7 @@
     "@clerk/backend": "^3.20.1",
     "@clerk/react": "^6.1.4",
     "@headlessui/react": "^2.2.10",
+    "gifenc": "1.0.3",
     "idb": "^8.0.3",
     "jszip": "^3.10.1",
     "lucide-react": "^1.7.0",

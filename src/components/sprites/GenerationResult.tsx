@@ -10,7 +10,9 @@ import Button from '@/components/ui/Button';
 import BrewingLoader from './BrewingLoader';
 import PixelEditor from './PixelEditor';
 import SheetLoop from './SheetLoop';
+import LoopFrameStrip from './LoopFrameStrip';
 import { sheetGeometry } from '@/lib/animationGeometry';
+import { createSequence, playback, type LoopSequence } from '@/lib/loopSequence';
 import { loadImage, removeBackgroundColor } from '@/lib/spriteUtils';
 import {
   loadHistory,
@@ -80,6 +82,11 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   // switched to Sheet for, so a new generation lands Playing again without
   // resetting state in an effect.
   const [sheetViewSrc, setSheetViewSrc] = useState<string | null>(null);
+  // The user's edit of the playing loop (order, speed, ping-pong), held with
+  // the source and frame count it was made for. A new generation or a new
+  // frame count falls back to the default without resetting state in an
+  // effect; a background-removal toggle keeps both, so the edit survives it.
+  const [loopEdit, setLoopEdit] = useState<{ src: string; frames: number; seq: LoopSequence } | null>(null);
 
   // Background removal state
   const [bgRemovalActive, setBgRemovalActive] = useState(false);
@@ -162,6 +169,21 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     [isAnimateResult, naturalDims.w, naturalDims.h, currentSheetMetadata]
   );
   const showLoop = !!loopGeometry && sheetViewSrc !== generatedImageDataUrl;
+  const loopFrames = loopGeometry?.frames ?? 0;
+  const loopSeq = useMemo(
+    () =>
+      loopEdit && loopEdit.src === generatedImageDataUrl && loopEdit.frames === loopFrames
+        ? loopEdit.seq
+        : createSequence(loopFrames),
+    [loopEdit, generatedImageDataUrl, loopFrames]
+  );
+  const loopPlayback = useMemo(() => playback(loopSeq), [loopSeq]);
+  const handleLoopChange = useCallback(
+    (seq: LoopSequence) => {
+      if (generatedImageDataUrl) setLoopEdit({ src: generatedImageDataUrl, frames: loopFrames, seq });
+    },
+    [generatedImageDataUrl, loopFrames]
+  );
 
   const handleDownload = useCallback(() => {
     if (!displayImageDataUrl) return;
@@ -497,7 +519,8 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
             <SheetLoop
               src={displayImageDataUrl ?? generatedImageDataUrl}
               geometry={loopGeometry}
-              fps={8}
+              sequence={loopPlayback}
+              fps={loopSeq.fps}
               className="w-full h-full"
             />
           </div>
@@ -549,6 +572,15 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           />
         </div>
       </div>
+
+      {showLoop && loopGeometry && (
+        <LoopFrameStrip
+          src={displayImageDataUrl ?? generatedImageDataUrl}
+          geometry={loopGeometry}
+          sequence={loopSeq}
+          onChange={handleLoopChange}
+        />
+      )}
 
       {/* Zoom controls */}
       <div className="flex items-center gap-2">

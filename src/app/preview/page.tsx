@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { ArrowRight, Film, Gamepad2, UploadCloud } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
+import { useSheetLeaveGuard } from '@/hooks/useSheetLeaveGuard';
 import AnimationPlayer from '@/components/sprites/AnimationPlayer';
 import DemoArea from '@/components/sprites/DemoArea';
 import Card from '@/components/ui/Card';
@@ -12,6 +13,7 @@ import Button from '@/components/ui/Button';
 type Tab = 'demo' | 'player';
 
 export default function PreviewPage() {
+  useSheetLeaveGuard();
   const animations = useSpriteStore((s) => s.animations);
   const frameDataUrls = useSpriteStore((s) => s.frameDataUrls);
 

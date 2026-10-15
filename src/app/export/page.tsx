@@ -3,11 +3,13 @@
 import Link from 'next/link';
 import { UploadCloud } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
+import { useSheetLeaveGuard } from '@/hooks/useSheetLeaveGuard';
 import ExportConfig from '@/components/sprites/ExportConfig';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 
 export default function ExportPage() {
+  useSheetLeaveGuard();
   const animations = useSpriteStore((s) => s.animations);
 
   const hasData = animations.length > 0 && animations.some((a) => a.frames.length > 0);

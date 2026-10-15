@@ -4,7 +4,7 @@ export default function PrivacyPage() {
   return (
     <div className="max-w-2xl mx-auto px-6 py-12">
       <h1 className="text-lg font-display text-accent-amber mb-1">Privacy Policy</h1>
-      <p className="text-xs font-mono text-text-muted mb-8">Last updated: October 4, 2026</p>
+      <p className="text-xs font-mono text-text-muted mb-8">Last updated: October 15, 2026</p>
 
       <div className="space-y-6 text-sm font-mono text-text-secondary leading-relaxed">
         <p>
@@ -78,7 +78,8 @@ export default function PrivacyPage() {
               Some things are kept only on your device, in your browser: a list of your recent
               generations (up to 50, each with its prompt and a small preview, and full images for
               up to the 10 most recent), your Animate settings and saved templates, editor drafts,
-              and a copy of your token balance. Deleting a generation from your gallery does not
+              a copy of your token balance, and your last sprite sheet in Sheet Tools, with its
+              frames and groups. Deleting a generation from your gallery does not
               remove it from this list. Clearing your browser data removes these. It does not delete
               anything saved to your account.
             </p>

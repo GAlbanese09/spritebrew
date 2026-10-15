@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { SpriteSheet, SpriteAnimation, SpriteFrame } from '@/lib/types';
 import type { SlicerHints } from '@/lib/generationHistory';
+import type { SheetSessionState } from '@/lib/sheetSession';
 
 /**
  * Rescue metadata for the current generation. Set by AnimateForm's poll-
@@ -35,6 +36,11 @@ interface SpriteStore {
   animations: SpriteAnimation[];
   frameDataUrls: Map<string, string>;
   currentSheetMetadata: SlicerHints | null;
+  /** Moves on every action that installs, replaces, restores or clears the
+   *  sheet or its frame map wholesale. Async work on /upload compares it when
+   *  it completes, to tell whether the sheet it started for is still the
+   *  current one (src/lib/sheetOwnership.ts). */
+  sheetVersion: number;
 
   // Generation state
   generatedImageUrl: string | null;
@@ -95,6 +101,15 @@ interface SpriteStore {
 
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
+  /** Swap the sheet's source image and every frame's pixels while keeping
+   *  frame ids, rects and the user's groups (animations) untouched. Used by
+   *  background removal on /upload, which changes pixels but not the grid.
+   *  Applies only if sheetVersion still equals `expectedVersion`, the version
+   *  the caller started from; returns whether it applied. */
+  replaceSheetSource: (sourceImage: string, urls: Map<string, string>, expectedVersion: number) => boolean;
+  /** Put back a Sheet Tools session saved on this device (sheetSession),
+   *  exactly as it was saved. Nothing is selected afterwards. */
+  restoreSheetSession: (session: SheetSessionState) => void;
   setFrameDataUrls: (urls: Map<string, string>) => void;
   updateFrameOrder: (animationId: string, frames: SpriteFrame[]) => void;
   addAnimation: (animation: SpriteAnimation) => void;
@@ -148,6 +163,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   animations: [],
   frameDataUrls: new Map(),
   currentSheetMetadata: null,
+  sheetVersion: 0,
 
   generatedImageUrl: null,
   generatedImageDataUrl: null,
@@ -175,12 +191,34 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   pendingAnimatorSkipBgRemoval: false,
 
   setSpriteSheet: (sheet) =>
-    set({ spriteSheet: sheet, selectedFrames: [], animations: [] }),
+    set((state) => ({ spriteSheet: sheet, selectedFrames: [], animations: [], sheetVersion: state.sheetVersion + 1 })),
 
   clearSpriteSheet: () =>
-    set({ spriteSheet: null, selectedFrames: [], animations: [], frameDataUrls: new Map(), generationStyle: null, currentSheetMetadata: null }),
+    set((state) => ({ spriteSheet: null, selectedFrames: [], animations: [], frameDataUrls: new Map(), generationStyle: null, currentSheetMetadata: null, sheetVersion: state.sheetVersion + 1 })),
 
-  setFrameDataUrls: (urls) => set({ frameDataUrls: urls }),
+  replaceSheetSource: (sourceImage, urls, expectedVersion) => {
+    const state = get();
+    if (state.sheetVersion !== expectedVersion) return false;
+    set({
+      spriteSheet: state.spriteSheet ? { ...state.spriteSheet, sourceImage } : null,
+      frameDataUrls: urls,
+      sheetVersion: state.sheetVersion + 1,
+    });
+    return true;
+  },
+
+  restoreSheetSession: (session) =>
+    set((state) => ({
+      spriteSheet: session.spriteSheet,
+      animations: session.animations,
+      frameDataUrls: session.frameDataUrls,
+      currentSheetMetadata: session.currentSheetMetadata,
+      generationStyle: session.generationStyle,
+      selectedFrames: [],
+      sheetVersion: state.sheetVersion + 1,
+    })),
+
+  setFrameDataUrls: (urls) => set((state) => ({ frameDataUrls: urls, sheetVersion: state.sheetVersion + 1 })),
 
   // Accepts the full frame array directly — supports duplicate frames in the
   // sequence since ID-based resolution is ambiguous when duplicates exist.

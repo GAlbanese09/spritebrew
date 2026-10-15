@@ -15,6 +15,7 @@ import { generateAnimationId } from '@/lib/spriteUtils';
 import { useSpriteStore } from '@/stores/spriteStore';
 import type { SpriteAnimation, SpriteFrame } from '@/lib/types';
 import type { SlicerHints } from '@/lib/generationHistory';
+import { resolveStyleRowKey } from '@/lib/styleRowKey';
 import Button from '@/components/ui/Button';
 
 interface AnimationPanelProps {
@@ -145,9 +146,10 @@ function computeAutoAssignProposal(
   }
 
   // Known style row names take precedence (for Create New tab outputs)
-  if (generationStyle && STYLE_ROW_NAMES[generationStyle]) {
-    const rowNames = STYLE_ROW_NAMES[generationStyle];
-    const rowTypes = STYLE_ROW_TYPES[generationStyle] ?? [];
+  const styleRowKey = generationStyle ? resolveStyleRowKey(generationStyle) : null;
+  if (styleRowKey && STYLE_ROW_NAMES[styleRowKey]) {
+    const rowNames = STYLE_ROW_NAMES[styleRowKey];
+    const rowTypes = STYLE_ROW_TYPES[styleRowKey] ?? [];
     const result: ProposedAnimation[] = [];
     for (let r = 0; r < rowCount; r++) {
       const start = r * columns;

@@ -848,7 +848,7 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
 
         {/* Click-to-focus hint */}
         {!focused && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none">
+          <div className="absolute inset-0 flex pointer-coarse:hidden items-center justify-center bg-black/30 pointer-events-none">
             <p className="text-sm font-mono text-text-primary bg-black/60 px-4 py-2 rounded">
               Click to focus &middot; Use keyboard to control
             </p>
@@ -864,6 +864,11 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           without weakening it for real keyboards. All three release events
           (up / leave / cancel) are wired — iOS pointercancel would otherwise
           strand a direction (same lesson as the editor's cancelStroke). */}
+      {!showcaseMode && (
+        <p className="hidden pointer-coarse:block text-[11px] font-mono text-text-muted">
+          Use the buttons below to move
+        </p>
+      )}
       {!showcaseMode && (
         <div className="hidden pointer-coarse:flex items-center justify-between gap-4 select-none">
           <div

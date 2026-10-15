@@ -180,7 +180,7 @@ export default function EditorLanding({
                   Upload image to edit
                 </h2>
                 <p className="text-[11px] font-mono text-text-muted">
-                  Open a PNG or JPG and start editing pixel by pixel.
+                  Open a PNG, WEBP or GIF and start editing pixel by pixel.
                 </p>
               </div>
             </div>

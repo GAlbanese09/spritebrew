@@ -9,11 +9,14 @@ const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 
 interface UploadZoneProps {
   onImageLoaded: (file: File, blobUrl: string, width: number, height: number) => void;
+  /** Called when a valid file starts loading, before onImageLoaded, so the
+   *  parent can tell a late onImageLoaded from a current one. */
+  onLoadStart?: (file: File) => void;
   currentImage: string | null;
   onRemove: () => void;
 }
 
-export default function UploadZone({ onImageLoaded, currentImage, onRemove }: UploadZoneProps) {
+export default function UploadZone({ onImageLoaded, onLoadStart, currentImage, onRemove }: UploadZoneProps) {
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -32,6 +35,7 @@ export default function UploadZone({ onImageLoaded, currentImage, onRemove }: Up
         return;
       }
 
+      onLoadStart?.(file);
       const blobUrl = URL.createObjectURL(file);
       const img = new Image();
       img.onload = () => {
@@ -43,7 +47,7 @@ export default function UploadZone({ onImageLoaded, currentImage, onRemove }: Up
       };
       img.src = blobUrl;
     },
-    [onImageLoaded]
+    [onImageLoaded, onLoadStart]
   );
 
   const handleDrop = useCallback(

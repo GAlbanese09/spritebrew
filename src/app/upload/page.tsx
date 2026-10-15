@@ -26,6 +26,7 @@ import {
 import type { SpriteFrame, SpriteSheet } from '@/lib/types';
 import { exportRawFrames } from '@/lib/exportEngine';
 import { allFramesGroup } from '@/lib/allFramesGroup';
+import { createSheetOwnership, noteStale, type SheetToken } from '@/lib/sheetOwnership';
 
 type SliceMode = 'grid' | 'auto';
 
@@ -98,6 +99,17 @@ export default function UploadPage() {
   // rects alone cannot rebuild them.
   const sheetModeRef = useRef<SliceMode | null>(null);
 
+  // Completion-time ownership for this page's async work (sheetOwnership).
+  // Every user action that replaces the uploaded image or the sheet bumps
+  // the epoch when the user takes it, before any confirm, so work still
+  // running for the old image or sheet is dropped when it lands.
+  const [ownership] = useState(() =>
+    createSheetOwnership(() => useSpriteStore.getState().sheetVersion)
+  );
+  useEffect(() => () => ownership.bump(), [ownership]);
+  /** The file UploadZone is reading for the user's latest pick or drop. */
+  const fileLoadRef = useRef<{ file: File; token: SheetToken } | null>(null);
+
   useSheetLeaveGuard();
   const sheetSession = useSheetSession();
   const restoreSavedSheet = sheetSession.restore;
@@ -134,10 +146,21 @@ export default function UploadPage() {
       if (useSpriteStore.getState().spriteSheet && generatedImageDataUrl === consumedGeneratedImage) {
         return;
       }
+      // Set while the image loads; see the cleanup below.
+      let loading: { prevConsumed: string | null } | null = null;
       const load = () => {
+        loading = { prevConsumed: consumedGeneratedImage };
         consumedGeneratedImage = generatedImageDataUrl;
+        // Whether this image may still replace the sheet is decided when it
+        // lands: a Restore, a new file or leaving the page meanwhile wins.
+        const token = ownership.capture();
         const img = new Image();
         img.onload = () => {
+          loading = null;
+          if (!ownership.isCurrent(token)) {
+            noteStale('generated image load');
+            return;
+          }
           const blobUrl = generatedImageDataUrl;
           setUploaded({
             file: new File([], 'generated_sprite.png', { type: 'image/png' }),
@@ -161,13 +184,36 @@ export default function UploadPage() {
       askBeforeDiscard(load, () => {
         consumedGeneratedImage = generatedImageDataUrl;
       });
+      // Leaving before the image lands drops it, so it was never used: unmark
+      // it so the next visit offers it again. This also lets React's dev-only
+      // second run of this effect start the load again.
+      return () => {
+        if (loading) consumedGeneratedImage = loading.prevConsumed;
+      };
     }
     // Only run on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** UploadZone started reading a file the user picked or dropped. */
+  const handleLoadStart = useCallback(
+    (file: File) => {
+      ownership.bump();
+      fileLoadRef.current = { file, token: ownership.capture() };
+    },
+    [ownership]
+  );
+
   const handleImageLoaded = useCallback(
     (file: File, blobUrl: string, width: number, height: number) => {
+      // A later pick or drop, or anything else newer, wins over this file.
+      const started = fileLoadRef.current;
+      if (!started || started.file !== file || !ownership.isCurrent(started.token)) {
+        URL.revokeObjectURL(blobUrl);
+        noteStale('file load');
+        return;
+      }
+      fileLoadRef.current = null;
       const apply = () => {
         // The user's own file replaces any generated image still in the
         // store; mark that image seen so coming back from /preview keeps
@@ -187,10 +233,11 @@ export default function UploadPage() {
       // Cancel drops the new file and keeps the current sheet.
       askBeforeDiscard(apply, () => URL.revokeObjectURL(blobUrl));
     },
-    [clearSpriteSheet, askBeforeDiscard]
+    [clearSpriteSheet, askBeforeDiscard, ownership]
   );
 
   const handleRemove = useCallback(() => {
+    ownership.bump();
     askBeforeDiscard(() => {
       if (uploaded && !fromGenerated) {
         URL.revokeObjectURL(uploaded.blobUrl);
@@ -204,23 +251,26 @@ export default function UploadPage() {
       setBgBannerDismissed(false);
       clearSpriteSheet();
     });
-  }, [uploaded, fromGenerated, clearSpriteSheet, askBeforeDiscard]);
+  }, [uploaded, fromGenerated, clearSpriteSheet, askBeforeDiscard, ownership]);
 
   /** B4 view's "Replace sheet": clears the kept sheet so the dropzone shows. */
   const handleReplaceSheet = useCallback(() => {
+    ownership.bump();
     askBeforeDiscard(() => {
       const source = useSpriteStore.getState().spriteSheet?.sourceImage;
       if (source?.startsWith('blob:')) URL.revokeObjectURL(source);
       clearSpriteSheet();
     });
-  }, [clearSpriteSheet, askBeforeDiscard]);
+  }, [clearSpriteSheet, askBeforeDiscard, ownership]);
 
   /** Restore the saved session into the "Sprite sheet loaded" view. An
    *  image the user dropped but never sliced gives way to it. */
   const handleRestoreSheet = useCallback(async () => {
+    ownership.bump();
+    const token = ownership.capture();
     const local = uploaded;
     const localIsBlob = !fromGenerated;
-    if (!(await restoreSavedSheet())) return;
+    if (!(await restoreSavedSheet(() => ownership.isCurrent(token)))) return;
     if (local && localIsBlob) URL.revokeObjectURL(local.blobUrl);
     setUploaded(null);
     setFromGenerated(false);
@@ -229,7 +279,7 @@ export default function UploadPage() {
     setPreferredFrameH(undefined);
     setSliceMode('grid');
     setBgBannerDismissed(false);
-  }, [uploaded, fromGenerated, restoreSavedSheet]);
+  }, [uploaded, fromGenerated, restoreSavedSheet, ownership]);
 
   /** User accepted a resized sheet from FrameSizeResizer. Includes the chosen
    *  frame dimensions so the slicer can pre-populate its grid. */
@@ -267,9 +317,15 @@ export default function UploadPage() {
   const handleBgRemoved = useCallback(
     (cleanedDataUrl: string) => {
       if (!uploaded) return;
+      ownership.bump();
+      const token = ownership.capture();
       // Load the cleaned image to get its dimensions
       const img = new Image();
       img.onload = () => {
+        if (!ownership.isCurrent(token)) {
+          noteStale('background removal');
+          return;
+        }
         const width = img.naturalWidth;
         const height = img.naturalHeight;
         const swapImage = () => {
@@ -299,23 +355,40 @@ export default function UploadPage() {
         }
         reextractFrames(cleanedDataUrl, sheet)
           .then((urls) => {
-            replaceSheetSource(cleanedDataUrl, urls);
+            // The frames go only onto the sheet they were cut from
+            // (replaceSheetSource's version guard), and the image is
+            // swapped only if they did.
+            if (!ownership.isCurrent(token) || !replaceSheetSource(cleanedDataUrl, urls, token.sheetVersion)) {
+              noteStale('background removal');
+              return;
+            }
             swapImage();
           })
-          .catch(() => askBeforeDiscard(swapAndClear));
+          .catch(() => {
+            if (!ownership.isCurrent(token)) {
+              noteStale('background removal');
+              return;
+            }
+            askBeforeDiscard(swapAndClear);
+          });
       };
       img.src = cleanedDataUrl;
     },
-    [uploaded, fromGenerated, clearSpriteSheet, replaceSheetSource, askBeforeDiscard]
+    [uploaded, fromGenerated, clearSpriteSheet, replaceSheetSource, askBeforeDiscard, ownership]
   );
 
   const sliceGrid = useCallback(
     async (config: SliceConfig) => {
       if (!uploaded) return;
+      const token = ownership.capture();
       setSlicing(true);
 
       try {
         const img = await loadImage(uploaded.blobUrl);
+        if (!ownership.isCurrent(token)) {
+          noteStale('slice');
+          return;
+        }
         const sourceCanvas = imageToCanvas(img);
 
         const frames: SpriteFrame[] = [];
@@ -382,18 +455,19 @@ export default function UploadPage() {
         setSlicing(false);
       }
     },
-    [uploaded, setSpriteSheet, setFrameDataUrls]
+    [uploaded, setSpriteSheet, setFrameDataUrls, ownership]
   );
 
   /** Slicing again replaces the frames and resets groups (setSpriteSheet),
    *  so ask first when groups exist. Cancel leaves everything as it was. */
   const handleSlice = useCallback(
     (config: SliceConfig) => {
+      ownership.bump();
       askBeforeDiscard(() => {
         void sliceGrid(config);
       });
     },
-    [sliceGrid, askBeforeDiscard]
+    [sliceGrid, askBeforeDiscard, ownership]
   );
 
   /** Handler for the Auto-detect Sprites mode's Extract button. Produces the
@@ -457,9 +531,10 @@ export default function UploadPage() {
   /** Same guard as handleSlice for the Auto-detect Extract button. */
   const handleAutoExtract = useCallback(
     (result: SpriteDetectorExtractResult) => {
+      ownership.bump();
       askBeforeDiscard(() => autoExtract(result));
     },
-    [autoExtract, askBeforeDiscard]
+    [autoExtract, askBeforeDiscard, ownership]
   );
 
   const canContinue = useMemo(
@@ -556,6 +631,7 @@ export default function UploadPage() {
       ) : (
         <UploadZone
           onImageLoaded={handleImageLoaded}
+          onLoadStart={handleLoadStart}
           currentImage={uploaded?.blobUrl ?? null}
           onRemove={handleRemove}
         />

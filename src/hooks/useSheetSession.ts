@@ -169,14 +169,21 @@ export function useSheetSession() {
   }, []);
 
   /** Puts the saved session back in the store. False when there was nothing
-   *  usable to restore or the store got a sheet in the meantime. */
-  const restore = useCallback(async (): Promise<boolean> => {
+   *  usable to restore, the store got a sheet in the meantime, or
+   *  `stillCurrent` (checked once the session has loaded) says the page did
+   *  something newer while it loaded. */
+  const restore = useCallback(async (stillCurrent?: () => boolean): Promise<boolean> => {
     setRestoring(true);
     try {
       const session = await loadSheetSession();
       if (!session || useSpriteStore.getState().spriteSheet) {
         if (session) URL.revokeObjectURL(session.spriteSheet.sourceImage);
         setSaved(false);
+        return false;
+      }
+      if (stillCurrent && !stillCurrent()) {
+        // Stale: drop it. The offer stays while the store has no sheet.
+        URL.revokeObjectURL(session.spriteSheet.sourceImage);
         return false;
       }
       lastSaved = session;

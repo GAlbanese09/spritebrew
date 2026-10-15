@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { SpriteSheet, SpriteAnimation, SpriteFrame } from '@/lib/types';
 import type { SlicerHints } from '@/lib/generationHistory';
+import type { SheetSessionState } from '@/lib/sheetSession';
 
 /**
  * Rescue metadata for the current generation. Set by AnimateForm's poll-
@@ -99,6 +100,9 @@ interface SpriteStore {
    *  frame ids, rects and the user's groups (animations) untouched. Used by
    *  background removal on /upload, which changes pixels but not the grid. */
   replaceSheetSource: (sourceImage: string, urls: Map<string, string>) => void;
+  /** Put back a Sheet Tools session saved on this device (sheetSession),
+   *  exactly as it was saved. Nothing is selected afterwards. */
+  restoreSheetSession: (session: SheetSessionState) => void;
   setFrameDataUrls: (urls: Map<string, string>) => void;
   updateFrameOrder: (animationId: string, frames: SpriteFrame[]) => void;
   addAnimation: (animation: SpriteAnimation) => void;
@@ -189,6 +193,16 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
       spriteSheet: state.spriteSheet ? { ...state.spriteSheet, sourceImage } : null,
       frameDataUrls: urls,
     })),
+
+  restoreSheetSession: (session) =>
+    set({
+      spriteSheet: session.spriteSheet,
+      animations: session.animations,
+      frameDataUrls: session.frameDataUrls,
+      currentSheetMetadata: session.currentSheetMetadata,
+      generationStyle: session.generationStyle,
+      selectedFrames: [],
+    }),
 
   setFrameDataUrls: (urls) => set({ frameDataUrls: urls }),
 

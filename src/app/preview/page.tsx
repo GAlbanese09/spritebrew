@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { ArrowRight, Film, Gamepad2, UploadCloud } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { useSheetLeaveGuard } from '@/hooks/useSheetLeaveGuard';
+import { useSheetSession } from '@/hooks/useSheetSession';
+import SheetRestoreBanner from '@/components/sprites/SheetRestoreBanner';
 import AnimationPlayer from '@/components/sprites/AnimationPlayer';
 import DemoArea from '@/components/sprites/DemoArea';
 import Card from '@/components/ui/Card';
@@ -14,6 +16,7 @@ type Tab = 'demo' | 'player';
 
 export default function PreviewPage() {
   useSheetLeaveGuard();
+  const sheetSession = useSheetSession();
   const animations = useSpriteStore((s) => s.animations);
   const frameDataUrls = useSpriteStore((s) => s.frameDataUrls);
 
@@ -30,6 +33,15 @@ export default function PreviewPage() {
           or step through frames in the animation player.
         </p>
       </div>
+
+      {/* A reload emptied the store: offer the session saved on this device. */}
+      {sheetSession.offerRestore && (
+        <SheetRestoreBanner
+          restoring={sheetSession.restoring}
+          onRestore={() => void sheetSession.restore()}
+          onDiscard={sheetSession.discard}
+        />
+      )}
 
       {/* Empty state */}
       {!hasData && (

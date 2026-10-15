@@ -4,12 +4,15 @@ import Link from 'next/link';
 import { UploadCloud } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { useSheetLeaveGuard } from '@/hooks/useSheetLeaveGuard';
+import { useSheetSession } from '@/hooks/useSheetSession';
+import SheetRestoreBanner from '@/components/sprites/SheetRestoreBanner';
 import ExportConfig from '@/components/sprites/ExportConfig';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 
 export default function ExportPage() {
   useSheetLeaveGuard();
+  const sheetSession = useSheetSession();
   const animations = useSpriteStore((s) => s.animations);
 
   const hasData = animations.length > 0 && animations.some((a) => a.frames.length > 0);
@@ -24,6 +27,15 @@ export default function ExportPage() {
           Supports Unity, Godot, GameMaker, RPG Maker, Aseprite, and raw PNG frames.
         </p>
       </div>
+
+      {/* A reload emptied the store: offer the session saved on this device. */}
+      {sheetSession.offerRestore && (
+        <SheetRestoreBanner
+          restoring={sheetSession.restoring}
+          onRestore={() => void sheetSession.restore()}
+          onDiscard={sheetSession.discard}
+        />
+      )}
 
       {/* Empty state */}
       {!hasData && (

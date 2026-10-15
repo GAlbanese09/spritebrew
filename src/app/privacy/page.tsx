@@ -78,7 +78,8 @@ export default function PrivacyPage() {
               Some things are kept only on your device, in your browser: a list of your recent
               generations (up to 50, each with its prompt and a small preview, and full images for
               up to the 10 most recent), your Animate settings and saved templates, editor drafts,
-              and a copy of your token balance. Deleting a generation from your gallery does not
+              a copy of your token balance, and your last sprite sheet in Sheet Tools, with its
+              frames and groups. Deleting a generation from your gallery does not
               remove it from this list. Clearing your browser data removes these. It does not delete
               anything saved to your account.
             </p>

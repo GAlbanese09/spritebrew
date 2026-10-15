@@ -84,7 +84,11 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
         </div>
       </div>
 
-      <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))' }}>
+      <p className="text-[10px] font-mono text-text-muted mb-3">
+        Tip: select frames, then Assign. A frame can be used more than once.
+      </p>
+
+      <div className="grid gap-2"style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))' }}>
         {allFrames.map((frame, idx) => {
           const selected = selectedFrames.includes(frame.id);
           const dataUrl = frameDataUrls.get(frame.id);

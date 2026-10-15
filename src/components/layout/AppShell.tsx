@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import RewardModal from '@/components/rewards/RewardModal';
+import GenerationErrorNotice from '@/components/sprites/GenerationErrorNotice';
 import { ViewportVars } from '@/components/sprites/ViewportVars';
 
 interface AppShellProps {
@@ -51,6 +52,7 @@ export default function AppShell({ children }: AppShellProps) {
         </main>
       </div>
 
+      <GenerationErrorNotice />
       <RewardModal />
     </div>
   );

@@ -1107,7 +1107,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     : !characterDataUrl
       ? 'Add a character first'
       : sizeWarning
-        ? `Character is ${charWidth}x${charHeight}; choose ${charWidth} or prepare it again`
+        ? `This character is ${charWidth}x${charHeight}. Choose ${charWidth} or prepare it again.`
         : isCustomAction && !motionPrompt.trim()
           ? 'Describe the motion first'
           : `Need ${tokensNeeded} more tokens`;

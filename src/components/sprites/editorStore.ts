@@ -226,6 +226,11 @@ export interface PixelEditorState {
    * revert itself is undoable (pushes onto historyStack like a normal stroke).
    */
   revertToOriginal: () => void;
+  /**
+   * Mirror the whole canvas left to right as one undoable history entry.
+   * No-ops with no pixels or when the flip changes nothing (symmetric image).
+   */
+  flipHorizontal: () => void;
   /** Discard an in-progress stroke: restore the pre-stroke snapshot.
    *  A partial stroke's pixels are live in `pixels` but not yet in history
    *  (endStroke hasn't fired), so restoring historyStack[historyIndex]
@@ -265,6 +270,30 @@ function applyBrushSquare(
       pixels[idx + 3] = rgba[3];
     }
   }
+}
+
+/**
+ * Return a new buffer with each row's RGBA pixels reversed (left-right mirror).
+ * Pixels move as whole 4-byte units, so channel order is preserved.
+ */
+export function flipPixelsHorizontal(
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number
+): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(pixels.length);
+  for (let y = 0; y < height; y++) {
+    const row = y * width * 4;
+    for (let x = 0; x < width; x++) {
+      const src = row + x * 4;
+      const dst = row + (width - 1 - x) * 4;
+      out[dst] = pixels[src];
+      out[dst + 1] = pixels[src + 1];
+      out[dst + 2] = pixels[src + 2];
+      out[dst + 3] = pixels[src + 3];
+    }
+  }
+  return out;
 }
 
 /**
@@ -612,6 +641,28 @@ export const useEditorStore = create<PixelEditorState>()(
         lastDirtyRect: null, // wholesale replacement → full repaint
         // Pixels are back at the loaded baseline; drop the attempted-edit flag.
         hasAttemptedEdit: false,
+      });
+    },
+
+    flipHorizontal: () => {
+      const { pixels, width, height, originalPixels, historyStack, historyIndex } = get();
+      if (!pixels || width <= 0 || height <= 0) return;
+      const flipped = flipPixelsHorizontal(pixels, width, height);
+      // Symmetric image: nothing changed, so no history entry.
+      if (pixelsMatchOriginal(flipped, pixels)) return;
+      // Same shape as revertToOriginal: drop any redo branch, push, cap.
+      const truncated = historyIndex < historyStack.length - 1
+        ? historyStack.slice(0, historyIndex + 1)
+        : historyStack;
+      const nextStack = [...truncated, new Uint8ClampedArray(flipped)];
+      while (nextStack.length > MAX_HISTORY) nextStack.shift();
+      set({
+        pixels: flipped,
+        historyStack: nextStack,
+        historyIndex: nextStack.length - 1,
+        lastDirtyRect: null, // wholesale replacement, full repaint
+        // Same baseline rule as undo: clean only on a byte match to the load.
+        hasAttemptedEdit: !pixelsMatchOriginal(flipped, originalPixels),
       });
     },
 

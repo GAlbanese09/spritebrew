@@ -2,7 +2,7 @@ import { useSpriteStore, type PendingReward } from '@/stores/spriteStore';
 import { createDailyRewardClaimer } from '@/lib/dailyRewardClaim';
 
 // The app's one daily-reward claimer (see dailyRewardClaim.ts). It lives for
-// the page load, so remounts and the second caller share the first request.
+// the page load, so remounts and the second caller share the first attempt.
 const claimer = createDailyRewardClaimer({
   post: (token) =>
     fetch('/api/account/daily-reward', {
@@ -20,7 +20,8 @@ const claimer = createDailyRewardClaimer({
   },
 });
 
-/** Claims today's reward for this user once per page load; see dailyRewardClaim.ts. */
+/** Claims today's reward for this user, at most one attempt per page load;
+ *  see dailyRewardClaim.ts. */
 export function claimDailyRewardOnce(
   userId: string,
   getToken: () => Promise<string | null>
@@ -28,7 +29,9 @@ export function claimDailyRewardOnce(
   return claimer.claimOnce(userId, getToken);
 }
 
-/** Call on sign-out so the next account claims its own reward. */
+/** Call on sign-out, before signOut() settles: this account's claim that has
+ *  not been sent is never sent, and its late answer is not applied. Another
+ *  account still gets its own attempt; this one waits for a full page load. */
 export function resetDailyRewardClaim(): void {
   claimer.reset();
 }

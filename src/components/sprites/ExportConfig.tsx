@@ -22,14 +22,84 @@ import {
 import {
   assembleGridSheet,
   assembleStripSheet,
+  downloadAsZip,
+  downloadFile,
   resizeFrame,
+  sanitizeFilename,
 } from '@/lib/downloadUtils';
+import { encodeGif, GIF_SCALES, GIF_SCALE_DEFAULT, type GifScale } from '@/lib/gifExport';
+import type { SpriteAnimation } from '@/lib/types';
 import { loadImage } from '@/lib/spriteUtils';
 import { useContainerWidth } from '@/lib/useCanvasFitScale';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 
-type EngineId = (typeof ENGINE_TARGETS)[number]['id'];
+// The engine targets plus Animated GIF, which lives only on this page.
+const TARGETS = [
+  ...ENGINE_TARGETS,
+  { id: 'animated-gif', label: 'Animated GIF', engines: ['Web', 'Docs'] },
+] as const;
+
+type EngineId = (typeof TARGETS)[number]['id'];
+
+/** Loads a group's frames in order (duplicates kept) at w x h, nearest
+ *  neighbor. A frame id repeated in the order reuses one canvas. */
+async function loadGroupFrames(
+  anim: SpriteAnimation,
+  frameDataUrls: Map<string, string>,
+  w: number,
+  h: number
+): Promise<HTMLCanvasElement[]> {
+  const byId = new Map<string, HTMLCanvasElement>();
+  const out: HTMLCanvasElement[] = [];
+  for (const frame of anim.frames) {
+    let canvas = byId.get(frame.id);
+    if (!canvas) {
+      const url = frameDataUrls.get(frame.id);
+      if (!url) continue;
+      const img = await loadImage(url);
+      const fc = document.createElement('canvas');
+      fc.width = img.naturalWidth;
+      fc.height = img.naturalHeight;
+      const ctx = fc.getContext('2d')!;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(img, 0, 0);
+      canvas = fc.width === w && fc.height === h ? fc : resizeFrame(fc, w, h);
+      byId.set(frame.id, canvas);
+    }
+    out.push(canvas);
+  }
+  return out;
+}
+
+/** One GIF per group at the group's fps. One group downloads its GIF; two
+ *  or more download a ZIP. Names are unique inside the ZIP. */
+async function exportAnimatedGifs(opts: {
+  animations: SpriteAnimation[];
+  frameDataUrls: Map<string, string>;
+  width: number;
+  height: number;
+  scale: GifScale;
+  sheetName: string;
+}): Promise<void> {
+  const files: { name: string; data: Blob }[] = [];
+  const used = new Set<string>();
+  for (const anim of opts.animations) {
+    const frames = await loadGroupFrames(anim, opts.frameDataUrls, opts.width, opts.height);
+    if (frames.length === 0) continue;
+    const base = sanitizeFilename(anim.name) || 'animation';
+    let name = `${base}.gif`;
+    for (let n = 2; used.has(name); n++) name = `${base}_${n}.gif`;
+    used.add(name);
+    files.push({ name, data: encodeGif(frames, { scale: opts.scale, fps: anim.fps }) });
+  }
+  if (files.length === 0) throw new Error('No frames to export');
+  if (files.length === 1) {
+    downloadFile(files[0].data, files[0].name);
+  } else {
+    await downloadAsZip(files, `${sanitizeFilename(opts.sheetName) || 'spritesheet'}_gifs.zip`);
+  }
+}
 
 const RPG_DIRECTIONS = ['Down', 'Left', 'Right', 'Up'] as const;
 
@@ -50,6 +120,8 @@ export default function ExportConfig() {
   const [rpgFrameH, setRpgFrameH] = useState(48);
   const [directionMap, setDirectionMap] = useState<(string | null)[]>([null, null, null, null]);
   const [includeManifest, setIncludeManifest] = useState(true);
+  const [gifScale, setGifScale] = useState<GifScale>(GIF_SCALE_DEFAULT);
+  const [gifError, setGifError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -148,7 +220,7 @@ export default function ExportConfig() {
           previewFrames,
           cols,
           selectedEngine === 'texturepacker' || selectedEngine === 'aseprite' ? padding : 0,
-          powerOfTwo
+          powerOfTwo && selectedEngine !== 'animated-gif'
         );
       }
 
@@ -189,6 +261,7 @@ export default function ExportConfig() {
   const handleExport = useCallback(async () => {
     setExporting(true);
     setWarnings([]);
+    setGifError(null);
     setShowSuccess(false);
 
     try {
@@ -232,6 +305,25 @@ export default function ExportConfig() {
         case 'raw-frames':
           await exportRawFrames({ ...baseOpts, includeManifest });
           break;
+        case 'animated-gif':
+          // Padding, power of two and metadata do not apply; resize does,
+          // before the scale.
+          try {
+            // Encoding is synchronous; yield once so the spinner paints first.
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            await exportAnimatedGifs({
+              animations: activeAnimations,
+              frameDataUrls,
+              width: resizeEnabled ? resizeW : fw,
+              height: resizeEnabled ? resizeH : fh,
+              scale: gifScale,
+              sheetName: spriteSheet?.name ?? 'spritesheet',
+            });
+          } catch {
+            setGifError('Could not make the GIF. Try a smaller scale.');
+            return;
+          }
+          break;
       }
 
       setShowSuccess(true);
@@ -242,10 +334,10 @@ export default function ExportConfig() {
   }, [
     activeAnimations, frameDataUrls, fw, fh, padding, powerOfTwo,
     resizeEnabled, resizeW, resizeH, includeMetadata, selectedEngine,
-    spriteSheet, rpgFrameW, rpgFrameH, directionMap, includeManifest,
+    spriteSheet, rpgFrameW, rpgFrameH, directionMap, includeManifest, gifScale,
   ]);
 
-  const engineInfo = ENGINE_TARGETS.find((e) => e.id === selectedEngine)!;
+  const engineInfo = TARGETS.find((e) => e.id === selectedEngine)!;
 
   return (
     <div className="space-y-8">
@@ -262,7 +354,7 @@ export default function ExportConfig() {
           Export Format
         </label>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {ENGINE_TARGETS.map((engine) => {
+          {TARGETS.map((engine) => {
             const active = selectedEngine === engine.id;
             return (
               <button
@@ -465,6 +557,27 @@ export default function ExportConfig() {
           </div>
         )}
 
+        {/* Animated GIF options */}
+        {selectedEngine === 'animated-gif' && (
+          <div className="flex items-center gap-2" role="group" aria-label="GIF scale">
+            <span className="text-[10px] font-mono text-text-muted">GIF scale</span>
+            {GIF_SCALES.map((s) => (
+              <button
+                key={s}
+                onClick={() => setGifScale(s)}
+                aria-pressed={gifScale === s}
+                className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
+                  ${gifScale === s
+                    ? 'bg-accent-amber text-bg-primary'
+                    : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
+                  }`}
+              >
+                {s}x
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Raw frames options */}
         {selectedEngine === 'raw-frames' && (
           <label className="flex items-center gap-2 text-xs font-mono text-text-secondary cursor-pointer">
@@ -511,6 +624,11 @@ export default function ExportConfig() {
             <p key={i} className="text-xs font-mono text-amber-400">{w}</p>
           ))}
         </div>
+      )}
+
+      {/* GIF error */}
+      {gifError && selectedEngine === 'animated-gif' && (
+        <p className="text-xs font-mono text-red-400" role="alert">{gifError}</p>
       )}
 
       {/* Success toast */}

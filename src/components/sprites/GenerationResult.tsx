@@ -3,15 +3,19 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight, Eraser, Pencil, Film } from 'lucide-react';
+import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight, Eraser, Pencil, Film, Loader2 } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import BrewingLoader from './BrewingLoader';
 import PixelEditor from './PixelEditor';
 import SheetLoop from './SheetLoop';
+import LoopFrameStrip from './LoopFrameStrip';
 import { sheetGeometry } from '@/lib/animationGeometry';
+import { createSequence, playback, type LoopSequence } from '@/lib/loopSequence';
 import { loadImage, removeBackgroundColor } from '@/lib/spriteUtils';
+import { encodeGif, framesFromSheet, GIF_SCALES, GIF_SCALE_DEFAULT, type GifScale } from '@/lib/gifExport';
+import { downloadFile } from '@/lib/downloadUtils';
 import {
   loadHistory,
   clearHistory,
@@ -80,6 +84,17 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   // switched to Sheet for, so a new generation lands Playing again without
   // resetting state in an effect.
   const [sheetViewSrc, setSheetViewSrc] = useState<string | null>(null);
+  // The user's edit of the playing loop (order, speed, ping-pong), held with
+  // the source and frame count it was made for. A new generation or a new
+  // frame count falls back to the default without resetting state in an
+  // effect; a background-removal toggle keeps both, so the edit survives it.
+  const [loopEdit, setLoopEdit] = useState<{ src: string; frames: number; seq: LoopSequence } | null>(null);
+  // Download GIF: output scale, an in-flight flag, and the last encode error
+  // held with the source it was for, so a new generation drops it without
+  // resetting state in an effect.
+  const [gifScale, setGifScale] = useState<GifScale>(GIF_SCALE_DEFAULT);
+  const [gifEncoding, setGifEncoding] = useState(false);
+  const [gifError, setGifError] = useState<{ src: string; message: string } | null>(null);
 
   // Background removal state
   const [bgRemovalActive, setBgRemovalActive] = useState(false);
@@ -162,6 +177,21 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     [isAnimateResult, naturalDims.w, naturalDims.h, currentSheetMetadata]
   );
   const showLoop = !!loopGeometry && sheetViewSrc !== generatedImageDataUrl;
+  const loopFrames = loopGeometry?.frames ?? 0;
+  const loopSeq = useMemo(
+    () =>
+      loopEdit && loopEdit.src === generatedImageDataUrl && loopEdit.frames === loopFrames
+        ? loopEdit.seq
+        : createSequence(loopFrames),
+    [loopEdit, generatedImageDataUrl, loopFrames]
+  );
+  const loopPlayback = useMemo(() => playback(loopSeq), [loopSeq]);
+  const handleLoopChange = useCallback(
+    (seq: LoopSequence) => {
+      if (generatedImageDataUrl) setLoopEdit({ src: generatedImageDataUrl, frames: loopFrames, seq });
+    },
+    [generatedImageDataUrl, loopFrames]
+  );
 
   const handleDownload = useCallback(() => {
     if (!displayImageDataUrl) return;
@@ -172,6 +202,27 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     a.click();
     document.body.removeChild(a);
   }, [displayImageDataUrl]);
+
+  // Encodes the loop as it plays (A1's order, ping-pong and speed) from the
+  // displayed image, so background removal applies. Errors show inline.
+  const handleDownloadGif = useCallback(async () => {
+    const src = displayImageDataUrl;
+    if (!src || !generatedImageDataUrl || !loopGeometry || gifEncoding) return;
+    setGifEncoding(true);
+    setGifError(null);
+    try {
+      // Encoding is synchronous; yield once so the spinner paints first.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const img = await loadImage(src);
+      const frames = framesFromSheet(img, loopGeometry, loopPlayback);
+      const blob = encodeGif(frames, { scale: gifScale, fps: loopSeq.fps });
+      downloadFile(blob, `spritebrew_animation_${Date.now()}.gif`);
+    } catch {
+      setGifError({ src: generatedImageDataUrl, message: 'Could not make the GIF. Try a smaller scale.' });
+    } finally {
+      setGifEncoding(false);
+    }
+  }, [displayImageDataUrl, generatedImageDataUrl, loopGeometry, loopPlayback, loopSeq.fps, gifScale, gifEncoding]);
 
   const handleSendToSlicer = useCallback(() => {
     // If background removal is active, push the transparent version into the
@@ -497,7 +548,8 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
             <SheetLoop
               src={displayImageDataUrl ?? generatedImageDataUrl}
               geometry={loopGeometry}
-              fps={8}
+              sequence={loopPlayback}
+              fps={loopSeq.fps}
               className="w-full h-full"
             />
           </div>
@@ -549,6 +601,15 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           />
         </div>
       </div>
+
+      {showLoop && loopGeometry && (
+        <LoopFrameStrip
+          src={displayImageDataUrl ?? generatedImageDataUrl}
+          geometry={loopGeometry}
+          sequence={loopSeq}
+          onChange={handleLoopChange}
+        />
+      )}
 
       {/* Zoom controls */}
       <div className="flex items-center gap-2">
@@ -630,6 +691,29 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         )}
       </div>
 
+      {/* GIF scale, for Download GIF */}
+      {showLoop && (
+        <div className="flex items-center gap-2" role="group" aria-label="GIF scale">
+          <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
+            GIF scale
+          </span>
+          {GIF_SCALES.map((s) => (
+            <button
+              key={s}
+              onClick={() => setGifScale(s)}
+              aria-pressed={gifScale === s}
+              className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
+                ${gifScale === s
+                  ? 'bg-accent-amber text-bg-primary'
+                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
+                }`}
+            >
+              {s}x
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Action buttons */}
       <div className="grid grid-cols-2 gap-2">
         <Button variant="primary" size="md" onClick={handleSendToSlicer}>
@@ -650,6 +734,12 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           <Download size={14} />
           Download PNG
         </Button>
+        {showLoop && (
+          <Button variant="secondary" size="md" onClick={handleDownloadGif} disabled={gifEncoding}>
+            {gifEncoding ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            Download GIF
+          </Button>
+        )}
         <Button variant="ghost" size="md" onClick={handleGenerateAnother}>
           <RefreshCw size={14} />
           Generate Another
@@ -661,6 +751,9 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           </Button>
         </Link>
       </div>
+      {gifError && gifError.src === generatedImageDataUrl && (
+        <p className="text-[10px] font-mono text-red-400" role="alert">{gifError.message}</p>
+      )}
 
       {/* History */}
       {history.length > 0 && (

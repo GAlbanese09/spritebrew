@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -23,6 +23,7 @@ import { FEEDBACK_URL, BETA_TOOLTIP } from '@/lib/externalLinks';
 import EmailListPanel from '@/components/account/EmailListPanel';
 import FlameIcon from '@/components/rewards/FlameIcon';
 import { CURRENT_VERSION } from '@/components/layout/WhatsNew';
+import { claimDailyRewardOnce, resetDailyRewardClaim } from '@/lib/dailyRewardClient';
 
 const NAV_ITEMS = [
   { href: '/', label: 'Home', icon: Home, soon: false },
@@ -219,6 +220,7 @@ function UserIdentity() {
   const imageUrl = user?.imageUrl;
 
   const handleSignOut = async () => {
+    resetDailyRewardClaim();
     await signOut();
     router.push('/');
   };
@@ -303,40 +305,20 @@ function TokenBalanceDisplay() {
  * Streak indicator under the token balance. Shows the current streak count
  * with a pixel-art flame, plus a tooltip explaining the every-7-days bonus.
  *
- * Hydrates on mount via the daily-reward endpoint (idempotent — same-day
- * double-fires are no-ops on the server). This means the sidebar populates
- * the streak even when the user lands on a page other than Generate first.
+ * Claims the daily reward on mount through the shared claimer, which sends
+ * one request per page load however often this remounts and whoever asks
+ * first (EmailListPanel asks too), and applies the answer to the store. This
+ * means the sidebar populates the streak even when the user lands on a page
+ * other than Generate first.
  */
 function StreakIndicator() {
   const { userId, getToken } = useAuth();
   const streakCount = useSpriteStore((s) => s.streakCount);
-  const setStreak = useSpriteStore((s) => s.setStreak);
-  const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
-  const setEmailListClaimed = useSpriteStore((s) => s.setEmailListClaimed);
-  const enqueueRewards = useSpriteStore((s) => s.enqueueRewards);
-  const fired = useRef(false);
 
   useEffect(() => {
-    if (!userId || fired.current) return;
-    fired.current = true;
-    (async () => {
-      try {
-        const token = await getToken();
-        if (!token) return;
-        const res = await fetch('/api/account/daily-reward', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!data?.success) return;
-        if (data.streak) setStreak(data.streak.count, data.streak.lifetimeMax);
-        if (typeof data.balance === 'number') setTokenBalance(data.balance);
-        if (typeof data.emailListClaimed === 'boolean') setEmailListClaimed(data.emailListClaimed);
-        if (Array.isArray(data.rewards) && data.rewards.length > 0) enqueueRewards(data.rewards);
-      } catch { /* silent */ }
-    })();
-  }, [userId, getToken, setStreak, setTokenBalance, setEmailListClaimed, enqueueRewards]);
+    if (!userId) return;
+    void claimDailyRewardOnce(userId, getToken);
+  }, [userId, getToken]);
 
   if (!userId) return null;
 

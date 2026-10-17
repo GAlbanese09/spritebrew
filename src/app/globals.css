@@ -215,6 +215,20 @@ canvas {
   93.75%  { background-position: -768px -768px; }
 }
 
+/* Sheet Tools: a frame dropped into an animation pops in, and the animation
+   that took it flashes once (motion-safe:animate-[...] utilities in
+   AnimationPanel.tsx, so reduced motion turns them off and the live
+   announcement carries the feedback). */
+@keyframes frameDropIn {
+  0%   { transform: scale(0.6); opacity: 0; }
+  70%  { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes frameDropFlash {
+  0%   { box-shadow: inset 0 0 0 2px var(--accent-amber), 0 0 16px var(--accent-amber-glow); }
+  100% { box-shadow: inset 0 0 0 2px transparent, 0 0 0 transparent; }
+}
+
 @keyframes whatsNewFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }

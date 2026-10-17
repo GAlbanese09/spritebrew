@@ -778,7 +778,7 @@ export default function UploadPage() {
           </Button>
           {!canContinue && (
             <p id="continue-reason" className="text-xs font-mono text-text-secondary">
-              Add frames to a group to preview them.
+              Add frames to an animation to preview it.
             </p>
           )}
           <Button

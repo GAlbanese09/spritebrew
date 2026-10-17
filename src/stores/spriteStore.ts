@@ -116,6 +116,8 @@ interface SpriteStore {
   removeAnimation: (animationId: string) => void;
   assignFramesToAnimation: (animationId: string, frameIds: string[]) => void;
   updateAnimationFps: (animationId: string, fps: number) => void;
+  /** Rename an animation or change its type; frames and speed stay. */
+  updateAnimationMeta: (animationId: string, meta: { name?: string; type?: string }) => void;
   setSelectedFrames: (frameIds: string[]) => void;
   toggleFrameSelection: (frameId: string) => void;
   updateFrameData: (frameId: string, newDataUrl: string) => void;
@@ -260,6 +262,19 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
     set((state) => ({
       animations: state.animations.map((a) =>
         a.id === animationId ? { ...a, fps } : a
+      ),
+    })),
+
+  updateAnimationMeta: (animationId, meta) =>
+    set((state) => ({
+      animations: state.animations.map((a) =>
+        a.id === animationId
+          ? {
+              ...a,
+              ...(typeof meta.name === 'string' ? { name: meta.name } : {}),
+              ...(typeof meta.type === 'string' ? { type: meta.type } : {}),
+            }
+          : a
       ),
     })),
 

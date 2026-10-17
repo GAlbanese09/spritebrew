@@ -8,28 +8,46 @@
  *   frame stays in the grid) or a tile in a group strip (drops reorder that
  *   group only).
  * - Targets: any element with data-frame-drop-anim={animId}; tiles inside it
- *   carry data-frame-drop-index so the insertion point can be measured.
+ *   carry data-frame-drop-index so the insertion point can be measured. An
+ *   element with data-frame-drop-new takes a grid frame and starts a new
+ *   animation holding it (named and typed by the panel's defaults).
  * - Mouse drags start after a few pixels of movement, so a click still
  *   selects. Touch and pen drags start after a short hold without moving, so
  *   a swipe still scrolls the page.
  * - Escape, pointercancel or the window losing focus abort with no change.
  *
- * Commits go through the existing updateFrameOrder action; the sprite store's
- * shape is unchanged. Drag state lives here, outside the store.
+ * Commits go through the existing updateFrameOrder and addAnimation actions;
+ * the sprite store's shape is unchanged. Drag state lives here, outside the
+ * store, as do the last drop and the last missed drop, which the panel and
+ * the grid read for feedback.
  */
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { dropIndex, indicatorBox, insertAt, moveItem, type Box } from '@/lib/frameDragMath';
+import { animationPreset, defaultAnimationType, nextAnimationName } from '@/lib/animationNames';
+import { generateAnimationId } from '@/lib/spriteUtils';
 
 export type FrameDragSource =
   | { kind: 'grid'; frameId: string }
   | { kind: 'group'; animId: string; index: number; frameId: string };
 
-export interface FrameDropTarget {
+export type FrameDropTarget =
+  /** Into an existing animation, before tile `index`. */
+  | { kind: 'anim'; animId: string; index: number }
+  /** Onto the new-animation zone: create one holding the frame. */
+  | { kind: 'new' };
+
+/** The last drop that changed something, for the panel's pop-in and flash
+ *  and the live announcement. `animId` is the animation that gained the
+ *  frame (a new one when `created`), `index` its tile, `at` when. */
+export interface FrameDropResult {
   animId: string;
   index: number;
+  frameId: string;
+  created: boolean;
+  at: number;
 }
 
 export interface FrameDragView {
@@ -69,6 +87,9 @@ interface Session {
 
 let session: Session | null = null;
 let view: FrameDragView | null = null;
+let lastDrop: FrameDropResult | null = null;
+/** When the last drag ended over nothing, or 0. */
+let lastMissAt = 0;
 const subscribers = new Set<() => void>();
 
 function emit() {
@@ -99,7 +120,12 @@ function hitTest(s: Session): { target: FrameDropTarget | null; bar: Box | null 
   const el = document.elementFromPoint(s.x, s.y);
   const zone = el?.closest<HTMLElement>('[data-frame-drop-anim]');
   const animId = zone?.dataset.frameDropAnim;
-  if (!zone || !animId) return { target: null, bar: null };
+  if (!zone || !animId) {
+    // Only a grid frame can start a new animation; a group's own frame only
+    // reorders inside its group.
+    const fresh = s.source.kind === 'grid' && el?.closest<HTMLElement>('[data-frame-drop-new]');
+    return { target: fresh ? { kind: 'new' } : null, bar: null };
+  }
   if (s.source.kind === 'group' && animId !== s.source.animId) return { target: null, bar: null };
 
   const tiles = Array.from(zone.querySelectorAll<HTMLElement>('[data-frame-drop-index]'));
@@ -108,7 +134,7 @@ function hitTest(s: Session): { target: FrameDropTarget | null; bar: Box | null 
     return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
   });
   const index = dropIndex(boxes, s.x, s.y);
-  return { target: { animId, index }, bar: indicatorBox(boxes, index, TILE_GAP_PX) };
+  return { target: { kind: 'anim', animId, index }, bar: indicatorBox(boxes, index, TILE_GAP_PX) };
 }
 
 function retarget() {
@@ -121,24 +147,50 @@ function retarget() {
 
 // ── Commit ──
 
-function commit(source: FrameDragSource, target: FrameDropTarget) {
+/** Applies the drop to the store. Returns what changed, or null. */
+function commit(source: FrameDragSource, target: FrameDropTarget): FrameDropResult | null {
   const state = useSpriteStore.getState();
+  const at = Date.now();
+
+  if (target.kind === 'new') {
+    if (source.kind !== 'grid') return null;
+    const frame = state.spriteSheet?.animations
+      .flatMap((a) => a.frames)
+      .find((f) => f.id === source.frameId);
+    if (!frame) return null;
+    const type = defaultAnimationType(state.currentSheetMetadata);
+    const preset = animationPreset(type);
+    const id = generateAnimationId();
+    state.addAnimation({
+      id,
+      name: nextAnimationName(preset.label, state.animations.map((a) => a.name)),
+      type,
+      frames: [frame],
+      fps: preset.defaultFps,
+      loop: true,
+    });
+    return { animId: id, index: 0, frameId: frame.id, created: true, at };
+  }
+
   const anim = state.animations.find((a) => a.id === target.animId);
-  if (!anim) return;
+  if (!anim) return null;
 
   if (source.kind === 'grid') {
     const frame = state.spriteSheet?.animations
       .flatMap((a) => a.frames)
       .find((f) => f.id === source.frameId);
-    if (!frame) return;
+    if (!frame) return null;
     state.updateFrameOrder(anim.id, insertAt(anim.frames, target.index, frame));
-    return;
+    return { animId: anim.id, index: target.index, frameId: frame.id, created: false, at };
   }
 
   // Guard against the group having changed under the drag.
-  if (anim.id !== source.animId || anim.frames[source.index]?.id !== source.frameId) return;
+  if (anim.id !== source.animId || anim.frames[source.index]?.id !== source.frameId) return null;
   const next = moveItem(anim.frames, source.index, target.index);
-  if (next !== anim.frames) state.updateFrameOrder(anim.id, next);
+  if (next === anim.frames) return null;
+  state.updateFrameOrder(anim.id, next);
+  const index = next.findIndex((f) => f === anim.frames[source.index]);
+  return { animId: anim.id, index: index < 0 ? target.index : index, frameId: source.frameId, created: false, at };
 }
 
 // ── Lifecycle ──
@@ -219,7 +271,14 @@ function end(apply: boolean) {
     document.body.style.userSelect = s.prevUserSelect;
     document.body.style.cursor = s.prevCursor;
     suppressNextClick();
-    if (apply && s.target) commit(s.source, s.target);
+    if (apply && s.target) {
+      const result = commit(s.source, s.target);
+      if (result) lastDrop = result;
+    } else if (apply) {
+      // Released over nothing: the frame stays where it was. The grid shows
+      // a hint after this until a drop lands.
+      lastMissAt = Date.now();
+    }
   }
   emit();
 }
@@ -341,6 +400,24 @@ export function useFrameDrag(): FrameDragView | null {
     subscribe,
     () => view,
     () => null
+  );
+}
+
+/** The last drop that changed an animation on this page, or null. */
+export function useLastFrameDrop(): FrameDropResult | null {
+  return useSyncExternalStore(
+    subscribe,
+    () => lastDrop,
+    () => null
+  );
+}
+
+/** When the last drag on this page ended over nothing, or 0. */
+export function useLastMissedFrameDrop(): number {
+  return useSyncExternalStore(
+    subscribe,
+    () => lastMissAt,
+    () => 0
   );
 }
 

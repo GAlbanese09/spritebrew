@@ -5,6 +5,7 @@ import { Mail, Loader2, Check, AlertCircle } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { EMAIL_LIST_BONUS_TOKENS } from '@/lib/constants';
+import { claimDailyRewardOnce } from '@/lib/dailyRewardClient';
 
 interface EmailListPanelProps {
   /** 'full' = card-style on /buy-tokens. 'compact' = inline pill for the sidebar. */
@@ -31,29 +32,13 @@ export default function EmailListPanel({ variant = 'full' }: EmailListPanelProps
   const [error, setError] = useState<string | null>(null);
 
   // For users who land on /buy-tokens without going through Generate first,
-  // hydrate the claim flag silently from the daily-reward endpoint.
+  // hydrate the claim flag from the daily-reward answer. The shared claimer
+  // sends one request per page load (the sidebar asks too) and writes the
+  // flag and the balance to the store.
   useEffect(() => {
-    if (!userId) return;
-    if (emailListClaimed) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const token = await getToken();
-        if (!token) return;
-        const res = await fetch('/api/account/daily-reward', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!cancelled && data?.success && typeof data.emailListClaimed === 'boolean') {
-          setEmailListClaimed(data.emailListClaimed);
-          if (typeof data.balance === 'number') setTokenBalance(data.balance);
-        }
-      } catch { /* silent */ }
-    })();
-    return () => { cancelled = true; };
-  }, [userId, emailListClaimed, getToken, setEmailListClaimed, setTokenBalance]);
+    if (!userId || emailListClaimed) return;
+    void claimDailyRewardOnce(userId, getToken);
+  }, [userId, emailListClaimed, getToken]);
 
   const handleSubscribe = useCallback(async () => {
     if (!userId || submitting) return;

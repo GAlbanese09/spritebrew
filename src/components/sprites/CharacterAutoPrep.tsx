@@ -278,12 +278,20 @@ export default function CharacterAutoPrep({
   // again at the size and padding it was saved at. A fit that fails shows
   // the error stage, as a failed pipeline does, instead of throwing out of
   // the effect or leaving Use This waiting on a fit that never comes (audit
-  // r2).
+  // r2); the next fit that succeeds (another size, say) clears it again
+  // (audit r3). That is safe because stage 2 only runs once a base exists,
+  // and a new source always gets a fresh component (the key in AnimateForm),
+  // so the processing stage only ever precedes the first base.
   useEffect(() => {
     if (baseVersion === 0) return;
     const size = targetSize;
     const pct = effectivePct;
     const editedBase = editedBaseRef.current;
+    const show = (dataUrl: string) => {
+      setPrepared({ dataUrl, size, pct, baseVersion });
+      setError(null);
+      setStage('ready');
+    };
     const fail = (err: unknown) => {
       setError(err instanceof Error ? err.message : 'Preparation failed');
       setStage('error');
@@ -292,7 +300,7 @@ export default function CharacterAutoPrep({
       const base = bgRemovedRef.current;
       if (!base) return;
       try {
-        setPrepared({ dataUrl: fitToTransparentSquarePadded(base, size, pct), size, pct, baseVersion });
+        show(fitToTransparentSquarePadded(base, size, pct));
       } catch (err) {
         fail(err);
       }
@@ -303,7 +311,7 @@ export default function CharacterAutoPrep({
       try {
         const img = await loadImage(editedBase);
         if (cancelled) return;
-        setPrepared({ dataUrl: fitToTransparentSquarePadded(img, size, pct), size, pct, baseVersion });
+        show(fitToTransparentSquarePadded(img, size, pct));
       } catch (err) {
         if (!cancelled) fail(err);
       }

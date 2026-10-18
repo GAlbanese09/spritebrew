@@ -1,4 +1,5 @@
 import { SLICER_FRAME_PRESETS, SLICER_DETECT_TRY_SIZES } from '@/lib/constants';
+import { detectCleanGrid } from '@/lib/gridDetect';
 
 // Square-only canonical sizes derived from the single-source-of-truth presets.
 // Used by detectFrameGrid's findBestStandardSize fallback.
@@ -60,6 +61,12 @@ export function detectFrameGrid(
       };
     }
   }
+
+  // 1b) Smallest clean grid with content: catches large-cell sheets (128 or
+  //     256 px) that the later steps cut at a smaller preset. Null falls
+  //     through to step 2 unchanged.
+  const clean = detectCleanGrid(imageData);
+  if (clean) return clean;
 
   // 2) Try transparent gutter detection
   const isTransparentColumn = (col: number): boolean => {

@@ -197,6 +197,77 @@ function smallBlobs(width, height, cell, size, off) {
     same(detectFrameGrid(img), grid(64, 4, 4)));
 }
 
+// ── 13: the gutter step wins over the clean grid (audit r1) ──
+
+{
+  // Frames of fw x fh with a blob inset by `margin`. The clean grid alone
+  // would read each of these at a larger square size; the gutter step finds
+  // the true frame first, as on base.
+  const sheetWH = (width, height, fw, fh, margin) => {
+    const img = blank(width, height);
+    for (let y = 0; y < height; y += fh) {
+      for (let x = 0; x < width; x += fw) rect(img, x + margin, y + margin, x + fw - margin, y + fh - margin);
+    }
+    return img;
+  };
+  const cases = [
+    [384, 192, 32, 48, 4],
+    [320, 256, 32, 64, 4],
+    [320, 256, 16, 32, 2],
+    [480, 192, 24, 48, 2],
+    [160, 160, 8, 8, 1],
+    [320, 320, 40, 40, 4],
+  ];
+  for (const [w, h, fw, fh, m] of cases) {
+    check(`13. ${w}x${h} of ${fw}x${fh}: detectFrameGrid keeps the gutter result`,
+      same(detectFrameGrid(sheetWH(w, h, fw, fh, m)), { width: fw, height: fh, columns: w / fw, rows: h / fh }));
+  }
+}
+
+// ── 14: a grid line crossed, or only touched, by one pixel ──
+
+{
+  // 2x2 of 256 with blobs inset 8, except the top left blob, which reaches
+  // one pixel past x = 256 (pixels 255 and 256 opaque). Every candidate
+  // dividing 512 has a line at 256, so none is clean.
+  const img = blank(512, 512);
+  rect(img, 8, 8, 257, 248);
+  rect(img, 264, 8, 504, 248);
+  rect(img, 8, 264, 248, 504);
+  rect(img, 264, 264, 504, 504);
+  check('14a. a blob one pixel past x = 256: detectCleanGrid null', same(detectCleanGrid(img), null));
+}
+{
+  // The same, one pixel past y = 256.
+  const img = blank(512, 512);
+  rect(img, 8, 8, 248, 257);
+  rect(img, 264, 8, 504, 248);
+  rect(img, 8, 264, 248, 504);
+  rect(img, 264, 264, 504, 504);
+  check('14b. a blob one pixel past y = 256: detectCleanGrid null', same(detectCleanGrid(img), null));
+}
+{
+  // Blobs reach the 256 lines from both sides with one transparent pixel
+  // (x or y = 256) between them: clean at 256.
+  const img = blank(512, 512);
+  rect(img, 8, 8, 256, 256);
+  rect(img, 257, 8, 504, 256);
+  rect(img, 8, 257, 256, 504);
+  rect(img, 257, 257, 504, 504);
+  check('14c. blobs touching the 256 lines without crossing: detectCleanGrid 256',
+    same(detectCleanGrid(img), grid(256, 2, 2)));
+}
+
+// ── 15: the whole image is never a candidate ──
+
+{
+  // 256x256 with one sprite crossing every interior line of 16 to 128:
+  // 256 itself would be one cell, which the two-cell minimum excludes.
+  const img = blank(256, 256);
+  rect(img, 8, 8, 248, 248);
+  check('15. one sprite on a 256x256 image: detectCleanGrid null', same(detectCleanGrid(img), null));
+}
+
 // ── timing ──
 
 {

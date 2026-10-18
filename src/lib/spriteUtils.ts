@@ -62,12 +62,6 @@ export function detectFrameGrid(
     }
   }
 
-  // 1b) Smallest clean grid with content: catches large-cell sheets (128 or
-  //     256 px) that the later steps cut at a smaller preset. Null falls
-  //     through to step 2 unchanged.
-  const clean = detectCleanGrid(imageData);
-  if (clean) return clean;
-
   // 2) Try transparent gutter detection
   const isTransparentColumn = (col: number): boolean => {
     for (let y = 0; y < height; y++) {
@@ -111,6 +105,14 @@ export function detectFrameGrid(
       rows: Math.floor(height / gutterH),
     };
   }
+
+  // 2b) Smallest clean grid with content: catches large-cell sheets (128 or
+  //     256 px) that step 3 cuts at a smaller preset. It runs only when the
+  //     gutter step found nothing, so a gutter result (non-square frames,
+  //     sizes outside SLICER_DETECT_TRY_SIZES) always wins (audit r1). Null
+  //     falls through to step 3 unchanged.
+  const clean = detectCleanGrid(imageData);
+  if (clean) return clean;
 
   // 3) Find all canonical SLICER_FRAME_PRESETS that evenly divide the image,
   //    prefer the one that produces the most frames (smallest frame size)

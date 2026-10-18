@@ -225,8 +225,8 @@ export default function SlicerConfig({
 
           ctx.strokeRect(x + 0.5, y + 0.5, w, h);
 
-          // Frame number
-          const label = String(frameNum);
+          // Frame number, counted from 1 like the frames grid and the strips
+          const label = String(frameNum + 1);
           ctx.save();
           ctx.globalAlpha = 0.8;
           const textW = ctx.measureText(label).width;

@@ -1,10 +1,10 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Pencil } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import PixelEditor from './PixelEditor';
-import { DRAG_TILE_STYLE, startFrameDrag, useFrameDrag } from './frameDrag';
+import { DRAG_TILE_STYLE, startFrameDrag, useFrameDrag, useLastFrameDrop, useLastMissedFrameDrop } from './frameDrag';
 
 interface FrameGridProps {
   /** Map from frame ID → data URL for display */
@@ -21,8 +21,13 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
   const [editingFrameId, setEditingFrameId] = useState<string | null>(null);
   const drag = useFrameDrag();
   const draggingFrameId = drag?.source.kind === 'grid' ? drag.source.frameId : null;
+  // After the first drag that ends over nothing, say where to drop, until a
+  // drop lands.
+  const lastMissAt = useLastMissedFrameDrop();
+  const lastDrop = useLastFrameDrop();
+  const showDropHint = lastMissAt > 0 && (!lastDrop || lastDrop.at < lastMissAt);
 
-  const allFrames = spriteSheet?.animations.flatMap((a) => a.frames) ?? [];
+  const allFrames = useMemo(() => spriteSheet?.animations.flatMap((a) => a.frames) ?? [], [spriteSheet]);
 
   const handleFrameClick = useCallback(
     (frameId: string, index: number, e: React.MouseEvent) => {
@@ -88,8 +93,13 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
       </div>
 
       <p className="text-[10px] font-mono text-text-muted mb-3">
-        Tip: select frames, then Assign. A frame can be used more than once.
+        Tip: drag a frame into Animations, or select several and press Assign. A frame can be used more than once.
       </p>
+      {showDropHint && (
+        <p className="text-[10px] font-mono text-accent-amber mb-3" role="status">
+          Drop frames on the Animations panel below.
+        </p>
+      )}
 
       <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))' }}>
         {allFrames.map((frame, idx) => {
@@ -101,7 +111,7 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
             // the frame stays here so it can be used again.
             <div
               key={frame.id}
-              className={`group relative ${draggingFrameId === frame.id ? 'opacity-50' : ''}`}
+              className={`group relative pointer-fine:cursor-grab ${draggingFrameId === frame.id ? 'opacity-50' : ''}`}
               style={DRAG_TILE_STYLE}
               onPointerDown={(e) => startFrameDrag(e, { kind: 'grid', frameId: frame.id })}
             >
@@ -133,7 +143,7 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
                   {dataUrl && (
                     <img
                       src={dataUrl}
-                      alt={`Frame ${idx}`}
+                      alt={`Frame ${idx + 1}`}
                       draggable={false}
                       className="absolute inset-0 w-full h-full object-contain pixel-art-render"
                       style={{ imageRendering: 'pixelated' }}
@@ -145,7 +155,7 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
                     selected ? 'text-accent-amber' : 'text-text-muted group-hover:text-text-secondary'
                   }`}
                 >
-                  {idx}
+                  {idx + 1}
                 </span>
               </button>
 

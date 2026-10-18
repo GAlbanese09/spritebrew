@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   Plus,
   Trash2,
@@ -9,6 +9,7 @@ import {
   X,
   Wand2,
   Check,
+  Pencil,
 } from 'lucide-react';
 import { ANIMATION_TYPES } from '@/lib/constants';
 import { generateAnimationId } from '@/lib/spriteUtils';
@@ -17,7 +18,14 @@ import type { SpriteAnimation, SpriteFrame } from '@/lib/types';
 import type { SlicerHints } from '@/lib/generationHistory';
 import { resolveStyleRowKey } from '@/lib/styleRowKey';
 import Button from '@/components/ui/Button';
-import { DRAG_TILE_STYLE, FrameDragLayer, startFrameDrag, useFrameDrag } from './frameDrag';
+import {
+  DRAG_TILE_STYLE,
+  FrameDragLayer,
+  startFrameDrag,
+  useFrameDrag,
+  useLastFrameDrop,
+} from './frameDrag';
+import { animationPreset, defaultAnimationType, nextAnimationName } from '@/lib/animationNames';
 
 // Per-frame move and remove buttons in a group's strip.
 const FRAME_CONTROL_CLASS =
@@ -212,6 +220,26 @@ function computeAutoAssignProposal(
   return result;
 }
 
+/** A grid frame is being dragged, so the new-animation zone can take it. */
+function canTargetNew(drag: ReturnType<typeof useFrameDrag>): boolean {
+  return drag?.source.kind === 'grid';
+}
+
+/** The card can take the current drag: any grid frame, or a reorder of its
+ *  own frames. */
+function canTargetCard(drag: ReturnType<typeof useFrameDrag>, animId: string): boolean {
+  if (!drag) return false;
+  return drag.source.kind === 'grid' || drag.source.animId === animId;
+}
+
+/** Border and glow for the new-animation zone: lit while a grid frame is
+ *  dragged anywhere, solid under the pointer, dashed and quiet at rest. */
+function newZoneClass(drag: ReturnType<typeof useFrameDrag>, isOver: boolean): string {
+  if (isOver) return 'border-accent-amber bg-accent-amber-glow/40 ring-2 ring-accent-amber/40';
+  if (canTargetNew(drag)) return 'border-dashed border-accent-amber/70 bg-accent-amber-glow/20 shadow-[0_0_12px_var(--accent-amber-glow)]';
+  return 'border-dashed border-border-default bg-bg-surface';
+}
+
 export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
   const spriteSheet = useSpriteStore((s) => s.spriteSheet);
   const animations = useSpriteStore((s) => s.animations);
@@ -224,66 +252,99 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
   const updateAnimationFps = useSpriteStore((s) => s.updateAnimationFps);
   const updateFrameOrder = useSpriteStore((s) => s.updateFrameOrder);
 
-  const [selectedType, setSelectedType] = useState<string>(
-    currentSheetMetadata?.animationType ?? ANIMATION_TYPES[0].id
-  );
-  const [customName, setCustomName] = useState('');
+  const updateAnimationMeta = useSpriteStore((s) => s.updateAnimationMeta);
+  const setSelectedFrames = useSpriteStore((s) => s.setSelectedFrames);
+
+  // The type a new animation gets: the sheet's own type when the slicer was
+  // handed one, else Idle. Each animation's type is edited on its card.
+  const selectedType = useMemo(() => defaultAnimationType(currentSheetMetadata), [currentSheetMetadata]);
   const [layoutOverride, setLayoutOverride] = useState<LayoutMode | null>(null);
   const [autoAssignPreview, setAutoAssignPreview] = useState<ProposedAnimation[] | null>(null);
   const [nameManuallyEdited, setNameManuallyEdited] = useState<boolean[]>([]);
   const drag = useFrameDrag();
+  const lastDrop = useLastFrameDrop();
+  // The animation whose name is being edited, and the text so far.
+  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
 
-  // When sheet metadata arrives (gallery handoff), pre-select type and layout
+  // Sheet metadata (gallery handoff) with a type the slicer does not know:
+  // new animations default to Idle, and each card has its own type.
   useEffect(() => {
-    if (currentSheetMetadata) {
-      const matchingType = ANIMATION_TYPES.find((t) => t.id === currentSheetMetadata.animationType);
-      if (matchingType) {
-        setSelectedType(matchingType.id);
-      } else {
-        console.warn(
-          '[Slicer] Unknown animationType from gallery metadata:',
-          currentSheetMetadata.animationType,
-          '— Type dropdown unchanged. User can select manually or override in preview.'
-        );
-      }
-      setLayoutOverride(currentSheetMetadata.directional ? 'directional' : 'single');
+    if (currentSheetMetadata && !ANIMATION_TYPES.some((t) => t.id === currentSheetMetadata.animationType)) {
+      console.warn(
+        '[Slicer] Unknown animationType from gallery metadata:',
+        currentSheetMetadata.animationType,
+        '. New animations default to Idle; each card has its own type.'
+      );
     }
   }, [currentSheetMetadata]);
 
-  // When user changes Type dropdown, update layout to the type's default
-  const handleTypeChange = useCallback((typeId: string) => {
-    setSelectedType(typeId);
-    const type = ANIMATION_TYPES.find((t) => t.id === typeId);
-    if (type) {
-      setLayoutOverride(type.defaultDirectional ? 'directional' : 'single');
-    }
-  }, []);
-
-  // Compute effective layout for display
+  // Layout for Auto-assign: the toggle, else the sheet's own layout, else
+  // the default type's.
   const effectiveLayout: LayoutMode = (() => {
     if (layoutOverride) return layoutOverride;
     if (currentSheetMetadata) return currentSheetMetadata.directional ? 'directional' : 'single';
-    const type = ANIMATION_TYPES.find((t) => t.id === selectedType);
-    return type?.defaultDirectional ? 'directional' : 'single';
+    return animationPreset(selectedType).defaultDirectional ? 'directional' : 'single';
   })();
 
-  const handleAddAnimation = useCallback(() => {
-    const preset = ANIMATION_TYPES.find((t) => t.id === selectedType);
-    const name = customName.trim() || preset?.label || selectedType;
-    const fps = preset?.defaultFps ?? 8;
+  const allFrames = useMemo(
+    () => spriteSheet?.animations.flatMap((a) => a.frames) ?? [],
+    [spriteSheet]
+  );
 
-    const anim: SpriteAnimation = {
-      id: generateAnimationId(),
-      name,
-      type: selectedType,
-      frames: [],
-      fps,
-      loop: true,
-    };
+  /** A new animation of the default type, named "Idle", "Idle 2", ... */
+  const makeAnimation = useCallback(
+    (frames: SpriteFrame[]): SpriteAnimation => {
+      const preset = animationPreset(selectedType);
+      return {
+        id: generateAnimationId(),
+        name: nextAnimationName(preset.label, animations.map((a) => a.name)),
+        type: selectedType,
+        frames,
+        fps: preset.defaultFps,
+        loop: true,
+      };
+    },
+    [selectedType, animations]
+  );
 
-    addAnimation(anim);
-    setCustomName('');
-  }, [selectedType, customName, addAnimation]);
+  const handleNewAnimation = useCallback(() => {
+    addAnimation(makeAnimation([]));
+  }, [addAnimation, makeAnimation]);
+
+  const handleUseAllFrames = useCallback(() => {
+    if (allFrames.length === 0) return;
+    addAnimation(makeAnimation([...allFrames]));
+  }, [allFrames, addAnimation, makeAnimation]);
+
+  const handleNewFromSelection = useCallback(() => {
+    const picked = allFrames.filter((f) => selectedFrames.includes(f.id));
+    if (picked.length === 0) return;
+    addAnimation(makeAnimation(picked));
+    setSelectedFrames([]);
+  }, [allFrames, selectedFrames, addAnimation, makeAnimation, setSelectedFrames]);
+
+  const startRename = useCallback((anim: SpriteAnimation) => {
+    setRenaming({ id: anim.id, value: anim.name });
+  }, []);
+
+  const commitRename = useCallback(() => {
+    if (!renaming) return;
+    const name = renaming.value.trim();
+    if (name) updateAnimationMeta(renaming.id, { name });
+    setRenaming(null);
+  }, [renaming, updateAnimationMeta]);
+
+  // What screen readers hear after the last drop: the frame's grid number
+  // and the animation. Derived, so each drop changes the live region once.
+  const announcement = useMemo(() => {
+    if (!lastDrop) return '';
+    const anim = animations.find((a) => a.id === lastDrop.animId);
+    if (!anim) return '';
+    const n = allFrames.findIndex((f) => f.id === lastDrop.frameId) + 1;
+    return lastDrop.created
+      ? `Created ${anim.name} with frame ${n}.`
+      : `Added frame ${n} to ${anim.name}. ${anim.frames.length} frame${anim.frames.length === 1 ? '' : 's'}.`;
+  }, [lastDrop, animations, allFrames]);
 
   // Show editable preview
   const handleAutoAssign = useCallback(() => {
@@ -395,47 +456,23 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
     [animations, updateFrameOrder]
   );
 
+  const dragging = drag !== null;
+  const isOverNew = drag?.target?.kind === 'new';
+
   return (
     <div className="space-y-6">
-      {/* Header row with Auto-assign + Layout toggle */}
+      {/* Header row: label and New animation */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <label className="text-xs font-mono text-text-secondary uppercase tracking-wider">
           Animations
         </label>
-        {animations.length === 0 && !autoAssignPreview && (
-          <div className="flex items-center gap-2">
-            {/* Layout toggle */}
-            <div className="flex gap-0.5 rounded bg-bg-elevated p-0.5">
-              <button
-                onClick={() => setLayoutOverride('directional')}
-                className={`px-2 py-1 rounded text-[9px] font-mono cursor-pointer transition-colors ${
-                  effectiveLayout === 'directional'
-                    ? 'bg-accent-amber text-bg-primary'
-                    : 'text-text-muted hover:text-text-secondary'
-                }`}
-              >
-                4-Directional
-              </button>
-              <button
-                onClick={() => setLayoutOverride('single')}
-                className={`px-2 py-1 rounded text-[9px] font-mono cursor-pointer transition-colors ${
-                  effectiveLayout === 'single'
-                    ? 'bg-accent-amber text-bg-primary'
-                    : 'text-text-muted hover:text-text-secondary'
-                }`}
-              >
-                Single Animation
-              </button>
-            </div>
-            <Button variant="ghost" size="sm" onClick={handleAutoAssign}>
-              <Wand2 size={14} />
-              Auto-assign
-            </Button>
-          </div>
-        )}
+        <Button variant="secondary" size="sm" onClick={handleNewAnimation}>
+          <Plus size={14} />
+          New animation
+        </Button>
       </div>
 
-      {/* Auto-assign preview — editable */}
+      {/* Auto-assign preview, editable */}
       {autoAssignPreview && (
         <div className="rounded-lg border border-accent-amber/30 bg-accent-amber-glow/30 p-4 space-y-3">
           <p className="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
@@ -488,74 +525,139 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
         </div>
       )}
 
-      {/* Add animation form */}
-      <div className="flex flex-wrap gap-2 items-end">
-        <div className="flex-1 min-w-[120px]">
-          <label className="block text-[10px] font-mono text-text-muted mb-1">Type</label>
-          <select
-            value={selectedType}
-            onChange={(e) => handleTypeChange(e.target.value)}
-            className="w-full rounded bg-bg-elevated border border-border-default px-3 py-2
-              text-sm font-mono text-text-primary focus:outline-none focus:border-accent-amber cursor-pointer"
-          >
-            {ANIMATION_TYPES.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.label} — {t.description}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="flex-1 min-w-[120px]">
-          <label className="block text-[10px] font-mono text-text-muted mb-1">
-            Custom name (optional)
-          </label>
-          <input
-            type="text"
-            value={customName}
-            onChange={(e) => setCustomName(e.target.value)}
-            placeholder="e.g. Walk Left"
-            className="w-full rounded bg-bg-elevated border border-border-default px-3 py-2
-              text-sm font-mono text-text-primary placeholder:text-text-muted
-              focus:outline-none focus:border-accent-amber"
-          />
-        </div>
-        <Button variant="secondary" size="md" onClick={handleAddAnimation}>
-          <Plus size={14} />
-          Add
-        </Button>
-      </div>
-
-      {/* Empty state */}
+      {/* Empty state: the first animation's drop zone, with the one-click
+          ways to start. A grid frame dropped here starts an animation. */}
       {animations.length === 0 && !autoAssignPreview && (
-        <div className="rounded-lg border border-dashed border-border-default bg-bg-surface p-8 text-center">
-          <p className="text-xs font-mono text-text-muted">
-            No animation groups yet. Add one above, or use &quot;Auto-assign&quot; to
-            create groups from sprite sheet rows.
+        <div
+          data-frame-drop-new
+          className={`rounded-lg border p-6 text-center space-y-4 transition-colors ${newZoneClass(drag, isOverNew)}`}
+        >
+          <p className="text-xs font-mono text-text-secondary">
+            {isOverNew
+              ? `Release to create ${animationPreset(selectedType).label}`
+              : dragging
+                ? 'Drop to start a new animation'
+                : 'Drag frames here to make your first animation'}
+          </p>
+          <div className="flex items-center justify-center gap-2 flex-wrap">
+            <Button variant="secondary" size="sm" onClick={handleUseAllFrames} disabled={allFrames.length === 0}>
+              Use all {allFrames.length} frame{allFrames.length === 1 ? '' : 's'}
+            </Button>
+            {selectedFrames.length > 0 && (
+              <Button variant="secondary" size="sm" onClick={handleNewFromSelection}>
+                New animation from {selectedFrames.length} selected
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={handleAutoAssign} title="Make one animation per row">
+              <Wand2 size={14} />
+              Auto-assign
+            </Button>
+            {/* Layout toggle for Auto-assign */}
+            <div className="flex gap-0.5 rounded bg-bg-elevated p-0.5">
+              <button
+                type="button"
+                onClick={() => setLayoutOverride('directional')}
+                className={`px-2 py-1 rounded text-[9px] font-mono cursor-pointer transition-colors ${
+                  effectiveLayout === 'directional'
+                    ? 'bg-accent-amber text-bg-primary'
+                    : 'text-text-muted hover:text-text-secondary'
+                }`}
+              >
+                4-Directional
+              </button>
+              <button
+                type="button"
+                onClick={() => setLayoutOverride('single')}
+                className={`px-2 py-1 rounded text-[9px] font-mono cursor-pointer transition-colors ${
+                  effectiveLayout === 'single'
+                    ? 'bg-accent-amber text-bg-primary'
+                    : 'text-text-muted hover:text-text-secondary'
+                }`}
+              >
+                Single Animation
+              </button>
+            </div>
+          </div>
+          <p className="text-[10px] font-mono text-text-muted">
+            You can rename it and change its type any time.
           </p>
         </div>
       )}
 
-      {/* Animation groups */}
+      {/* Animation cards */}
       <div className="space-y-3">
-        {animations.map((anim) => (
+        {animations.map((anim) => {
+          const isTarget = drag?.target?.kind === 'anim' && drag.target.animId === anim.id;
+          const dropHere = lastDrop && lastDrop.animId === anim.id ? lastDrop : null;
+          const isRenaming = renaming?.id === anim.id;
+          return (
           // The whole card is a drop target for frames dragged from the
           // Frames grid, and for reordering this group's own frames.
           <div
             key={anim.id}
             data-frame-drop-anim={anim.id}
-            className={`rounded-lg border bg-bg-surface p-4 ${
-              drag?.target?.animId === anim.id
+            className={`relative rounded-lg border bg-bg-surface p-4 transition-colors ${
+              isTarget
                 ? 'border-accent-amber ring-2 ring-accent-amber/40'
-                : 'border-border-default'
-            }`}
+                : dragging && canTargetCard(drag, anim.id)
+                  ? 'border-dashed border-accent-amber/70 shadow-[0_0_12px_var(--accent-amber-glow)]'
+                  : 'border-border-default'
+            } ${dropHere?.created ? 'motion-safe:animate-[frameDropIn_150ms_ease-out]' : ''}`}
           >
+            {/* One flash per drop, restarted by its timestamp */}
+            {dropHere && !dropHere.created && (
+              <div
+                key={dropHere.at}
+                aria-hidden="true"
+                className="absolute inset-0 rounded-[inherit] pointer-events-none motion-safe:animate-[frameDropFlash_600ms_ease-out_forwards]"
+              />
+            )}
+
             {/* Header */}
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-mono font-semibold text-text-primary">
-                  {anim.name}
-                </h3>
-                <span className="text-[10px] font-mono text-text-muted">
+            <div className="flex items-center justify-between mb-3 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                {isRenaming ? (
+                  <input
+                    type="text"
+                    autoFocus
+                    value={renaming.value}
+                    aria-label={`Rename ${anim.name}`}
+                    onChange={(e) => setRenaming({ id: anim.id, value: e.target.value })}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitRename();
+                      if (e.key === 'Escape') setRenaming(null);
+                    }}
+                    className="min-w-0 w-40 rounded bg-bg-elevated border border-accent-amber px-2 py-1
+                      text-sm font-mono text-text-primary focus:outline-none"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => startRename(anim)}
+                    aria-label={`Rename ${anim.name}`}
+                    title={`Rename ${anim.name}`}
+                    className="group/name flex items-center gap-1.5 min-w-0 rounded px-1 -mx-1 cursor-text hover:bg-bg-hover"
+                  >
+                    <span className="text-sm font-mono font-semibold text-text-primary truncate">{anim.name}</span>
+                    <Pencil size={11} className="text-text-muted group-hover/name:text-text-secondary flex-shrink-0" />
+                  </button>
+                )}
+                <select
+                  value={anim.type}
+                  aria-label="Animation type"
+                  title="Animation type"
+                  onChange={(e) => updateAnimationMeta(anim.id, { type: e.target.value })}
+                  className="rounded bg-bg-elevated border border-border-default px-1.5 py-0.5
+                    text-[10px] font-mono text-text-secondary focus:outline-none focus:border-accent-amber cursor-pointer"
+                >
+                  {ANIMATION_TYPES.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-[10px] font-mono text-text-muted whitespace-nowrap">
                   {anim.frames.length} frame{anim.frames.length !== 1 ? 's' : ''}
                 </span>
               </div>
@@ -570,9 +672,11 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
                   </Button>
                 )}
                 <button
+                  type="button"
                   onClick={() => removeAnimation(anim.id)}
                   className="p-1 rounded text-text-muted hover:text-red-400 hover:bg-red-400/10 cursor-pointer"
-                  title="Delete group"
+                  title="Delete animation"
+                  aria-label="Delete animation"
                 >
                   <Trash2 size={14} />
                 </button>
@@ -606,7 +710,7 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
             {/* Frame thumbnails */}
             {anim.frames.length === 0 ? (
               <p className="text-[10px] font-mono text-text-muted py-2">
-                Select frames in the grid above, then click &quot;Assign&quot;.
+                Drag frames here, or select them above and press Assign.
               </p>
             ) : (
               <div className="flex flex-wrap gap-1.5">
@@ -616,6 +720,7 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
                     drag?.source.kind === 'group' &&
                     drag.source.animId === anim.id &&
                     drag.source.index === idx;
+                  const justDropped = dropHere && !dropHere.created && dropHere.index === idx;
                   return (
                     <div
                       key={`${idx}-${frame.id}`}
@@ -626,7 +731,7 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
                       style={DRAG_TILE_STYLE}
                       className={`flex flex-col items-center gap-1.5 rounded border border-border-subtle bg-bg-elevated p-0.5 cursor-grab ${
                         isDragSource ? 'opacity-40' : ''
-                      }`}
+                      } ${justDropped ? 'motion-safe:animate-[frameDropIn_150ms_ease-out]' : ''}`}
                     >
                       <div className="relative">
                         <div
@@ -694,7 +799,29 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
+
+        {/* With animations present: a slim zone for the next one */}
+        {animations.length > 0 && (
+          <div
+            data-frame-drop-new
+            className={`rounded-lg border p-3 text-center transition-colors ${newZoneClass(drag, isOverNew)}`}
+          >
+            <p className="text-[10px] font-mono text-text-muted">
+              {isOverNew
+                ? `Release to create ${animationPreset(selectedType).label}`
+                : dragging
+                  ? 'Drop to start a new animation'
+                  : 'Drop a frame here for another animation'}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Screen readers hear each drop; sighted users see the pop-in. */}
+      <div aria-live="polite" className="sr-only">
+        {announcement}
       </div>
 
       <FrameDragLayer frameDataUrls={frameDataUrls} />

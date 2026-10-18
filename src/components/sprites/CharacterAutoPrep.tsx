@@ -275,16 +275,27 @@ export default function CharacterAutoPrep({
   // latest run cancels the earlier one, so two quick changes cannot land out
   // of order. The edited image is read from its ref, not a dependency: a
   // save sets the display itself (handleEditorSave) and must not be fitted
-  // again at the size and padding it was saved at.
+  // again at the size and padding it was saved at. A fit that fails shows
+  // the error stage, as a failed pipeline does, instead of throwing out of
+  // the effect or leaving Use This waiting on a fit that never comes (audit
+  // r2).
   useEffect(() => {
     if (baseVersion === 0) return;
     const size = targetSize;
     const pct = effectivePct;
     const editedBase = editedBaseRef.current;
+    const fail = (err: unknown) => {
+      setError(err instanceof Error ? err.message : 'Preparation failed');
+      setStage('error');
+    };
     if (!editedBase) {
       const base = bgRemovedRef.current;
       if (!base) return;
-      setPrepared({ dataUrl: fitToTransparentSquarePadded(base, size, pct), size, pct, baseVersion });
+      try {
+        setPrepared({ dataUrl: fitToTransparentSquarePadded(base, size, pct), size, pct, baseVersion });
+      } catch (err) {
+        fail(err);
+      }
       return;
     }
     let cancelled = false;
@@ -293,8 +304,8 @@ export default function CharacterAutoPrep({
         const img = await loadImage(editedBase);
         if (cancelled) return;
         setPrepared({ dataUrl: fitToTransparentSquarePadded(img, size, pct), size, pct, baseVersion });
-      } catch {
-        // ignore
+      } catch (err) {
+        if (!cancelled) fail(err);
       }
     })();
     return () => { cancelled = true; };

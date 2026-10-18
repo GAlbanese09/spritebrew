@@ -1256,6 +1256,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
           at N": the card stays above until Use This replaces it. */}
       {pendingPrep && (
         <CharacterAutoPrep
+          // A new source always gets a fresh Auto-Prep, so a fit made for
+          // the previous source can never count as current (audit r2).
+          key={pendingPrep.dataUrl}
           sourceDataUrl={pendingPrep.dataUrl}
           sourceWidth={pendingPrep.width}
           sourceHeight={pendingPrep.height}

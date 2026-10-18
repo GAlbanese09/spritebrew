@@ -140,34 +140,45 @@ export function beginHandoff(
           tolerance: DEFAULT_BG_TOLERANCE,
         })
       ),
-    onError
+    // A stale decode's failure is as stale as its success (audit r1).
+    () => {
+      if (p.clock.isCurrent(ticket)) onError();
+    }
   );
 }
 
-/** A file chosen in the drop zone. `read` hands back its data URL (the form
- *  uses a FileReader). Its prep, with Auto-Prep's defaults, replaces the
- *  character once the image has decoded, unless a newer choice came first. */
+/** A file chosen in the drop zone. `read` hands back its data URL, or
+ *  reports that the file could not be read (the form uses a FileReader).
+ *  Its prep, with Auto-Prep's defaults, replaces the character once the
+ *  image has decoded, unless a newer choice came first. A read or decode
+ *  failure reaches onError only while this upload is still the latest
+ *  choice. */
 export function beginUpload(
   p: PrepStarter,
-  read: (onRead: (dataUrl: string) => void) => void,
+  read: (onRead: (dataUrl: string) => void, onReadError: () => void) => void,
   onError: () => void
 ): void {
   const ticket = p.clock.take();
-  read((dataUrl) =>
-    p.decode(
-      dataUrl,
-      (width, height) =>
-        p.update((s) =>
-          finishPrepStart(s, p.clock, ticket, {
-            dataUrl,
-            width,
-            height,
-            skipBgRemoval: false,
-            tolerance: DEFAULT_BG_TOLERANCE,
-          })
-        ),
-      onError
-    )
+  const fail = () => {
+    if (p.clock.isCurrent(ticket)) onError();
+  };
+  read(
+    (dataUrl) =>
+      p.decode(
+        dataUrl,
+        (width, height) =>
+          p.update((s) =>
+            finishPrepStart(s, p.clock, ticket, {
+              dataUrl,
+              width,
+              height,
+              skipBgRemoval: false,
+              tolerance: DEFAULT_BG_TOLERANCE,
+            })
+          ),
+        fail
+      ),
+    fail
   );
 }
 
@@ -228,6 +239,35 @@ export function sizeMismatch(character: AcceptedCharacter | null, selectedResolu
   );
 }
 
+// ── Auto-Prep's fitted image (CharacterAutoPrep) ──
+
+/** The image Auto-Prep shows and Use This would accept, with what it was
+ *  fitted for: the target size, the padding percentage and the base it was
+ *  made from (a counter the component bumps whenever the detected, cropped
+ *  and background-removed base changes). */
+export interface PreparedFit {
+  dataUrl: string;
+  size: number;
+  pct: number;
+  baseVersion: number;
+}
+
+/** True when the fitted image matches the current size, padding and base.
+ *  While it does not (a fit is pending), Use This and Edit are disabled, so
+ *  a size change during processing can never ship an image fitted at the
+ *  old size under the new one (audit r1, Oct 18, 2026). */
+export function preparedIsCurrent(
+  prepared: PreparedFit | null,
+  want: { size: number; pct: number; baseVersion: number }
+): prepared is PreparedFit {
+  return (
+    prepared !== null &&
+    prepared.size === want.size &&
+    prepared.pct === want.pct &&
+    prepared.baseVersion === want.baseVersion
+  );
+}
+
 export interface GenerateGateInput {
   character: AcceptedCharacter | null;
   selectedResolution: number;
@@ -253,8 +293,12 @@ export function generateGate(input: GenerateGateInput): GenerateGate {
   const { character, isCustomAction, motionPrompt, tokenBalance, tokenCost, isGenerating } = input;
   const sizeWarning = sizeMismatch(character, input.selectedResolution);
   const needsPrompt = isCustomAction && !motionPrompt.trim();
+  // Written as the base's `tokenBalance < tokenCost`, so a balance that is
+  // not a number (a bad cache read, replaced by the server fetch moments
+  // later) blocks nothing, as before (audit r1).
+  const insufficientTokens = tokenBalance < tokenCost;
   const tokensNeeded = tokenCost - tokenBalance;
-  const canGenerate = !!character && !sizeWarning && !needsPrompt && tokensNeeded <= 0;
+  const canGenerate = !!character && !sizeWarning && !needsPrompt && !insufficientTokens;
   const blockedReason =
     isGenerating || canGenerate
       ? null

@@ -516,9 +516,10 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     // decoded, unless a newer upload, handoff or Remove came first.
     beginUpload(
       { clock: intentClockRef.current, update: setCharState, decode: decodeImage },
-      (onRead) => {
+      (onRead, onReadError) => {
         const reader = new FileReader();
         reader.onload = () => onRead(reader.result as string);
+        reader.onerror = onReadError;
         reader.readAsDataURL(file);
       },
       () => {
@@ -1141,7 +1142,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
                 )}
               </div>
               <button
+                type="button"
                 onClick={handleRemoveChar}
+                aria-label="Remove character"
                 className="flex-shrink-0 p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"
               >
                 <X size={16} />

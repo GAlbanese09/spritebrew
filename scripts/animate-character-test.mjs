@@ -42,6 +42,7 @@ const {
   beginHandoff,
   beginUpload,
   removeAll,
+  preparedIsCurrent,
 } = await import(pathToFileURL(OUT).href);
 
 let failed = 0;
@@ -96,6 +97,10 @@ for (const res of SIZES) {
         g.blockedReason === 'This character is 64x64. Choose 64 or prepare it again.'
       : g.canGenerate === true && g.sizeWarning === false && g.blockedReason === null);
 }
+check('a non-square character mismatches at either side',
+  sizeMismatch({ ...accepted.character, width: 64, height: 128 }, 64) === true &&
+  sizeMismatch({ ...accepted.character, width: 128, height: 64 }, 64) === true &&
+  gate({ ...accepted.character, width: 64, height: 128 }, 64).blockedReason === 'This character is 64x128. Choose 64 or prepare it again.');
 check('64 -> 128 -> 64: the edit is still there (no state, nothing to lose)',
   gate(accepted.character, 128).canGenerate === false && gate(accepted.character, 64).canGenerate === true &&
   accepted.character.dataUrl === EDIT_64);
@@ -146,6 +151,9 @@ check('custom action with a prompt is enabled',
 check('not enough tokens: "Need N more tokens"',
   same(gate(accepted.character, 64, { tokenBalance: 2, tokenCost: 5 }), { canGenerate: false, sizeWarning: false, blockedReason: 'Need 3 more tokens' }));
 check('exactly enough tokens is enabled', gate(accepted.character, 64, { tokenBalance: 5, tokenCost: 5 }).canGenerate === true);
+check('a balance that is not a number blocks nothing, as on base (audit r1)',
+  gate(accepted.character, 64, { tokenBalance: NaN, tokenCost: 25 }).canGenerate === true &&
+  gate(accepted.character, 64, { tokenBalance: NaN, tokenCost: 25 }).blockedReason === null);
 check('while generating the reason is null even when blocked',
   gate(accepted.character, 128, { isGenerating: true }).blockedReason === null && gate(accepted.character, 128, { isGenerating: true }).canGenerate === false);
 
@@ -176,10 +184,11 @@ function form() {
     errors,
     handoff: (dataUrl, skip) => beginHandoff(p, dataUrl, skip, () => errors.push(`handoff ${dataUrl}`)),
     upload: (dataUrl) =>
-      beginUpload(p, (onRead) => reads.push({ dataUrl, onRead, done: false }), () => errors.push(`upload ${dataUrl}`)),
+      beginUpload(p, (onRead, onReadError) => reads.push({ dataUrl, onRead, onReadError, done: false }), () => errors.push(`upload ${dataUrl}`)),
     remove: () => removeAll(p),
     unmount: () => clock.take(),
     finishRead: (dataUrl) => pick(reads, dataUrl).onRead(dataUrl),
+    readFails: (dataUrl) => pick(reads, dataUrl).onReadError(),
     decoded: (dataUrl, w, h) => pick(decodes, dataUrl).onLoad(w, h),
     decodeFails: (dataUrl) => pick(decodes, dataUrl).onError(),
     pendingDecodes: () => decodes.filter((d) => !d.done).map((d) => d.dataUrl),
@@ -290,6 +299,38 @@ f.upload(RAW_C);
 f.finishRead(RAW_C);
 f.decodeFails(RAW_C);
 check('upload decode error: reported once, nothing opened', same(f.errors, [`upload ${RAW_C}`]) && same(f.state, EMPTY_CHARACTER_STATE));
+
+// Errors of a stale choice are as stale as its success (audit r1).
+f = form();
+f.upload(RAW_C);
+f.finishRead(RAW_C);
+f.handoff(SHEET_B, false);
+f.decodeFails(RAW_C);
+check('a stale upload decode failure is not reported', f.errors.length === 0);
+f.decodeFails(SHEET_B);
+check('the current handoff decode failure is', same(f.errors, [`handoff ${SHEET_B}`]));
+f = form();
+f.handoff(SHEET_B, false);
+f.upload(RAW_C);
+f.decodeFails(SHEET_B);
+check('a stale handoff decode failure is not reported', f.errors.length === 0);
+f = form();
+f.upload(RAW_C);
+f.readFails(RAW_C);
+check('a failed file read is reported and opens nothing', same(f.errors, [`upload ${RAW_C}`]) && same(f.state, EMPTY_CHARACTER_STATE));
+f = form();
+f.upload(RAW_C);
+f.upload('data:c2');
+f.readFails(RAW_C);
+check('a stale file read failure is not reported', f.errors.length === 0);
+
+// Auto-Prep's fit: Use This takes only a fit made for the current size, padding and base.
+const fit = { dataUrl: PREP_64, size: 64, pct: 100, baseVersion: 1 };
+check('fit current when size, padding and base match', preparedIsCurrent(fit, { size: 64, pct: 100, baseVersion: 1 }) === true);
+check('fit stale after a size change (the audit r1 P2)', preparedIsCurrent(fit, { size: 256, pct: 100, baseVersion: 1 }) === false);
+check('fit stale after a padding change', preparedIsCurrent(fit, { size: 64, pct: 75, baseVersion: 1 }) === false);
+check('fit stale after a base change (tolerance or skip)', preparedIsCurrent(fit, { size: 64, pct: 100, baseVersion: 2 }) === false);
+check('no fit yet is not current', preparedIsCurrent(null, { size: 64, pct: 100, baseVersion: 1 }) === false);
 
 // The clock itself.
 const clk = createIntentClock();

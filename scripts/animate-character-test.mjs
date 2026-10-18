@@ -4,7 +4,11 @@
 // (src/lib/animateCharacter.ts): an accepted character, pixel edits included,
 // survives every resolution change and every cancelled re-prep, and is
 // replaced only by Use This, Remove, a new upload or a handoff; Generate stays
-// blocked while the sizes differ and says why. Second 049 (Oct 16, 2026).
+// blocked while the sizes differ and says why (Second 049, Oct 16, 2026). And
+// an upload's or a handoff's late image decode never replaces a newer choice
+// or a character accepted after it (Second 055, Oct 18): the form's own
+// callbacks (beginHandoff, beginUpload, removeAll) run here with FileReader
+// and Image decodes that the test releases in any order.
 // Run from the repo root: `node scripts/animate-character-test.mjs`. Bundles
 // the module with esbuild into local/.animate-character-test/ (gitignored).
 // Prints only case names and pass or fail. No network, no DOM.
@@ -34,6 +38,10 @@ const {
   removeCharacter,
   sizeMismatch,
   generateGate,
+  createIntentClock,
+  beginHandoff,
+  beginUpload,
+  removeAll,
 } = await import(pathToFileURL(OUT).href);
 
 let failed = 0;
@@ -140,6 +148,154 @@ check('not enough tokens: "Need N more tokens"',
 check('exactly enough tokens is enabled', gate(accepted.character, 64, { tokenBalance: 5, tokenCost: 5 }).canGenerate === true);
 check('while generating the reason is null even when blocked',
   gate(accepted.character, 128, { isGenerating: true }).blockedReason === null && gate(accepted.character, 128, { isGenerating: true }).canGenerate === false);
+
+// ── 8. Ownership across late decodes: the form's own callbacks ──
+// The form passes { clock, update: setCharState, decode: new Image() }; here
+// update applies the same functional updates to a local state, and every
+// FileReader read and Image decode waits until the test releases it.
+function form() {
+  let state = EMPTY_CHARACTER_STATE;
+  const clock = createIntentClock();
+  const decodes = [];
+  const reads = [];
+  const errors = [];
+  const p = {
+    clock,
+    update: (fn) => { state = fn(state); },
+    decode: (dataUrl, onLoad, onError) => { decodes.push({ dataUrl, onLoad, onError, done: false }); },
+  };
+  const pick = (list, dataUrl) => {
+    const item = list.find((x) => x.dataUrl === dataUrl && !x.done);
+    if (!item) throw new Error(`nothing pending for ${dataUrl}`);
+    item.done = true;
+    return item;
+  };
+  return {
+    get state() { return state; },
+    clock,
+    errors,
+    handoff: (dataUrl, skip) => beginHandoff(p, dataUrl, skip, () => errors.push(`handoff ${dataUrl}`)),
+    upload: (dataUrl) =>
+      beginUpload(p, (onRead) => reads.push({ dataUrl, onRead, done: false }), () => errors.push(`upload ${dataUrl}`)),
+    remove: () => removeAll(p),
+    unmount: () => clock.take(),
+    finishRead: (dataUrl) => pick(reads, dataUrl).onRead(dataUrl),
+    decoded: (dataUrl, w, h) => pick(decodes, dataUrl).onLoad(w, h),
+    decodeFails: (dataUrl) => pick(decodes, dataUrl).onError(),
+    pendingDecodes: () => decodes.filter((d) => !d.done).map((d) => d.dataUrl),
+    useThis: (prep) => { state = acceptPrep(state, prep); },
+  };
+}
+const SHEET_B = 'data:handoff-sheet-b';
+const RAW_C = 'data:upload-c';
+const EDIT_C = 'data:upload-c-prepared-64-with-pixel-edits';
+
+// Second 055's ordering: handoff B's decode is held; the user uploads C,
+// edits and accepts it; then B's decode finishes.
+let f = form();
+f.handoff(SHEET_B, true);
+check('055: the handoff clears the form at once and its decode is pending', f.state.character === null && f.state.pending === null && same(f.pendingDecodes(), [SHEET_B]));
+f.upload(RAW_C);
+f.finishRead(RAW_C);
+f.decoded(RAW_C, 512, 512);
+check('055: the newer upload C opens its own prep', f.state.pending?.dataUrl === RAW_C && f.state.pending.skipBgRemoval === false);
+f.useThis({ dataUrl: EDIT_C, width: 64, height: 64, edited: true, skipBgRemoval: false, tolerance: 45 });
+const acceptedC = f.state.character;
+check('055: C accepted with its pixel edits', acceptedC?.dataUrl === EDIT_C && acceptedC.edited === true && f.state.pending === null);
+f.decoded(SHEET_B, 256, 256);
+check('055: the late B decode leaves the accepted C object in place', f.state.character === acceptedC);
+check('055: C keeps its pixels, size, edited flag and source',
+  f.state.character?.dataUrl === EDIT_C && f.state.character.width === 64 && f.state.character.height === 64 &&
+  f.state.character.edited === true && f.state.character.source.dataUrl === RAW_C && f.state.character.source.tolerance === 45);
+check('055: no stale B prep installed over C', f.state.pending === null);
+check('055: Generate still enabled with C at 64', gate(f.state.character, 64).canGenerate === true);
+
+// The reverse order: upload C's decode is held, then a handoff B.
+f = form();
+f.upload(RAW_C);
+f.finishRead(RAW_C);
+f.handoff(SHEET_B, false);
+f.decoded(SHEET_B, 256, 256);
+check('newer handoff B opens its prep while the older C decode is pending', f.state.pending?.dataUrl === SHEET_B);
+f.decoded(RAW_C, 512, 512);
+check('the late C decode does not replace B', f.state.pending?.dataUrl === SHEET_B && f.state.character === null);
+
+// C's file read is the slow part: it finishes after the handoff.
+f = form();
+f.upload(RAW_C);
+f.handoff(SHEET_B, false);
+f.decoded(SHEET_B, 256, 256);
+f.finishRead(RAW_C);
+f.decoded(RAW_C, 512, 512);
+check('a late FileReader finish is stale too', f.state.pending?.dataUrl === SHEET_B);
+
+// Two uploads, the older decode finishes last.
+f = form();
+f.upload('data:c1');
+f.finishRead('data:c1');
+f.upload('data:c2');
+f.finishRead('data:c2');
+f.decoded('data:c2', 40, 40);
+f.decoded('data:c1', 50, 50);
+check('two uploads: the newer one stands', f.state.pending?.dataUrl === 'data:c2' && f.state.pending.width === 40);
+
+// Remove makes every decode in flight stale.
+f = form();
+f.upload(RAW_C);
+f.finishRead(RAW_C);
+f.decoded(RAW_C, 512, 512);
+f.useThis({ dataUrl: PREP_64, width: 64, height: 64, edited: false, skipBgRemoval: false, tolerance: DEFAULT_BG_TOLERANCE });
+f.upload('data:another');
+f.finishRead('data:another');
+f.remove();
+f.decoded('data:another', 64, 64);
+check('Remove during an upload decode: the form stays empty', same(f.state, EMPTY_CHARACTER_STATE));
+f = form();
+f.handoff(SHEET_B, false);
+f.remove();
+f.decoded(SHEET_B, 256, 256);
+check('Remove during a handoff decode: the form stays empty', same(f.state, EMPTY_CHARACTER_STATE));
+
+// Unmount: the form's cleanup takes a ticket.
+f = form();
+f.handoff(SHEET_B, false);
+f.unmount();
+f.decoded(SHEET_B, 256, 256);
+check('a decode after unmount changes nothing', same(f.state, EMPTY_CHARACTER_STATE));
+
+// The current choices still work.
+f = form();
+f.handoff(SHEET_B, true);
+f.decoded(SHEET_B, 256, 256);
+check('current handoff: its prep opens with its size and the skip choice',
+  f.state.character === null && f.state.pending?.dataUrl === SHEET_B && f.state.pending.width === 256 &&
+  f.state.pending.skipBgRemoval === true && f.state.pending.tolerance === DEFAULT_BG_TOLERANCE);
+f = form();
+f.upload(RAW_C);
+f.finishRead(RAW_C);
+f.decoded(RAW_C, 512, 512);
+f.useThis({ dataUrl: PREP_64, width: 64, height: 64, edited: false, skipBgRemoval: false, tolerance: DEFAULT_BG_TOLERANCE });
+f.handoff(SHEET_B, false);
+check('a current handoff replaces an accepted character at once (unchanged policy)', f.state.character === null);
+f.decoded(SHEET_B, 256, 256);
+check('and opens its prep when decoded', f.state.pending?.dataUrl === SHEET_B);
+
+// Decode errors call the form's error handler and start nothing.
+f = form();
+f.handoff(SHEET_B, false);
+f.decodeFails(SHEET_B);
+check('handoff decode error: reported once, form empty', same(f.errors, [`handoff ${SHEET_B}`]) && same(f.state, EMPTY_CHARACTER_STATE));
+f = form();
+f.upload(RAW_C);
+f.finishRead(RAW_C);
+f.decodeFails(RAW_C);
+check('upload decode error: reported once, nothing opened', same(f.errors, [`upload ${RAW_C}`]) && same(f.state, EMPTY_CHARACTER_STATE));
+
+// The clock itself.
+const clk = createIntentClock();
+const t1 = clk.take();
+const t2 = clk.take();
+check('clock: only the latest ticket is current', t2 > t1 && clk.isCurrent(t2) && !clk.isCurrent(t1));
 
 console.log(failed === 0 ? 'all pass' : `${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

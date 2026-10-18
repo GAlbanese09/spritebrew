@@ -24,15 +24,17 @@ import {
 } from '@/lib/styleRegistry';
 import {
   EMPTY_CHARACTER_STATE,
-  DEFAULT_BG_TOLERANCE,
-  startPrep,
   startReprep,
   acceptPrep,
   cancelPrep,
-  removeCharacter,
+  createIntentClock,
+  beginHandoff,
+  beginUpload,
+  removeAll,
   generateGate,
   type CharacterState,
   type AcceptedPrep,
+  type DecodeImage,
 } from '@/lib/animateCharacter';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
@@ -92,6 +94,14 @@ const FRAME_COUNTS = [4, 6, 8, 10, 12, 16] as const;
  * transparency toggle went with it since RD now default-strips.
  */
 const DEFAULT_BG_COLOR = '#ff00ff';
+
+/** DecodeImage for the browser: the image's natural size once it loads. */
+const decodeImage: DecodeImage = (dataUrl, onLoad, onError) => {
+  const img = new Image();
+  img.onload = () => onLoad(img.naturalWidth, img.naturalHeight);
+  img.onerror = onError;
+  img.src = dataUrl;
+};
 
 /**
  * fix-a follow-up: decode → check-for-alpha → despill → re-encode.
@@ -271,6 +281,14 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   // a Send-to-Animator handoff replaces an accepted character, and cancelling
   // a prep never touches it (Second 049, Oct 16).
   const [charState, setCharState] = useState<CharacterState>(EMPTY_CHARACTER_STATE);
+  // Ownership of the character state across image decodes (Second 055): a
+  // new upload, a new handoff and Remove each take a ticket first, and a
+  // decode that finishes later starts its prep only while its ticket is
+  // still the latest. So an older decode cannot replace a newer choice or a
+  // character accepted after it. beginHandoff, beginUpload and removeAll in
+  // src/lib/animateCharacter.ts do this; the offline test drives them with
+  // decodes released out of order. A mount gets its own clock.
+  const intentClockRef = useRef(createIntentClock());
   const character = charState.character;
   const pendingPrep = charState.pending;
   const characterDataUrl = character?.dataUrl ?? null;
@@ -425,27 +443,17 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     clearPendingAnimatorSkipBgRemoval();
 
     // Clear stale character state (mirrors handleRemoveChar's character
-    // half — but keep selected action / frame count / resolution so the
+    // half, but keep selected action / frame count / resolution so the
     // user's form selections survive the handoff). The user chose this
-    // sheet on the result card, so it replaces any accepted character.
-    setCharState(removeCharacter());
-
-    const img = new Image();
-    img.onload = () => {
-      setCharState(
-        startPrep({
-          dataUrl: generatedImageDataUrl,
-          width: img.naturalWidth,
-          height: img.naturalHeight,
-          skipBgRemoval,
-          tolerance: DEFAULT_BG_TOLERANCE,
-        })
-      );
-    };
-    img.onerror = () => {
-      console.error('[animator handoff] Failed to decode preloaded character');
-    };
-    img.src = generatedImageDataUrl;
+    // sheet on the result card, so it replaces any accepted character; its
+    // prep starts when the image has decoded, unless a newer upload,
+    // handoff or Remove came first.
+    beginHandoff(
+      { clock: intentClockRef.current, update: setCharState, decode: decodeImage },
+      generatedImageDataUrl,
+      skipBgRemoval,
+      () => console.error('[animator handoff] Failed to decode preloaded character')
+    );
   }, [pendingAnimatorHandoff, pendingAnimatorSkipBgRemoval, generatedImageDataUrl, clearPendingAnimatorHandoff, clearPendingAnimatorSkipBgRemoval]);
 
   // A resolution change leaves the character in place, whichever path made
@@ -504,23 +512,16 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     }
 
     // Manual upload: Auto-Prep opens with its defaults (no lingering handoff
-    // preference). The new image replaces any accepted character.
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      const img = new Image();
-      img.onload = () => {
-        setCharState(
-          startPrep({
-            dataUrl,
-            width: img.naturalWidth,
-            height: img.naturalHeight,
-            skipBgRemoval: false,
-            tolerance: DEFAULT_BG_TOLERANCE,
-          })
-        );
-      };
-      img.onerror = () => {
+    // preference). The new image replaces any accepted character once it has
+    // decoded, unless a newer upload, handoff or Remove came first.
+    beginUpload(
+      { clock: intentClockRef.current, update: setCharState, decode: decodeImage },
+      (onRead) => {
+        const reader = new FileReader();
+        reader.onload = () => onRead(reader.result as string);
+        reader.readAsDataURL(file);
+      },
+      () => {
         const lowerName = file.name.toLowerCase();
         const isHeic =
           file.type === 'image/heic' ||
@@ -531,15 +532,22 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
           ? "iPhone HEIC photos aren't supported directly. Pick the photo from your Photos library instead (iOS converts it automatically) or export it as JPG or PNG first."
           : "Couldn't read that image file. Please try a PNG or JPG.";
         useSpriteStore.getState().setGenerationError(msg);
-      };
-      img.src = dataUrl;
-    };
-    reader.readAsDataURL(file);
+      }
+    );
   }, []);
 
-  // Remove also closes a re-prep that is open on this character.
+  // Remove also closes a re-prep that is open on this character, and makes
+  // any upload or handoff decode still in flight stale.
   const handleRemoveChar = useCallback(() => {
-    setCharState(removeCharacter());
+    removeAll({ clock: intentClockRef.current, update: setCharState });
+  }, []);
+
+  // Unmount: a decode that finishes afterwards is stale too.
+  useEffect(() => {
+    const clock = intentClockRef.current;
+    return () => {
+      clock.take();
+    };
   }, []);
 
   // Use This. On a re-prep, this is the moment the previous character (and

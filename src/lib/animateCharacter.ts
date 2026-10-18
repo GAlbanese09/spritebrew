@@ -9,7 +9,8 @@
 // values and shown on the card; it changes no state. Only the user's own
 // explicit act replaces the character: Use This on a new prep, Remove, a new
 // upload, or a Send-to-Animator handoff. Cancelling a prep never touches the
-// accepted character.
+// accepted character. An upload's or a handoff's late image decode can act
+// only for the latest choice (IntentClock, below; Second 055).
 
 /** Auto-Prep's background-removal settings. */
 export interface PrepSettings {
@@ -57,6 +58,124 @@ export const EMPTY_CHARACTER_STATE: CharacterState = { character: null, pending:
  *  so it replaces the accepted character and anything Auto-Prep had open. */
 export function startPrep(source: PrepSource): CharacterState {
   return { character: null, pending: source };
+}
+
+// ── Ownership across image decodes (Second 055, Oct 18, 2026) ──
+//
+// An upload and a Send-to-Animator handoff start their prep only after the
+// image has decoded, which happens later, in a callback. Meanwhile the user
+// may have made a newer choice (another upload or handoff, Remove) and even
+// accepted a character from it. So each of those choices takes a ticket
+// from the form's IntentClock before it changes anything, and a decode that
+// finishes later starts its prep only while its ticket is still the latest.
+// An older decode can then never replace a newer choice, or a character
+// accepted after it. The form's callbacks are the functions below, with the
+// browser's Image, FileReader and setState passed in, so the offline test
+// drives the same path with decodes it releases in any order.
+
+/** Which user choice owns the character state. One per form mount. */
+export interface IntentClock {
+  /** A ticket for a choice that is starting now; older tickets go stale. */
+  take(): number;
+  /** True while no newer choice has taken a ticket. */
+  isCurrent(ticket: number): boolean;
+}
+
+export function createIntentClock(): IntentClock {
+  let latest = 0;
+  return {
+    take: () => ++latest,
+    isCurrent: (ticket) => ticket === latest,
+  };
+}
+
+/** A decode has finished: start its prep, unless a newer choice has taken a
+ *  ticket since; then the state is returned unchanged. */
+export function finishPrepStart(
+  state: CharacterState,
+  clock: IntentClock,
+  ticket: number,
+  source: PrepSource
+): CharacterState {
+  return clock.isCurrent(ticket) ? startPrep(source) : state;
+}
+
+/** Calls onLoad with the image's natural size once it has decoded. The form
+ *  passes one built on `new Image()`. */
+export type DecodeImage = (
+  dataUrl: string,
+  onLoad: (width: number, height: number) => void,
+  onError: () => void
+) => void;
+
+/** React's functional setState for the character state. */
+export type UpdateCharacterState = (fn: (state: CharacterState) => CharacterState) => void;
+
+export interface PrepStarter {
+  clock: IntentClock;
+  update: UpdateCharacterState;
+  decode: DecodeImage;
+}
+
+/** Send to Animator. The user chose this sheet on the result card, so it
+ *  replaces any accepted character at once; its prep starts when the image
+ *  has decoded, unless a newer choice came first. */
+export function beginHandoff(
+  p: PrepStarter,
+  dataUrl: string,
+  skipBgRemoval: boolean,
+  onError: () => void
+): void {
+  const ticket = p.clock.take();
+  p.update(removeCharacter);
+  p.decode(
+    dataUrl,
+    (width, height) =>
+      p.update((s) =>
+        finishPrepStart(s, p.clock, ticket, {
+          dataUrl,
+          width,
+          height,
+          skipBgRemoval,
+          tolerance: DEFAULT_BG_TOLERANCE,
+        })
+      ),
+    onError
+  );
+}
+
+/** A file chosen in the drop zone. `read` hands back its data URL (the form
+ *  uses a FileReader). Its prep, with Auto-Prep's defaults, replaces the
+ *  character once the image has decoded, unless a newer choice came first. */
+export function beginUpload(
+  p: PrepStarter,
+  read: (onRead: (dataUrl: string) => void) => void,
+  onError: () => void
+): void {
+  const ticket = p.clock.take();
+  read((dataUrl) =>
+    p.decode(
+      dataUrl,
+      (width, height) =>
+        p.update((s) =>
+          finishPrepStart(s, p.clock, ticket, {
+            dataUrl,
+            width,
+            height,
+            skipBgRemoval: false,
+            tolerance: DEFAULT_BG_TOLERANCE,
+          })
+        ),
+      onError
+    )
+  );
+}
+
+/** Remove on the character card: clears the character and any open prep,
+ *  and makes every decode still in flight stale. */
+export function removeAll(p: Pick<PrepStarter, 'clock' | 'update'>): void {
+  p.clock.take();
+  p.update(removeCharacter);
 }
 
 /** "Prepare at N" on the character card: reopen Auto-Prep on the source the

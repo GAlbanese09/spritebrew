@@ -13,6 +13,7 @@ import {
 } from '@/lib/spriteUtils';
 import Button from '@/components/ui/Button';
 import PixelEditor from './PixelEditor';
+import { DEFAULT_BG_TOLERANCE, type AcceptedPrep } from '@/lib/animateCharacter';
 
 /**
  * State hierarchy:
@@ -34,7 +35,10 @@ interface CharacterAutoPrepProps {
   sourceWidth: number;
   sourceHeight: number;
   targetSize: number;
-  onAccept: (preparedDataUrl: string, width: number, height: number) => void;
+  /** Use This. `prep` says whether the image carries pixel edits and which
+   *  background settings were in force, so a later re-prep opens the same
+   *  way. */
+  onAccept: (preparedDataUrl: string, width: number, height: number, prep: AcceptedPrep) => void;
   onCancel: () => void;
   paddingEnabled: boolean;
   characterSizePct: number;
@@ -45,6 +49,13 @@ interface CharacterAutoPrepProps {
    *  to honor the user's result-side "Remove background" toggle choice.
    *  Initial value only — user can toggle the checkbox in-modal too. */
   initialSkipBgRemoval?: boolean;
+  /** The tolerance to open with; a re-prep passes the one Use This ended
+   *  on. Initial value only. */
+  initialTolerance?: number;
+  /** Set on a re-prep: the accepted character this prep would replace. The
+   *  cancel button then reads "Keep WxH", and when that character carries
+   *  pixel edits a note says they do not carry over. */
+  replacing?: { width: number; height: number; edited: boolean } | null;
 }
 
 type Stage = 'processing' | 'ready' | 'error';
@@ -61,6 +72,8 @@ export default function CharacterAutoPrep({
   onPaddingEnabledChange,
   onCharacterSizePctChange,
   initialSkipBgRemoval,
+  initialTolerance,
+  replacing,
 }: CharacterAutoPrepProps) {
   const [stage, setStage] = useState<Stage>('processing');
   const [preparedDataUrl, setPreparedDataUrl] = useState<string | null>(null);
@@ -68,7 +81,7 @@ export default function CharacterAutoPrep({
   const [spriteCount, setSpriteCount] = useState(0);
   const [sourceHasAlpha, setSourceHasAlpha] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tolerance, setTolerance] = useState(30);
+  const [tolerance, setTolerance] = useState(initialTolerance ?? DEFAULT_BG_TOLERANCE);
   const [skipBgRemoval, setSkipBgRemoval] = useState(initialSkipBgRemoval ?? false);
   const [editorOpen, setEditorOpen] = useState(false);
 
@@ -82,7 +95,7 @@ export default function CharacterAutoPrep({
   const croppedHasAlphaRef = useRef(false);
   const bgRemovedRef = useRef<HTMLCanvasElement | null>(null);
   const lastSourceRef = useRef<string | null>(null);
-  const lastToleranceRef = useRef<number>(30);
+  const lastToleranceRef = useRef<number>(initialTolerance ?? DEFAULT_BG_TOLERANCE);
 
   const effectivePct = paddingEnabled ? characterSizePct : 100;
 
@@ -264,8 +277,12 @@ export default function CharacterAutoPrep({
 
   const handleAccept = useCallback(() => {
     if (!preparedDataUrl) return;
-    onAccept(preparedDataUrl, targetSize, targetSize);
-  }, [preparedDataUrl, targetSize, onAccept]);
+    onAccept(preparedDataUrl, targetSize, targetSize, {
+      edited: editedBaseDataUrl !== null,
+      skipBgRemoval,
+      tolerance,
+    });
+  }, [preparedDataUrl, targetSize, onAccept, editedBaseDataUrl, skipBgRemoval, tolerance]);
 
   /** Pixel editor saved — store as the user's edited base image. */
   const handleEditorSave = useCallback(
@@ -519,10 +536,19 @@ export default function CharacterAutoPrep({
         </>
       )}
 
-      {/* Actions */}
+      {/* On a re-prep of a character with pixel edits: those edits were made
+          at the old size and are not in this prep. Said before the buttons,
+          since Use This is the click that replaces that character. */}
+      {replacing?.edited && (
+        <p className="text-[10px] font-mono text-amber-400">
+          Your pixel edits are on the {replacing.width}x{replacing.height} version and do not carry over. Use This replaces it.
+        </p>
+      )}
+
+      {/* Actions. On a re-prep the cancel keeps the accepted character. */}
       <div className="flex items-center justify-between gap-2 pt-2 border-t border-border-subtle">
         <Button variant="ghost" size="sm" onClick={onCancel}>
-          Upload Different
+          {replacing ? `Keep ${replacing.width}x${replacing.height}` : 'Upload Different'}
         </Button>
         <div className="flex items-center gap-2">
           {stage === 'ready' && preparedDataUrl && (

@@ -22,6 +22,18 @@ import {
   ADVANCED_ANIM_RESOLUTION_PRESETS,
   ADVANCED_ANIM_DEFAULT_RESOLUTION,
 } from '@/lib/styleRegistry';
+import {
+  EMPTY_CHARACTER_STATE,
+  DEFAULT_BG_TOLERANCE,
+  startPrep,
+  startReprep,
+  acceptPrep,
+  cancelPrep,
+  removeCharacter,
+  generateGate,
+  type CharacterState,
+  type AcceptedPrep,
+} from '@/lib/animateCharacter';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
 import { ANIMATE_INPUT_B64_CLIENT_MAX } from '@/lib/constants';
@@ -250,18 +262,21 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const restoringPaddingRef = useRef(false);
   const restoringResolutionRef = useRef(false);
 
-  // Character state
-  const [characterDataUrl, setCharacterDataUrl] = useState<string | null>(null);
-  const [charWidth, setCharWidth] = useState(0);
-  const [charHeight, setCharHeight] = useState(0);
-  // Captured from spriteStore.pendingAnimatorSkipBgRemoval at handoff-consume
-  // time, forwarded to CharacterAutoPrep as initialSkipBgRemoval. Reset to
-  // false on manual file upload so the handoff preference only applies to
-  // handoff-sourced characters.
-  const [handoffSkipBgRemoval, setHandoffSkipBgRemoval] = useState(false);
-  const [pendingDataUrl, setPendingDataUrl] = useState<string | null>(null);
-  const [pendingWidth, setPendingWidth] = useState(0);
-  const [pendingHeight, setPendingHeight] = useState(0);
+  // Character state: the accepted character, and the source Auto-Prep is
+  // open on, if any. The transitions are the pure functions in
+  // src/lib/animateCharacter.ts, which the offline test drives. A resolution
+  // change never touches this state: a size mismatch is derived from the
+  // character and selectedResolution (generateGate, below) and shown on the
+  // card with a "Prepare at N" button. Only Use This, Remove, a new upload or
+  // a Send-to-Animator handoff replaces an accepted character, and cancelling
+  // a prep never touches it (Second 049, Oct 16).
+  const [charState, setCharState] = useState<CharacterState>(EMPTY_CHARACTER_STATE);
+  const character = charState.character;
+  const pendingPrep = charState.pending;
+  const characterDataUrl = character?.dataUrl ?? null;
+  const charWidth = character?.width ?? 0;
+  const charHeight = character?.height ?? 0;
+  const pendingDataUrl = pendingPrep?.dataUrl ?? null;
   // bgColor + transparentBg state, refs, effects, and UI removed July 15.
   // Fill is now the DEFAULT_BG_COLOR module constant; remove_bg is
   // unconditional on every animate request. SavedAnimateConfig still
@@ -402,7 +417,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     // Capture the skip-bg preference BEFORE clearing the flag — otherwise
     // the AutoPrep modal would mount with the default (false) and ignore
     // the user's result-side choice.
-    setHandoffSkipBgRemoval(pendingAnimatorSkipBgRemoval);
+    const skipBgRemoval = pendingAnimatorSkipBgRemoval;
 
     // Consume both flags immediately, before the async image decode, so a
     // re-render mid-load can't trigger this effect a second time.
@@ -411,16 +426,21 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
     // Clear stale character state (mirrors handleRemoveChar's character
     // half — but keep selected action / frame count / resolution so the
-    // user's form selections survive the handoff).
-    setCharacterDataUrl(null);
-    setCharWidth(0);
-    setCharHeight(0);
+    // user's form selections survive the handoff). The user chose this
+    // sheet on the result card, so it replaces any accepted character.
+    setCharState(removeCharacter());
 
     const img = new Image();
     img.onload = () => {
-      setPendingDataUrl(generatedImageDataUrl);
-      setPendingWidth(img.naturalWidth);
-      setPendingHeight(img.naturalHeight);
+      setCharState(
+        startPrep({
+          dataUrl: generatedImageDataUrl,
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+          skipBgRemoval,
+          tolerance: DEFAULT_BG_TOLERANCE,
+        })
+      );
     };
     img.onerror = () => {
       console.error('[animator handoff] Failed to decode preloaded character');
@@ -428,18 +448,29 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     img.src = generatedImageDataUrl;
   }, [pendingAnimatorHandoff, pendingAnimatorSkipBgRemoval, generatedImageDataUrl, clearPendingAnimatorHandoff, clearPendingAnimatorSkipBgRemoval]);
 
-  // When resolution changes after a character is already prepped, leave the
-  // character in place and let the sizeWarning/canGenerate gate (line ~1032)
-  // tell the user the dims don't match — they can either click back to the
-  // matching size, re-upload, or (if we ever add it) re-run Auto-Prep at
-  // the new size. Pre-July-16 this callback cleared the character AND
-  // never repopulated pendingDataUrl (the "Re-show the pending image"
-  // comment was aspirational, not implemented), which forced the user to
-  // re-upload just to inspect a different size option. Removed July 16.
+  // A resolution change leaves the character in place, whichever path made
+  // it (this picker, a template load, the restored config, the mode snap).
+  // When the character is another size, generateGate blocks Generate and
+  // names the size, and the card shows it with a "Prepare at N" button
+  // (handleReprep). Choosing the character's own size again enables
+  // Generate at once; nothing was discarded. Before Use This, Auto-Prep is
+  // open and re-fits to the new size itself. Pre-July-16 this callback
+  // cleared the character and never repopulated the pending source, which
+  // forced the user to re-upload just to inspect a different size option.
   const handleResolutionChange = useCallback((newRes: number) => {
     if (newRes === selectedResolution) return;
     setSelectedResolution(newRes);
   }, [selectedResolution]);
+
+  // "Prepare at N" on the character card: reopen Auto-Prep on the source the
+  // character was prepared from, with the settings in force at Use This.
+  // The card stays until Use This replaces the character; "Keep WxH" in
+  // Auto-Prep closes it with the character untouched. Pixel edits were made
+  // at the old size and cannot carry over, so Auto-Prep says so when the
+  // character has them.
+  const handleReprep = useCallback(() => {
+    setCharState(startReprep);
+  }, []);
 
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -472,21 +503,22 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       return;
     }
 
-    // Manual upload — reset any lingering handoff preference so it only
-    // applies to the original handoff-sourced character.
-    setHandoffSkipBgRemoval(false);
-
+    // Manual upload: Auto-Prep opens with its defaults (no lingering handoff
+    // preference). The new image replaces any accepted character.
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
       const img = new Image();
       img.onload = () => {
-        setPendingDataUrl(dataUrl);
-        setPendingWidth(img.naturalWidth);
-        setPendingHeight(img.naturalHeight);
-        setCharacterDataUrl(null);
-        setCharWidth(0);
-        setCharHeight(0);
+        setCharState(
+          startPrep({
+            dataUrl,
+            width: img.naturalWidth,
+            height: img.naturalHeight,
+            skipBgRemoval: false,
+            tolerance: DEFAULT_BG_TOLERANCE,
+          })
+        );
       };
       img.onerror = () => {
         const lowerName = file.name.toLowerCase();
@@ -505,31 +537,24 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     reader.readAsDataURL(file);
   }, []);
 
+  // Remove also closes a re-prep that is open on this character.
   const handleRemoveChar = useCallback(() => {
-    setCharacterDataUrl(null);
-    setCharWidth(0);
-    setCharHeight(0);
-    setPendingDataUrl(null);
-    setPendingWidth(0);
-    setPendingHeight(0);
+    setCharState(removeCharacter());
   }, []);
 
+  // Use This. On a re-prep, this is the moment the previous character (and
+  // any pixel edits it carried) is replaced.
   const handleAutoPrepAccept = useCallback(
-    (preparedDataUrl: string, w: number, h: number) => {
-      setCharacterDataUrl(preparedDataUrl);
-      setCharWidth(w);
-      setCharHeight(h);
-      setPendingDataUrl(null);
-      setPendingWidth(0);
-      setPendingHeight(0);
+    (preparedDataUrl: string, w: number, h: number, prep: AcceptedPrep) => {
+      setCharState((s) => acceptPrep(s, { dataUrl: preparedDataUrl, width: w, height: h, ...prep }));
     },
     []
   );
 
+  // Upload Different on a fresh prep, Keep WxH on a re-prep: Auto-Prep
+  // closes; an accepted character is untouched.
   const handleAutoPrepCancel = useCallback(() => {
-    setPendingDataUrl(null);
-    setPendingWidth(0);
-    setPendingHeight(0);
+    setCharState(cancelPrep);
   }, []);
 
   // Template handlers (v0.5.12 Piece B).
@@ -1050,9 +1075,19 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     setGenerationProgress(poll.startedAt, poll.serverStatus, poll.mode, poll.pausedMessage);
   }, [poll.startedAt, poll.serverStatus, poll.mode, poll.pausedMessage, setGenerationProgress]);
 
-  const sizeWarning = charWidth > 0 && (charWidth !== selectedResolution || charHeight !== selectedResolution);
   const isCustomAction = selectedAction === 'custom_action';
-  const canGenerate = characterDataUrl && !sizeWarning && (!isCustomAction || motionPrompt.trim()) && !insufficientTokens;
+  // sizeWarning: the character is present and not the selected size.
+  // generateBlockedReason: the first reason Generate is disabled, in
+  // canGenerate's order; null while generating or when Generate is enabled.
+  const { canGenerate, sizeWarning, blockedReason: generateBlockedReason } = generateGate({
+    character,
+    selectedResolution,
+    isCustomAction,
+    motionPrompt,
+    tokenBalance,
+    tokenCost,
+    isGenerating,
+  });
 
   return (
     <>
@@ -1087,9 +1122,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
                 <p className="text-[10px] font-mono text-text-muted mt-1">
                   {charWidth}x{charHeight} · transparent background
                 </p>
-                <p className="text-[10px] font-mono text-green-400 mt-1">
-                  Ready for animation
-                </p>
+                {sizeWarning ? (
+                  <p className="text-[10px] font-mono text-red-400 mt-1">
+                    Prepared at {charWidth}x{charHeight}. Choose {charWidth} or prepare it again.
+                  </p>
+                ) : (
+                  <p className="text-[10px] font-mono text-green-400 mt-1">
+                    Ready for animation
+                  </p>
+                )}
               </div>
               <button
                 onClick={handleRemoveChar}
@@ -1098,6 +1139,19 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
                 <X size={16} />
               </button>
             </div>
+            {/* Under the row, so it has the card's full width on a phone.
+                Hidden while the re-prep is open below; Remove still works. */}
+            {sizeWarning && !pendingPrep && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="mt-3 whitespace-nowrap"
+                onClick={handleReprep}
+              >
+                Prepare at {selectedResolution}x{selectedResolution}
+              </Button>
+            )}
           </div>
         ) : pendingDataUrl ? null : (
           <div
@@ -1186,12 +1240,14 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         )}
       </div>
 
-      {/* Auto-prep pipeline — resizes to selectedResolution × selectedResolution */}
-      {pendingDataUrl && (
+      {/* Auto-prep pipeline: resizes to selectedResolution x selectedResolution.
+          With a character present this is a re-prep from the card's "Prepare
+          at N": the card stays above until Use This replaces it. */}
+      {pendingPrep && (
         <CharacterAutoPrep
-          sourceDataUrl={pendingDataUrl}
-          sourceWidth={pendingWidth}
-          sourceHeight={pendingHeight}
+          sourceDataUrl={pendingPrep.dataUrl}
+          sourceWidth={pendingPrep.width}
+          sourceHeight={pendingPrep.height}
           targetSize={selectedResolution}
           onAccept={handleAutoPrepAccept}
           onCancel={handleAutoPrepCancel}
@@ -1199,7 +1255,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
           characterSizePct={characterSizePct}
           onPaddingEnabledChange={setPaddingEnabled}
           onCharacterSizePctChange={setCharacterSizePct}
-          initialSkipBgRemoval={handoffSkipBgRemoval}
+          initialSkipBgRemoval={pendingPrep.skipBgRemoval}
+          initialTolerance={pendingPrep.tolerance}
+          replacing={character ? { width: charWidth, height: charHeight, edited: character.edited } : null}
         />
       )}
 
@@ -1464,7 +1522,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             onClick={handleGenerate}
             disabled={!canGenerate || isGenerating}
             className={`w-full sm:w-auto whitespace-nowrap ${!isGenerating && canGenerate ? 'animate-pulse' : ''}`}
-            title={insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
+            title={generateBlockedReason ?? (insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined)}
+            aria-describedby={generateBlockedReason ? 'animate-generate-blocked-reason' : undefined}
           >
             {isGenerating ? (
               <>
@@ -1483,6 +1542,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
               </>
             )}
           </Button>
+          {generateBlockedReason && (
+            <span id="animate-generate-blocked-reason" className="sr-only">
+              {generateBlockedReason}
+            </span>
+          )}
         </div>
       </div>
     </div>

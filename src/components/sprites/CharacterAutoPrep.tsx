@@ -13,20 +13,34 @@ import {
 } from '@/lib/spriteUtils';
 import Button from '@/components/ui/Button';
 import PixelEditor from './PixelEditor';
+import {
+  DEFAULT_BG_TOLERANCE,
+  preparedIsCurrent,
+  type AcceptedPrep,
+  type PreparedFit,
+} from '@/lib/animateCharacter';
 
 /**
  * State hierarchy:
  *
  *   sourceDataUrl (original upload)
  *     → detect + crop → croppedCanvasRef
- *       → bg remove (tolerance) → bgRemovedRef
- *         → fit (padding %) → auto-prepped 64×64
+ *       → bg remove (tolerance) → bgRemovedRef                 stage 1, the base
+ *         → fit (target size, padding %) → prepared           stage 2, the fit
  *           → [user pixel edits] → editedBaseDataUrl  ← user's source of truth
- *             → fit (padding %) → preparedDataUrl     ← what's displayed + sent to API
+ *             → fit (target size, padding %) → prepared        ← displayed + sent
  *
- * When editedBaseDataUrl is set, padding changes apply to IT — not to the
- * pipeline cache. Tolerance changes warn and clear edits because they change
- * the base the user edited on top of.
+ * Two stages (Oct 18, 2026, audit r1). Stage 1 runs when the source changes
+ * and again when the tolerance or the skip toggle changes the base; it never
+ * fits. Stage 2 fits the base, or the edited image when there is one, and
+ * re-runs whenever the target size, the padding or the base changes, always
+ * with the values in force at that moment, never the ones captured when
+ * processing began. A fit records what it was made for; Use This and Edit
+ * are disabled until the fit on display matches the current size, padding
+ * and base. When editedBaseDataUrl is set, size and padding changes re-fit
+ * IT, not the pipeline cache. Only a base change clears edits: a new source,
+ * a tolerance change (which warns first), or the skip toggle. A size or
+ * padding change never does.
  */
 
 interface CharacterAutoPrepProps {
@@ -34,7 +48,10 @@ interface CharacterAutoPrepProps {
   sourceWidth: number;
   sourceHeight: number;
   targetSize: number;
-  onAccept: (preparedDataUrl: string, width: number, height: number) => void;
+  /** Use This. `prep` says whether the image carries pixel edits and which
+   *  background settings were in force, so a later re-prep opens the same
+   *  way. */
+  onAccept: (preparedDataUrl: string, width: number, height: number, prep: AcceptedPrep) => void;
   onCancel: () => void;
   paddingEnabled: boolean;
   characterSizePct: number;
@@ -45,6 +62,13 @@ interface CharacterAutoPrepProps {
    *  to honor the user's result-side "Remove background" toggle choice.
    *  Initial value only — user can toggle the checkbox in-modal too. */
   initialSkipBgRemoval?: boolean;
+  /** The tolerance to open with; a re-prep passes the one Use This ended
+   *  on. Initial value only. */
+  initialTolerance?: number;
+  /** Set on a re-prep: the accepted character this prep would replace. The
+   *  cancel button then reads "Keep WxH", and when that character carries
+   *  pixel edits a note says they do not carry over. */
+  replacing?: { width: number; height: number; edited: boolean } | null;
 }
 
 type Stage = 'processing' | 'ready' | 'error';
@@ -61,62 +85,63 @@ export default function CharacterAutoPrep({
   onPaddingEnabledChange,
   onCharacterSizePctChange,
   initialSkipBgRemoval,
+  initialTolerance,
+  replacing,
 }: CharacterAutoPrepProps) {
   const [stage, setStage] = useState<Stage>('processing');
-  const [preparedDataUrl, setPreparedDataUrl] = useState<string | null>(null);
+  // The fitted image on display, with what it was fitted for (stage 2).
+  const [prepared, setPrepared] = useState<PreparedFit | null>(null);
   const [cropBBox, setCropBBox] = useState<DetectedSprite | null>(null);
   const [spriteCount, setSpriteCount] = useState(0);
   const [sourceHasAlpha, setSourceHasAlpha] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tolerance, setTolerance] = useState(30);
+  const [tolerance, setTolerance] = useState(initialTolerance ?? DEFAULT_BG_TOLERANCE);
   const [skipBgRemoval, setSkipBgRemoval] = useState(initialSkipBgRemoval ?? false);
   const [editorOpen, setEditorOpen] = useState(false);
 
-  // The user's manually edited 64×64 image. When set, padding changes apply
-  // to this instead of the pipeline cache. Cleared when tolerance changes or
-  // a new source is uploaded.
+  // The user's manually edited image: the displayed image at save time, so
+  // it carries that moment's size and padding. When set, a size or padding
+  // change re-fits it instead of the pipeline base. Cleared only when the
+  // base changes (a new source, a tolerance change, the skip toggle), never
+  // by a size or padding change. The ref is what the fit effect reads, so a
+  // save does not re-fit the edited image at the size it was saved at.
   const [editedBaseDataUrl, setEditedBaseDataUrl] = useState<string | null>(null);
+  const editedBaseRef = useRef<string | null>(null);
+  const setEditedBase = useCallback((url: string | null) => {
+    editedBaseRef.current = url;
+    setEditedBaseDataUrl(url);
+  }, []);
 
-  // Pipeline caches
+  // Pipeline caches (stage 1)
   const croppedCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const croppedHasAlphaRef = useRef(false);
   const bgRemovedRef = useRef<HTMLCanvasElement | null>(null);
   const lastSourceRef = useRef<string | null>(null);
-  const lastToleranceRef = useRef<number>(30);
+  const lastToleranceRef = useRef<number>(initialTolerance ?? DEFAULT_BG_TOLERANCE);
+  const lastSkipRef = useRef<boolean>(initialSkipBgRemoval ?? false);
+  // Bumped whenever bgRemovedRef changes. Stage 2 re-runs on it, and a fit
+  // carries the version it was made from. 0 means no base yet.
+  const [baseVersion, setBaseVersion] = useState(0);
 
   const effectivePct = paddingEnabled ? characterSizePct : 100;
+  const fitCurrent = preparedIsCurrent(prepared, { size: targetSize, pct: effectivePct, baseVersion });
+  const preparedDataUrl = prepared?.dataUrl ?? null;
+  const shownSize = prepared?.size ?? targetSize;
 
-  // ── Compute the display image from the right source ──
-  const recomputeDisplay = useCallback(
-    async (pct: number) => {
-      if (editedBaseDataUrl) {
-        // User has manual edits — apply padding to their edited image
-        const img = await loadImage(editedBaseDataUrl);
-        const prepared = fitToTransparentSquarePadded(img, targetSize, pct);
-        setPreparedDataUrl(prepared);
-      } else if (bgRemovedRef.current) {
-        // No edits — apply padding to the auto-prepped image
-        const prepared = fitToTransparentSquarePadded(
-          bgRemovedRef.current,
-          targetSize,
-          pct
-        );
-        setPreparedDataUrl(prepared);
-      }
-    },
-    [editedBaseDataUrl, targetSize]
-  );
-
-  // ── Full pipeline: runs when source changes ──
+  // ── Stage 1, the base: detect, crop, remove the background. Runs when
+  // the source changes. It never fits: that is stage 2's job, so the fit
+  // uses the size and padding in force when the base is ready, not the ones
+  // captured when processing began (a size change during processing used to
+  // ship an image of the old size under the new label).
   useEffect(() => {
     if (lastSourceRef.current === sourceDataUrl) return;
 
     let cancelled = false;
     setStage('processing');
-    setPreparedDataUrl(null);
+    setPrepared(null);
     setCropBBox(null);
     setError(null);
-    setEditedBaseDataUrl(null); // new source clears edits
+    setEditedBase(null); // new source clears edits
 
     (async () => {
       try {
@@ -168,10 +193,8 @@ export default function CharacterAutoPrep({
         bgRemovedRef.current = bgRemovedCanvas;
         lastSourceRef.current = sourceDataUrl;
         lastToleranceRef.current = tolerance;
-
-        const prepared = fitToTransparentSquarePadded(bgRemovedCanvas, targetSize, effectivePct);
-        if (cancelled) return;
-        setPreparedDataUrl(prepared);
+        lastSkipRef.current = skipBgRemoval;
+        setBaseVersion((v) => v + 1);
         setStage('ready');
       } catch (err) {
         if (!cancelled) {
@@ -185,11 +208,12 @@ export default function CharacterAutoPrep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceDataUrl]);
 
-  // ── Re-run bg removal when tolerance changes ──
+  // ── Stage 1 again: a new tolerance (base ready, opaque source, removal
+  // on). The edits were made on the old base, so they go; stage 2 re-fits.
   useEffect(() => {
     if (!croppedCanvasRef.current || lastSourceRef.current !== sourceDataUrl) return;
     if (croppedHasAlphaRef.current) return;
-    if (skipBgRemoval) return; // user opted out — tolerance slider is hidden anyway
+    if (skipBgRemoval) return; // user opted out, the tolerance slider is hidden anyway
     if (tolerance === lastToleranceRef.current) return; // no change
 
     let cancelled = false;
@@ -198,29 +222,26 @@ export default function CharacterAutoPrep({
         const { dataUrl } = removeBackgroundColor(croppedCanvasRef.current!, tolerance);
         const removedImg = await loadImage(dataUrl);
         if (cancelled) return;
-        const bgRemovedCanvas = imageToCanvas(removedImg);
-        bgRemovedRef.current = bgRemovedCanvas;
+        bgRemovedRef.current = imageToCanvas(removedImg);
         lastToleranceRef.current = tolerance;
-
-        // Tolerance change invalidates manual edits — they were based on the
-        // old bg removal. Clear edits so padding applies to the new base.
-        setEditedBaseDataUrl(null);
-
-        const prepared = fitToTransparentSquarePadded(bgRemovedCanvas, targetSize, effectivePct);
-        if (!cancelled) setPreparedDataUrl(prepared);
+        setEditedBase(null);
+        setBaseVersion((v) => v + 1);
       } catch {
         // ignore
       }
     })();
     return () => { cancelled = true; };
-  }, [sourceDataUrl, tolerance, targetSize, effectivePct, skipBgRemoval]);
+  }, [sourceDataUrl, tolerance, skipBgRemoval, setEditedBase]);
 
-  // ── Re-run pipeline when skipBgRemoval toggles post-mount ──
-  // Mirrors the tolerance-change effect's shape: clears manual edits (because
-  // the base image just changed), recomputes bgRemovedRef, re-fits the display.
+  // ── Stage 1 again: the skip-background toggle (base ready, opaque
+  // source). The edits were made on the old base, so they go; stage 2
+  // re-fits. Only an actual toggle gets past the lastSkipRef check: this
+  // effect used to list the size and the padding as dependencies, so either
+  // of those changes re-ran it and silently cleared the edits (BUILD, Oct 18).
   useEffect(() => {
     if (!croppedCanvasRef.current || lastSourceRef.current !== sourceDataUrl) return;
     if (croppedHasAlphaRef.current) return; // input already transparent, toggle has no effect
+    if (skipBgRemoval === lastSkipRef.current) return; // no change
 
     let cancelled = false;
     (async () => {
@@ -236,47 +257,93 @@ export default function CharacterAutoPrep({
           lastToleranceRef.current = tolerance;
         }
         bgRemovedRef.current = bgRemovedCanvas;
-
-        // Toggling skip changes the base; clear manual edits so padding
-        // applies to the new base.
-        setEditedBaseDataUrl(null);
-
-        const prepared = fitToTransparentSquarePadded(bgRemovedCanvas, targetSize, effectivePct);
-        if (!cancelled) setPreparedDataUrl(prepared);
+        lastSkipRef.current = skipBgRemoval;
+        setEditedBase(null);
+        setBaseVersion((v) => v + 1);
       } catch {
         // ignore
       }
     })();
     return () => { cancelled = true; };
-    // tolerance is intentionally NOT in deps — that's the other effect's job.
+    // tolerance is intentionally NOT in deps: that's the other effect's job.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [skipBgRemoval, sourceDataUrl, targetSize, effectivePct]);
+  }, [skipBgRemoval, sourceDataUrl]);
 
-  // ── Re-fit when padding OR target size changes — uses editedBaseDataUrl if available ──
-  // effectivePct + targetSize fully cover when re-fitting is needed;
-  // other refs are intentionally read via closure to avoid stale-data races.
+  // ── Stage 2, the fit: the base, or the edited image when there is one, at
+  // the current target size and padding. Re-runs when any of those change
+  // and whenever the base changes, always with the values in force now. The
+  // latest run cancels the earlier one, so two quick changes cannot land out
+  // of order. The edited image is read from its ref, not a dependency: a
+  // save sets the display itself (handleEditorSave) and must not be fitted
+  // again at the size and padding it was saved at. A fit that fails shows
+  // the error stage, as a failed pipeline does, instead of throwing out of
+  // the effect or leaving Use This waiting on a fit that never comes (audit
+  // r2); the next fit that succeeds (another size, say) clears it again
+  // (audit r3). That is safe because stage 2 only runs once a base exists,
+  // and a new source always gets a fresh component (the key in AnimateForm),
+  // so the processing stage only ever precedes the first base.
   useEffect(() => {
-    if (lastSourceRef.current !== sourceDataUrl) return;
-    if (stage !== 'ready') return;
-    recomputeDisplay(effectivePct);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectivePct, targetSize]);
+    if (baseVersion === 0) return;
+    const size = targetSize;
+    const pct = effectivePct;
+    const editedBase = editedBaseRef.current;
+    const show = (dataUrl: string) => {
+      setPrepared({ dataUrl, size, pct, baseVersion });
+      setError(null);
+      setStage('ready');
+    };
+    const fail = (err: unknown) => {
+      setError(err instanceof Error ? err.message : 'Preparation failed');
+      setStage('error');
+    };
+    if (!editedBase) {
+      const base = bgRemovedRef.current;
+      if (!base) return;
+      try {
+        show(fitToTransparentSquarePadded(base, size, pct));
+      } catch (err) {
+        fail(err);
+      }
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const img = await loadImage(editedBase);
+        if (cancelled) return;
+        show(fitToTransparentSquarePadded(img, size, pct));
+      } catch (err) {
+        if (!cancelled) fail(err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [baseVersion, targetSize, effectivePct]);
 
+  // Use This takes the fit on display, and only while it is the current
+  // one, so what the parent records as the size is the size of the image.
   const handleAccept = useCallback(() => {
-    if (!preparedDataUrl) return;
-    onAccept(preparedDataUrl, targetSize, targetSize);
-  }, [preparedDataUrl, targetSize, onAccept]);
+    if (!fitCurrent) return;
+    onAccept(prepared.dataUrl, prepared.size, prepared.size, {
+      edited: editedBaseDataUrl !== null,
+      skipBgRemoval,
+      tolerance,
+    });
+  }, [fitCurrent, prepared, onAccept, editedBaseDataUrl, skipBgRemoval, tolerance]);
 
-  /** Pixel editor saved — store as the user's edited base image. */
+  /** Pixel editor saved: the edited image becomes the user's base and the
+   *  display, at the size and padding of the image it was made from. */
   const handleEditorSave = useCallback(
     (editedDataUrl: string) => {
-      // The editor edits the DISPLAYED image (which may include padding).
-      // Store this as the base; padding changes will re-apply on top.
-      setEditedBaseDataUrl(editedDataUrl);
-      setPreparedDataUrl(editedDataUrl);
+      setEditedBase(editedDataUrl);
+      setPrepared((p) => ({
+        dataUrl: editedDataUrl,
+        size: p?.size ?? targetSize,
+        pct: p?.pct ?? effectivePct,
+        baseVersion,
+      }));
       setEditorOpen(false);
     },
-    []
+    [setEditedBase, targetSize, effectivePct, baseVersion]
   );
 
   /** Tolerance slider change with edit protection. */
@@ -294,7 +361,7 @@ export default function CharacterAutoPrep({
     [editedBaseDataUrl]
   );
 
-  const previewScale = Math.max(1, Math.floor(256 / targetSize));
+  const previewScale = Math.max(1, Math.floor(256 / shownSize));
 
   return (
     <div className="rounded-lg border border-accent-amber/30 bg-bg-surface p-5 space-y-4">
@@ -362,9 +429,9 @@ export default function CharacterAutoPrep({
             <div className="text-center">
               <p className="text-[9px] font-mono text-accent-amber mb-1.5 uppercase tracking-wider">
                 {editedBaseDataUrl ? 'Edited' : 'Prepared'}
-                {/* Was: ${cropBBox.width}x${cropBBox.height} (showed pre-resize bbox)
-                    Now: ${targetSize}x${targetSize} (matches actual preparedDataUrl resolution) */}
-                {cropBBox && !editedBaseDataUrl && ` (${targetSize}x${targetSize})`}
+                {/* The size of the image on display, which is the target
+                    size except for the moment a fit is pending. */}
+                {cropBBox && !editedBaseDataUrl && ` (${shownSize}x${shownSize})`}
               </p>
               <div
                 className="inline-block rounded border border-accent-amber/40 overflow-hidden"
@@ -381,15 +448,21 @@ export default function CharacterAutoPrep({
                     alt="Prepared character"
                     className="block pixel-art-render"
                     style={{
-                      width: targetSize * previewScale,
-                      height: targetSize * previewScale,
+                      width: shownSize * previewScale,
+                      height: shownSize * previewScale,
                     }}
                   />
                 )}
               </div>
-              <p className="text-[9px] font-mono text-green-400 mt-1.5">
-                Ready for animation ({targetSize}x{targetSize})
-              </p>
+              {fitCurrent ? (
+                <p className="text-[9px] font-mono text-green-400 mt-1.5">
+                  Ready for animation ({prepared.size}x{prepared.size})
+                </p>
+              ) : (
+                <p className="text-[9px] font-mono text-accent-amber mt-1.5">
+                  Preparing character...
+                </p>
+              )}
             </div>
           </div>
 
@@ -519,19 +592,28 @@ export default function CharacterAutoPrep({
         </>
       )}
 
-      {/* Actions */}
+      {/* On a re-prep of a character with pixel edits: those edits were made
+          at the old size and are not in this prep. Said before the buttons,
+          since Use This is the click that replaces that character. */}
+      {replacing?.edited && (
+        <p className="text-[10px] font-mono text-amber-400">
+          Your pixel edits are on the {replacing.width}x{replacing.height} version and do not carry over. Use This replaces it.
+        </p>
+      )}
+
+      {/* Actions. On a re-prep the cancel keeps the accepted character. */}
       <div className="flex items-center justify-between gap-2 pt-2 border-t border-border-subtle">
         <Button variant="ghost" size="sm" onClick={onCancel}>
-          Upload Different
+          {replacing ? `Keep ${replacing.width}x${replacing.height}` : 'Upload Different'}
         </Button>
         <div className="flex items-center gap-2">
           {stage === 'ready' && preparedDataUrl && (
-            <Button variant="secondary" size="sm" onClick={() => setEditorOpen(true)}>
+            <Button variant="secondary" size="sm" onClick={() => setEditorOpen(true)} disabled={!fitCurrent}>
               <Pencil size={14} />
               Edit
             </Button>
           )}
-          <Button variant="primary" size="sm" onClick={handleAccept} disabled={stage !== 'ready'}>
+          <Button variant="primary" size="sm" onClick={handleAccept} disabled={stage !== 'ready' || !fitCurrent}>
             <Check size={14} />
             Use This
           </Button>
@@ -539,11 +621,11 @@ export default function CharacterAutoPrep({
       </div>
 
       {/* Pixel Editor modal */}
-      {editorOpen && preparedDataUrl && (
+      {editorOpen && prepared && (
         <PixelEditor
-          frameDataUrl={preparedDataUrl}
-          frameWidth={targetSize}
-          frameHeight={targetSize}
+          frameDataUrl={prepared.dataUrl}
+          frameWidth={prepared.size}
+          frameHeight={prepared.size}
           onSave={handleEditorSave}
           onClose={() => setEditorOpen(false)}
           source={{ kind: 'upload' }}

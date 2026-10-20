@@ -18,7 +18,7 @@
 //   4. Dimension-based fallback (square to 4x4, strip to W/H columns, etc.)
 
 import { SLICER_FRAME_PRESETS } from '@/lib/constants';
-import { cellHoldsTwoQuadrants, countGridCuts } from '@/lib/gridDetect';
+import { cellHoldsTwoQuadrants, crossesOnlyThinly } from '@/lib/gridDetect';
 import { detectFrameGridFromPixels } from '@/lib/spriteUtils';
 
 export type DetectionConfidence = 'high' | 'medium' | 'low';
@@ -205,12 +205,18 @@ export function detectGridSmart(imgData: ImageData): DetectionResult {
   //      49 for 48 (3 rows of 64) falls through to the shape steps instead.
   //    - The clean grid only takes a size whose cells are at least half
   //      filled, so a 4x4 template of 128 px frames with 3 to 7 frames drawn
-  //      comes back as 2x2 of 256 (audit r5). When the grid with twice the
-  //      columns and rows is valid, cuts no sprite, and splits some cell's
-  //      content into two of its quadrants, that cell held two frames, not
-  //      one, and the finer grid answers instead, as 'medium': a grid the
-  //      pixels allow rather than force. One sprite per big cell (a real
-  //      2x2 of 256 with small sprites) keeps the coarse answer.
+  //      comes back as 2x2 of 256 (audit r5), and a 4x4 of 128 where an
+  //      effect crosses into the next frame can come back the same way.
+  //      When the grid with twice the columns and rows is valid, nothing
+  //      thicker than an effect crosses it (crossesOnlyThinly), and some
+  //      cell holds content in two of its quadrants, not counting a few
+  //      pixels spilling across its middle (cellHoldsTwoQuadrants), that
+  //      cell held two frames, not one, and the finer grid answers instead,
+  //      as 'medium': a grid the pixels allow rather than force. One sprite
+  //      per big cell (a real 2x2 of 256 with small sprites) keeps the
+  //      coarse answer, and so does a cell whose one sprite the finer grid
+  //      would cut through (a full-height character, or a small sprite
+  //      sitting across the middle of its cell).
   const fromSlicer = detectFrameGridFromPixels(imgData);
   if (
     fromSlicer &&
@@ -223,7 +229,7 @@ export function detectGridSmart(imgData: ImageData): DetectionResult {
       cellW % 2 === 0 &&
       cellH % 2 === 0 &&
       isValidGrid(W, H, columns * 2, rows * 2) &&
-      countGridCuts(imgData, cellW / 2, cellH / 2) === 0 &&
+      crossesOnlyThinly(imgData, cellW / 2, cellH / 2) &&
       cellHoldsTwoQuadrants(imgData, cellW, cellH)
     ) {
       return { cols: columns * 2, rows: rows * 2, confidence: 'medium' };

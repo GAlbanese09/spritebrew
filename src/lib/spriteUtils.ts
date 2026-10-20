@@ -1,5 +1,5 @@
 import { SLICER_FRAME_PRESETS, SLICER_DETECT_TRY_SIZES } from '@/lib/constants';
-import { detectCleanGrid } from '@/lib/gridDetect';
+import { detectCleanGrid, gridCutsSprite } from '@/lib/gridDetect';
 
 // Square-only canonical sizes derived from the single-source-of-truth presets.
 // Used by detectFrameGrid's findBestStandardSize fallback.
@@ -98,6 +98,19 @@ export function detectFrameGrid(
     const standardMatch = findBestStandardSize(width, height, gutterW, gutterH);
     if (standardMatch) return standardMatch;
 
+    // A frame grid never cuts through a sprite. When the measured gutter
+    // grid does, and a clean grid of nearly the same size exists, the gutter
+    // spacing was mis-measured (walk cycles whose pose widths alternate give
+    // 122 for 128), so the clean grid wins. A clean grid of a different size
+    // (a multiple) does not: there the cut is usually one effect reaching
+    // into the next frame, and the gutter result stands (backlog-2 audit r2).
+    if (gridCutsSprite(imageData, gutterW, gutterH)) {
+      const clean = detectCleanGrid(imageData);
+      if (clean && isNearSize(clean.width, gutterW) && isNearSize(clean.height, gutterH)) {
+        return clean;
+      }
+    }
+
     return {
       width: gutterW,
       height: gutterH,
@@ -109,7 +122,8 @@ export function detectFrameGrid(
   // 2b) Smallest clean grid with content: catches large-cell sheets (128 or
   //     256 px) that step 3 cuts at a smaller preset. It runs only when the
   //     gutter step found nothing, so a gutter result (non-square frames,
-  //     sizes outside SLICER_DETECT_TRY_SIZES) always wins (audit r1). Null
+  //     sizes outside SLICER_DETECT_TRY_SIZES) wins (audit r1), apart from
+  //     the near-size correction inside the gutter step (audit r2). Null
   //     falls through to step 3 unchanged.
   const clean = detectCleanGrid(imageData);
   if (clean) return clean;
@@ -247,6 +261,12 @@ function detectConsistentSpacing(gutters: number[], totalSize: number): number |
   }
 
   return null;
+}
+
+/** True when a is within one eighth of b: the same grid, measured a few
+ *  pixels off, not a multiple of it. */
+function isNearSize(a: number, b: number): boolean {
+  return Math.abs(a - b) * 8 <= b;
 }
 
 function findMode(arr: number[]): number | null {

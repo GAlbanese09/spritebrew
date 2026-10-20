@@ -29,7 +29,7 @@ await build({
   bundle: true, platform: 'node', format: 'esm', outdir: OUT, logLevel: 'error',
   tsconfig: path.join(ROOT, 'tsconfig.json'), outExtension: { '.js': '.mjs' },
 });
-const { detectCleanGrid } = await import(
+const { detectCleanGrid, gridCutsSprite } = await import(
   pathToFileURL(path.join(OUT, 'gridDetect.mjs')).href
 );
 const { detectFrameGrid } = await import(
@@ -266,6 +266,99 @@ function smallBlobs(width, height, cell, size, off) {
   const img = blank(256, 256);
   rect(img, 8, 8, 248, 248);
   check('15. one sprite on a 256x256 image: detectCleanGrid null', same(detectCleanGrid(img), null));
+}
+
+// ── 16 to 19: a gutter grid that cuts sprites (audit r2) ──
+
+// Cells of fw x fh; margins(c, r) gives the blob's [left, top, right, bottom]
+// margins inside cell (c, r).
+function cells(width, height, fw, fh, margins) {
+  const img = blank(width, height);
+  for (let r = 0; r < height / fh; r++) {
+    for (let c = 0; c < width / fw; c++) {
+      const [l, t, rr, b] = margins(c, r);
+      rect(img, c * fw + l, r * fh + t, (c + 1) * fw - rr, (r + 1) * fh - b);
+    }
+  }
+  return img;
+}
+{
+  // A walk cycle whose pose widths alternate: right margins 4, 10, 4, 10.
+  // The gutter spacing measures 122; its grid cuts the sprites and 128 is a
+  // clean grid of nearly the same size, so 128 wins.
+  const img = cells(512, 512, 128, 128, (c) => [4, 4, c % 2 ? 10 : 4, 4]);
+  check('16. 512x512 4x4 of 128, pose widths alternate: detectFrameGrid 128 (gutter read 122)',
+    same(detectFrameGrid(img), grid(128, 4, 4)));
+}
+{
+  const img = cells(512, 512, 128, 128, (c, r) => [4, 4, c % 2 ? 10 : 4, r % 2 ? 10 : 4]);
+  check('16b. the same with heights alternating too: detectFrameGrid 128 (gutter read 122x122)',
+    same(detectFrameGrid(img), grid(128, 4, 4)));
+}
+{
+  // One effect reaches across x = 32 into the next frame. The 32x48 gutter
+  // result cuts it, but the only clean grid is a multiple (96), so the
+  // gutter result stands.
+  const img = cells(384, 192, 32, 48, () => [4, 4, 4, 4]);
+  rect(img, 28, 10, 36, 12);
+  check('17. 384x192 of 32x48 with one effect across a frame line: detectFrameGrid keeps 32x48',
+    same(detectFrameGrid(img), { width: 32, height: 48, columns: 12, rows: 4 }));
+}
+{
+  const img = cells(320, 320, 40, 40, () => [4, 4, 4, 4]);
+  rect(img, 36, 10, 44, 12);
+  check('17b. 320x320 of 40 with one effect across a frame line: detectFrameGrid keeps 40',
+    same(detectFrameGrid(img), grid(40, 8, 8)));
+}
+{
+  // A 512x512 texture holding 4x4 of 120 px cells with 60 px sprites
+  // centred: 128 is clean too, but the 120 gutter grid cuts nothing, so 120
+  // stands.
+  const img = blank(512, 512);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) rect(img, c * 120 + 30, r * 120 + 30, c * 120 + 90, r * 120 + 90);
+  }
+  check('18. 512x512 texture of 4x4 120 px cells: detectFrameGrid 120',
+    same(detectFrameGrid(img), { width: 120, height: 120, columns: 4, rows: 4 }));
+}
+{
+  // A 512x512 texture holding 5x5 of 100 px cells, 20 px sprites near each
+  // cell's start, and one effect across x = 100. The 100 gutter grid cuts
+  // the effect and 128 is clean, but 128 is not near 100 (more than an
+  // eighth off), so 100 stands.
+  const img = blank(512, 512);
+  for (let r = 0; r < 5; r++) {
+    for (let c = 0; c < 5; c++) rect(img, c * 100 + 4, r * 100 + 4, c * 100 + 24, r * 100 + 24);
+  }
+  rect(img, 96, 10, 104, 12);
+  check('18b. 100 px cells with one effect across a line: detectFrameGrid keeps 100',
+    same(detectFrameGrid(img), { width: 100, height: 100, columns: 5, rows: 5 }));
+}
+{
+  const img = sheet(512, 512, 256, { margin: 8 });
+  check('19. gridCutsSprite: 2x2 of 256 at 256 is false', gridCutsSprite(img, 256, 256) === false);
+  check('19. gridCutsSprite: 2x2 of 256 at 128 is true', gridCutsSprite(img, 128, 128) === true);
+  const touch = blank(512, 512);
+  rect(touch, 8, 8, 256, 256);
+  rect(touch, 257, 8, 504, 256);
+  rect(touch, 8, 257, 256, 504);
+  rect(touch, 257, 257, 504, 504);
+  check('19. gridCutsSprite: lines touched without crossing is false', gridCutsSprite(touch, 256, 256) === false);
+  const crossX = blank(512, 512);
+  rect(crossX, 8, 8, 257, 248);
+  check('19. gridCutsSprite: one pixel past x = 256 is true', gridCutsSprite(crossX, 256, 256) === true);
+  const crossY = blank(512, 512);
+  rect(crossY, 8, 8, 248, 257);
+  check('19. gridCutsSprite: one pixel past y = 256 is true', gridCutsSprite(crossY, 256, 256) === true);
+  // Blobs that start exactly on a line, with nothing on the other side.
+  const startX = blank(512, 512);
+  rect(startX, 8, 8, 248, 248);
+  rect(startX, 256, 8, 504, 248);
+  check('19. gridCutsSprite: a blob starting on x = 256 is false', gridCutsSprite(startX, 256, 256) === false);
+  const startY = blank(512, 512);
+  rect(startY, 8, 8, 248, 248);
+  rect(startY, 8, 256, 248, 504);
+  check('19. gridCutsSprite: a blob starting on y = 256 is false', gridCutsSprite(startY, 256, 256) === false);
 }
 
 // ── timing ──

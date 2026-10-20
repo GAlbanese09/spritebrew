@@ -117,3 +117,31 @@ export function detectCleanGrid(imageData: {
 
   return null;
 }
+
+/**
+ * True when some interior line of the cellW x cellH grid (x = k * cellW or
+ * y = k * cellH) has opaque pixels directly on both sides of it in the same
+ * row or column, that is, when that grid cuts through a sprite. Same alpha
+ * rule as detectCleanGrid.
+ */
+export function gridCutsSprite(
+  imageData: { width: number; height: number; data: Uint8ClampedArray },
+  cellW: number,
+  cellH: number
+): boolean {
+  const { width, height, data } = imageData;
+  for (let x = cellW; x < width; x += cellW) {
+    for (let y = 0; y < height; y++) {
+      const i = (y * width + x) * 4 + 3;
+      if (data[i] > ALPHA_THRESHOLD && data[i - 4] > ALPHA_THRESHOLD) return true;
+    }
+  }
+  for (let y = cellH; y < height; y += cellH) {
+    const row = y * width * 4 + 3;
+    const above = row - width * 4;
+    for (let x = 0; x < width; x++) {
+      if (data[row + x * 4] > ALPHA_THRESHOLD && data[above + x * 4] > ALPHA_THRESHOLD) return true;
+    }
+  }
+  return false;
+}

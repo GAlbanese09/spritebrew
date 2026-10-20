@@ -1,17 +1,21 @@
 /**
  * Build-time shape check for NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY (TF-022).
  *
- * A malformed key (stray quotes from a paste, a trailing space, a truncated
+ * A malformed key (stray quotes from a paste, a leading space, a truncated
  * value) makes Clerk build its script URL with an empty host, and sign-in
  * silently breaks at runtime. next.config.ts calls publishableKeyProblem and
  * fails the build instead. ClerkClientProvider is unchanged: its no-key
- * branch renders without ClerkProvider, and the hooks the Sidebar and pages
- * call would throw without it, so a bad key must not be treated as missing.
+ * branch renders without ClerkProvider, and the Sidebar and pages call Clerk
+ * hooks and components that throw without it, so a bad key must not be
+ * treated as missing.
  *
  * Mirrors Clerk's own check (@clerk/shared keys: isPublishableKey): prefix
  * pk_live_ or pk_test_, exactly three parts when split on "_", and the third
  * part base64-decodes to a string that ends in "$", has no other "$" and
- * contains a ".". Reasons name the problem, never the value.
+ * contains a ".". Like Clerk, it accepts trailing whitespace (a newline left
+ * by a paste), because atob ignores whitespace and such a key works; it only
+ * names a leading space or a quote at either end more clearly than "does not
+ * decode". Reasons name the problem, never the value.
  */
 
 const LIVE_PREFIX = 'pk_live_';
@@ -31,7 +35,8 @@ function decodeBase64(encoded: string): string {
  */
 export function publishableKeyProblem(key: string): string | null {
   if (key === '') return 'is empty';
-  if (/^[\s'"`]|[\s'"`]$/.test(key)) return 'starts or ends with a quote or space';
+  if (/^[\s'"`]/.test(key)) return 'starts with a quote or space';
+  if (/['"`]\s*$/.test(key)) return 'ends with a quote';
   if (key.startsWith('sk_')) {
     return 'looks like a secret key; never put a secret key in a NEXT_PUBLIC_ variable';
   }

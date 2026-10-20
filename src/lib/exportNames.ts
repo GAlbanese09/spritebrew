@@ -19,6 +19,11 @@ import { sanitizeFilename } from '@/lib/downloadUtils';
  *   original name, with " 2", " 3" and so on for an exact repeat, likewise
  *   never taking another group's own name.
  *
+ * Groups with no frames (`isEmpty`) are left out of the numbering, since
+ * every exporter skips them: an empty "Idle" before a full one leaves the
+ * full one its own name. A group whose name sanitizes to nothing gets
+ * "animation", numbered after any group really named that.
+ *
  * A sheet with no repeated names gets exactly today's names (except that an
  * all-symbol name, whose sanitized form is empty, now gets "animation"
  * instead of an empty base).
@@ -30,29 +35,49 @@ export interface ExportName {
 
 const EMPTY_FILE_BASE = 'animation';
 
+interface NameItem {
+  /** The value to make unique. */
+  base: string;
+  /** False for a substitute ("animation" for an empty sanitized name): it
+   *  does not own its base, so a group really named that keeps it. */
+  owns: boolean;
+  /** Left out of the numbering (an empty group): returned as is. */
+  skip: boolean;
+}
+
 /**
- * Assign each name in `names` a unique value: the name itself when free,
- * otherwise `name + sep + n` for the first n >= 2 that no other name owns and
- * no earlier assignment took.
+ * Assign each item a unique value: its base when free, otherwise
+ * `base + sep + n` for the first n >= 2 that no other item owns and no
+ * earlier assignment took.
  */
-function uniqueInOrder(names: string[], sep: string): string[] {
-  const owned = new Set(names);
+function uniqueInOrder(items: NameItem[], sep: string): string[] {
+  const owned = new Set(items.filter((it) => it.owns && !it.skip).map((it) => it.base));
   const taken = new Set<string>();
-  return names.map((name) => {
-    let candidate = name;
-    for (let n = 2; taken.has(candidate) || (candidate !== name && owned.has(candidate)); n++) {
-      candidate = `${name}${sep}${n}`;
+  return items.map(({ base, owns, skip }) => {
+    if (skip) return base;
+    let candidate = base;
+    for (let n = 2; taken.has(candidate) || ((candidate !== base || !owns) && owned.has(candidate)); n++) {
+      candidate = `${base}${sep}${n}`;
     }
     taken.add(candidate);
     return candidate;
   });
 }
 
-export function exportNames(names: string[]): ExportName[] {
+export function exportNames(
+  names: string[],
+  isEmpty: (index: number) => boolean = () => false
+): ExportName[] {
   const files = uniqueInOrder(
-    names.map((name) => sanitizeFilename(name) || EMPTY_FILE_BASE),
+    names.map((name, i) => {
+      const sanitized = sanitizeFilename(name);
+      return { base: sanitized || EMPTY_FILE_BASE, owns: sanitized !== '', skip: isEmpty(i) };
+    }),
     '_'
   );
-  const labels = uniqueInOrder(names, ' ');
+  const labels = uniqueInOrder(
+    names.map((name, i) => ({ base: name, owns: true, skip: isEmpty(i) })),
+    ' '
+  );
   return names.map((_, i) => ({ file: files[i], label: labels[i] }));
 }

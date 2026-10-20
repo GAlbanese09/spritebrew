@@ -139,8 +139,9 @@ export interface PixelEditorState {
   historyStack: Uint8ClampedArray[];
   historyIndex: number; // -1 = empty, 0 = initial state, 1+ = edits
   /**
-   * Bumps on every write to historyStack or historyIndex (load, stroke end,
-   * undo, redo, revert, flip, reset). The "something changed" signal for
+   * Bumps on every history write that changes what the editor holds (load,
+   * stroke end, undo, redo, revert, flip, reset; not the redo branch dropped
+   * at a stroke's start, which endStroke follows). The "something changed" signal for
    * subscribers such as useEditorRecovery: historyIndex alone stops moving
    * once the stack is at MAX_HISTORY, because endStroke shifts the stack and
    * leaves the index at MAX_HISTORY - 1.
@@ -496,8 +497,10 @@ export const useEditorStore = create<PixelEditorState>()(
       // only stroke. Cleared only by loadProject / reset.
       const next: Partial<PixelEditorState> = {};
       if (historyIndex < historyStack.length - 1) {
+        // Drops the redo branch. No revision bump: the recovery draft stores
+        // pixels only, and endStroke bumps; a bump here would start the
+        // autosave debounce mid-stroke (backlog-1 audit r1).
         next.historyStack = historyStack.slice(0, historyIndex + 1);
-        next.revision = get().revision + 1;
       }
       if (!hasAttemptedEdit) {
         next.hasAttemptedEdit = true;

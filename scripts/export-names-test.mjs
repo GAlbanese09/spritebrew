@@ -88,6 +88,18 @@ const unique = (xs) => new Set(xs).size === xs.length;
   check('an all-symbol name beside a group named "animation": no collision',
     eq(files(['animation', '***']), ['animation', 'animation_2']));
   check('an empty name also gets "animation"', eq(files(['']), ['animation']));
+  check('an all-symbol name before a group really named "animation": the real one keeps it',
+    eq(files(['***', 'animation']), ['animation_2', 'animation']));
+}
+
+// ── Empty groups are left out of the numbering (every exporter skips them) ──
+{
+  const out = exportNames(['Idle', 'Idle'], (i) => i === 0);
+  check('an empty Idle before a full Idle: the full one keeps idle', out[1].file === 'idle' && out[1].label === 'Idle');
+  const two = exportNames(['Idle', 'Walk', 'Idle', 'Idle'], (i) => i === 2);
+  check('an empty group between two same-named full ones: they number past it',
+    two[0].file === 'idle' && two[3].file === 'idle_2' && two[3].label === 'Idle 2');
+  check('with nothing empty the default is unchanged', eq(files(['Idle', 'Idle']), ['idle', 'idle_2']));
 }
 
 // ── Mixed sheet: everything unique, order preserved ──

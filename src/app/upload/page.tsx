@@ -284,8 +284,9 @@ export default function UploadPage() {
   /** User accepted a resized sheet from FrameSizeResizer. Includes the chosen
    *  frame dimensions so the slicer can pre-populate its grid. Replaces the
    *  sheet, so it bumps ownership and asks before discarding groups like the
-   *  other wholesale actions; Cancel leaves everything as it was, the resizer
-   *  included. */
+   *  other wholesale actions. Cancel keeps the sheet, the groups and the
+   *  resizer; as with those actions, the bump still drops any work in flight
+   *  for the old image. */
   const handleResizeAccept = useCallback(
     (resizedDataUrl: string, sheetW: number, sheetH: number, frameW: number, frameH: number) => {
       if (!uploaded) return;

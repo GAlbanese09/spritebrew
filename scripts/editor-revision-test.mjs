@@ -119,9 +119,10 @@ check('tool and brush changes do not raise revision', s().revision === before);
 s().undo();
 before = s().revision;
 s().beginStroke();
-check('beginStroke that truncates a redo branch raises revision once', s().revision === before + 1);
+check('beginStroke that truncates a redo branch does not raise revision (no mid-stroke save)', s().revision === before);
 s().paintPixel(1, 1, '#ff00ff');
 s().endStroke();
+check('the stroke after it raises revision once, at its end', s().revision === before + 1);
 
 before = s().revision;
 s().reset();

@@ -38,12 +38,17 @@ const names = (reason, word) => typeof reason === 'string' && reason.includes(wo
 check('well-formed fake test key: no problem', problem(TEST_KEY) === null);
 check('well-formed fake live key: no problem', problem(LIVE_KEY) === null);
 
-check('double-quoted key: quote or space', names(problem(`"${TEST_KEY}"`), 'quote or space'));
-check('single-quoted key: quote or space', names(problem(`'${TEST_KEY}'`), 'quote or space'));
-check('leading quote only: quote or space', names(problem(`"${TEST_KEY}`), 'quote or space'));
-check('trailing space: quote or space', names(problem(`${TEST_KEY} `), 'quote or space'));
-check('leading space: quote or space', names(problem(` ${TEST_KEY}`), 'quote or space'));
-check('trailing newline: quote or space', names(problem(`${TEST_KEY}\n`), 'quote or space'));
+check('double-quoted key: starts with a quote', names(problem(`"${TEST_KEY}"`), 'starts with a quote or space'));
+check('single-quoted key: starts with a quote', names(problem(`'${TEST_KEY}'`), 'starts with a quote or space'));
+check('leading quote only: starts with a quote', names(problem(`"${TEST_KEY}`), 'starts with a quote or space'));
+check('trailing quote only: ends with a quote', names(problem(`${TEST_KEY}"`), 'ends with a quote'));
+check('trailing quote then a newline: ends with a quote', names(problem(`${TEST_KEY}'\n`), 'ends with a quote'));
+check('leading space: starts with a space', names(problem(` ${TEST_KEY}`), 'starts with a quote or space'));
+// Clerk accepts trailing whitespace (atob ignores it) and such a key works,
+// so the build must not fail on it (backlog-1 audit r1).
+check('trailing space: no problem, as in Clerk', problem(`${TEST_KEY} `) === null);
+check('trailing newline: no problem, as in Clerk', problem(`${TEST_KEY}\n`) === null);
+check('trailing CRLF: no problem, as in Clerk', problem(`${LIVE_KEY}\r\n`) === null);
 
 check('wrong prefix pk_dev_: prefix reason', names(problem(`pk_dev_${b64('x.y$')}`), 'pk_live_ or pk_test_'));
 check('no prefix at all: prefix reason', names(problem(b64('x.y$')), 'pk_live_ or pk_test_'));
@@ -68,7 +73,7 @@ check('truncated paste (half the encoded host): a reason, not null',
 
 check('an sk_ value: secret key reason', names(problem(`sk_test_${b64('whatever')}`), 'secret key'));
 check('an sk_live_ value: secret key reason', names(problem('sk_live_abc'), 'secret key'));
-check('a quoted sk_ value reports the quote first', names(problem('"sk_test_abc"'), 'quote or space'));
+check('a quoted sk_ value reports the quote first', names(problem('"sk_test_abc"'), 'starts with a quote or space'));
 
 check('empty string: a reason (callers allow unset by checking emptiness first)', problem('') === 'is empty');
 

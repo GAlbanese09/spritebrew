@@ -67,7 +67,7 @@ export async function exportTexturePacker(opts: ExportOptions): Promise<void> {
 
   // Collect all frames across animations. Group names are made unique per
   // export (exportNames) so same-named groups keep separate frame keys.
-  const names = exportNames(animations.map((a) => a.name));
+  const names = exportNames(animations.map((a) => a.name), (i) => animations[i].frames.length === 0);
   const allFrames: { anim: SpriteAnimation; frameIdx: number; canvas: HTMLCanvasElement; name: string }[] = [];
 
   for (const [animIdx, anim] of animations.entries()) {
@@ -156,7 +156,7 @@ export async function exportAseprite(opts: ExportOptions): Promise<void> {
   const fw = opts.resizeWidth ?? opts.frameWidth;
   const fh = opts.resizeHeight ?? opts.frameHeight;
 
-  const names = exportNames(animations.map((a) => a.name));
+  const names = exportNames(animations.map((a) => a.name), (i) => animations[i].frames.length === 0);
   const allFrames: { anim: SpriteAnimation; frameIdx: number; canvas: HTMLCanvasElement; name: string }[] = [];
 
   for (const [animIdx, anim] of animations.entries()) {
@@ -251,7 +251,7 @@ export async function exportGameMaker(opts: ExportOptions): Promise<void> {
   const fh = opts.resizeHeight ?? opts.frameHeight;
 
   const files: { name: string; data: Blob }[] = [];
-  const names = exportNames(animations.map((a) => a.name));
+  const names = exportNames(animations.map((a) => a.name), (i) => animations[i].frames.length === 0);
 
   for (const [animIdx, anim] of animations.entries()) {
     if (anim.frames.length === 0) continue;
@@ -333,7 +333,7 @@ export async function exportGodot(opts: ExportOptions): Promise<void> {
   const allCanvases: HTMLCanvasElement[] = [];
   const animMeta: { name: string; startIdx: number; count: number; fps: number }[] = [];
   // SpriteFrames animation names must be unique.
-  const names = exportNames(animations.map((a) => a.name));
+  const names = exportNames(animations.map((a) => a.name), (i) => animations[i].frames.length === 0);
 
   for (const [animIdx, anim] of animations.entries()) {
     if (anim.frames.length === 0) continue;
@@ -425,7 +425,7 @@ export async function exportRawFrames(opts: ExportOptions & { includeManifest: b
 
   const files: { name: string; data: Blob | string }[] = [];
   const manifestAnimations: unknown[] = [];
-  const names = exportNames(animations.map((a) => a.name));
+  const names = exportNames(animations.map((a) => a.name), (i) => animations[i].frames.length === 0);
 
   for (const [animIdx, anim] of animations.entries()) {
     if (anim.frames.length === 0) continue;

@@ -612,14 +612,16 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
       )}
 
       {/* Zoom controls */}
-      <div className="flex items-center gap-2">
-        <label className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
+      <div className="flex items-center gap-2" role="group" aria-label="Zoom">
+        <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
           Zoom
-        </label>
+        </span>
         {ZOOM_OPTIONS.map((z) => (
           <button
             key={z}
+            type="button"
             onClick={() => setZoom(z)}
+            aria-pressed={zoom === z}
             className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
               ${zoom === z
                 ? 'bg-accent-amber text-bg-primary'
@@ -700,6 +702,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           {GIF_SCALES.map((s) => (
             <button
               key={s}
+              type="button"
               onClick={() => setGifScale(s)}
               aria-pressed={gifScale === s}
               className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors

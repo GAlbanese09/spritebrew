@@ -13,6 +13,7 @@ import {
 } from '@/lib/spriteUtils';
 import { SLICER_FRAME_PRESETS } from '@/lib/constants';
 import { useCanvasFitScale } from '@/lib/useCanvasFitScale';
+import { createLatestRun } from '@/lib/latestRun';
 import Button from '@/components/ui/Button';
 
 // Square presets from the canonical preset list — used for target-size pills.
@@ -66,10 +67,24 @@ export default function SpriteDetector({
   // scroll inside its overflow-auto wrapper. Legacy maxWidth: 600 preserves
   // desktop pixel-identical output.
   const previewWrapperRef = useRef<HTMLDivElement>(null);
+  // The canvas the current regions were detected on. Written together with
+  // `detected` by the same run, so a crop always cuts from the image the
+  // regions belong to.
   const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Detection runs can overlap (a background-removal swap, then another
+  // change, or Re-detect during a run). Each run takes the next number; after
+  // every await a run that is no longer the latest returns without touching
+  // state, and only the latest run clears `detecting`.
+  const runsRef = useRef(createLatestRun());
 
   const [detecting, setDetecting] = useState(false);
   const [detected, setDetected] = useState<DetectedSprite[]>([]);
+  // The imageUrl the regions in `detected` (and sourceCanvasRef) came from.
+  // Between a new imageUrl's render and the effect that starts its
+  // detection, the old results are still in state; they count as current
+  // only while this equals the imageUrl prop.
+  const [detectedUrl, setDetectedUrl] = useState<string | null>(null);
+  const resultsCurrent = detectedUrl === imageUrl;
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [padToUniform, setPadToUniform] = useState(true);
@@ -92,18 +107,20 @@ export default function SpriteDetector({
 
   // Run detection whenever the image changes
   const runDetection = useCallback(async () => {
+    const isLatest = runsRef.current.start();
     setDetecting(true);
     setError(null);
     try {
       const img = await loadImage(imageUrl);
+      if (!isLatest()) return;
       const canvas = imageToCanvas(img);
-      sourceCanvasRef.current = canvas;
       const ctx = canvas.getContext('2d')!;
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
       // Yield to the browser so the "Detecting..." indicator can paint before
       // we start the heavy pixel crunching. (requestAnimationFrame + 1 tick)
       await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+      if (!isLatest()) return;
 
       const result = detectSprites(imgData);
 
@@ -117,13 +134,17 @@ export default function SpriteDetector({
         );
       }
 
+      // Canvas, regions and the image they belong to, all from this run.
+      sourceCanvasRef.current = canvas;
       setDetected(result.sprites);
+      setDetectedUrl(imageUrl);
       // Select all by default
       setSelected(new Set(result.sprites.map((s) => s.id)));
     } catch {
+      if (!isLatest()) return;
       setError('Detection failed. The image may be too large or in an unsupported format.');
     } finally {
-      setDetecting(false);
+      if (isLatest()) setDetecting(false);
     }
   }, [imageUrl]);
 
@@ -232,7 +253,7 @@ export default function SpriteDetector({
 
   /** Merge all currently selected sprites into a single bounding box. */
   const handleMergeSelected = useCallback(() => {
-    if (selected.size < 2) return;
+    if (!resultsCurrent || selected.size < 2) return;
     const selectedSprites = detected.filter((s) => selected.has(s.id));
     const minX = Math.min(...selectedSprites.map((s) => s.x));
     const minY = Math.min(...selectedSprites.map((s) => s.y));
@@ -269,11 +290,12 @@ export default function SpriteDetector({
         s.height === mergedSprite.height
     );
     setSelected(mergedIdx >= 0 ? new Set([renumbered[mergedIdx].id]) : new Set());
-  }, [detected, selected]);
+  }, [detected, selected, resultsCurrent]);
 
-  /** Crop every selected sprite and emit frames to the parent. */
+  /** Crop every selected sprite and emit frames to the parent. Only the
+   *  current image's regions are cut, from the canvas of the same run. */
   const handleExtract = useCallback(async () => {
-    if (selected.size === 0 || !sourceCanvasRef.current) return;
+    if (!resultsCurrent || selected.size === 0 || !sourceCanvasRef.current) return;
     setExtracting(true);
     try {
       const selectedSprites = detected.filter((s) => selected.has(s.id));
@@ -320,7 +342,7 @@ export default function SpriteDetector({
     } finally {
       setExtracting(false);
     }
-  }, [detected, selected, padToUniform, sizeMode, targetW, targetH, onExtract]);
+  }, [detected, selected, padToUniform, sizeMode, targetW, targetH, onExtract, resultsCurrent]);
 
   const selectedSprites = useMemo(
     () => detected.filter((s) => selected.has(s.id)),
@@ -376,7 +398,7 @@ export default function SpriteDetector({
         ref={previewWrapperRef}
         className="rounded-lg border border-border-default bg-bg-elevated p-3 flex justify-center overflow-auto"
       >
-        {!detecting && detected.length > 0 && (
+        {!detecting && resultsCurrent && detected.length > 0 && (
           <canvas
             ref={canvasRef}
             onClick={handleCanvasClick}
@@ -386,8 +408,9 @@ export default function SpriteDetector({
         )}
       </div>
 
-      {/* Canvas overlay's siblings — remain conditional. */}
-      {!detecting && detected.length > 0 && (
+      {/* Canvas overlay's siblings remain conditional. Like the canvas,
+          shown only for results detected on the current imageUrl. */}
+      {!detecting && resultsCurrent && detected.length > 0 && (
         <>
           {/* Sprite list summary */}
           <div className="flex items-center justify-between">
@@ -554,7 +577,7 @@ export default function SpriteDetector({
               variant="ghost"
               size="sm"
               onClick={handleMergeSelected}
-              disabled={selected.size < 2}
+              disabled={!resultsCurrent || detecting || selected.size < 2}
               title="Combine 2+ selected sprites into one"
             >
               <Merge size={14} />
@@ -564,7 +587,7 @@ export default function SpriteDetector({
               variant="primary"
               size="md"
               onClick={handleExtract}
-              disabled={selected.size === 0 || extracting}
+              disabled={!resultsCurrent || detecting || selected.size === 0 || extracting}
             >
               {extracting ? (
                 <>

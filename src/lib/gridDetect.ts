@@ -53,39 +53,57 @@ export function countUnresolvedCuts(img: Pixels, cellW: number, cellH: number): 
   return cuts;
 }
 
-/**
- * True when nothing thicker than an effect crosses the cellW x cellH grid:
- * along every cell edge on an interior line, the unforgiven cuts (see
- * edgeCuts) are at most an eighth of the edge's length. A sword tip or a
- * spark reaching into the next frame passes; a line through the middle of a
- * sprite, which cuts it along its whole width, does not.
- */
-export function crossesOnlyThinly(img: Pixels, cellW: number, cellH: number): boolean {
-  const { width, height } = img;
-  for (let x = cellW; x < width; x += cellW) {
-    for (let y = 0; y < height; y += cellH) {
-      if (edgeCuts(img, true, x, y, y + cellH, lineTolerance(cellW)) * 8 > cellH) return false;
-    }
-  }
-  for (let y = cellH; y < height; y += cellH) {
-    for (let x = 0; x < width; x += cellW) {
-      if (edgeCuts(img, false, y, x, x + cellW, lineTolerance(cellH)) * 8 > cellW) return false;
-    }
-  }
-  return true;
-}
-
-/** True when the s x s cell at (x0, y0) holds an opaque pixel more than
- *  tol px inside its edges. */
-function holdsContentInside(img: Pixels, x0: number, y0: number, s: number, tol: number): boolean {
+/** True when the w x h box at (x0, y0) holds an opaque pixel more than tolX
+ *  px inside its left and right edges and tolY px inside its top and bottom. */
+function holdsContentInside(
+  img: Pixels,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number,
+  tolX: number,
+  tolY: number
+): boolean {
   const { width, data } = img;
-  for (let y = y0 + tol; y < y0 + s - tol; y++) {
-    let i = (y * width + x0 + tol) * 4 + 3;
-    for (let x = tol; x < s - tol; x++, i += 4) {
+  for (let y = y0 + tolY; y < y0 + h - tolY; y++) {
+    let i = (y * width + x0 + tolX) * 4 + 3;
+    for (let x = tolX; x < w - tolX; x++, i += 4) {
       if (data[i] > ALPHA_THRESHOLD) return true;
     }
   }
   return false;
+}
+
+/**
+ * True when every s x s cell that holds content holds two things that the
+ * grid at half the size separates: along the cell's vertical (or horizontal)
+ * middle no cut is left unforgiven, and both halves hold content more than
+ * the tolerance inside their edges. Frames of half the size that touch their
+ * neighbours across one axis look like big cut sprites to countUnresolvedCuts;
+ * a clean middle with content on both sides shows the cell is two frames.
+ */
+function cellsSplitInTwo(img: Pixels, s: number): boolean {
+  const half = s / 2;
+  const tol = lineTolerance(half);
+  const columns = img.width / s;
+  const rows = img.height / s;
+  let any = false;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < columns; c++) {
+      const x0 = c * s;
+      const y0 = r * s;
+      const left = holdsContentInside(img, x0, y0, half, s, tol, tol);
+      const right = holdsContentInside(img, x0 + half, y0, half, s, tol, tol);
+      const top = holdsContentInside(img, x0, y0, s, half, tol, tol);
+      const bottom = holdsContentInside(img, x0, y0 + half, s, half, tol, tol);
+      if (!left && !right && !top && !bottom) continue;
+      any = true;
+      const splitV = left && right && edgeCuts(img, true, x0 + half, y0, y0 + s, tol) === 0;
+      const splitH = top && bottom && edgeCuts(img, false, y0 + half, x0, x0 + s, tol) === 0;
+      if (!splitV && !splitH) return false;
+    }
+  }
+  return any;
 }
 
 function gcd(a: number, b: number): number {
@@ -110,11 +128,15 @@ function gcd(a: number, b: number): number {
  * touch or spill a few pixels past their cell line, with a clear gap just
  * beyond, as generated sheets often have (a 512x512 sheet of four 256 px
  * characters whose feet reach 2 px into the row below). It is eligible when
- * it is clean and at least half its cells hold an opaque pixel; when a spill
- * was forgiven, a pixel within that tolerance of a cell's edges does not
- * count, since a spill is part of the sprite next door. Returns the
- * smallest eligible size, or null when there is none, or the image has no
- * transparent pixel or no opaque pixel.
+ * it is clean and at least half its cells hold an opaque pixel. A size that
+ * is clean only because a spill was forgiven has three more rules: a pixel
+ * within that tolerance of a cell's edges does not count as content, since
+ * a spill is part of the sprite next door; and when half the size is also
+ * a candidate, the size is skipped if the grid at half the size is nearly
+ * clean, or if every cell with content is split in two by a clean middle
+ * (frames of half the size that touch). Returns the smallest eligible size,
+ * or null when there is none, or the image has no transparent pixel or no
+ * opaque pixel.
  *
  * One pass over the pixels records which lines are straddled and which
  * blocks hold content; each candidate is then checked from those arrays, and
@@ -196,14 +218,18 @@ export function detectCleanGrid(imageData: {
     if (!clean) continue;
 
     // A size that is clean only because spills were forgiven is trusted
-    // only when the grid at half its size really cuts through sprites, on
-    // average more than one half cell's length per line it adds: then each
-    // cell holds one big sprite (a full-height character). When the half
-    // grid is nearly clean (blocked only by a few frames that touch), it is
-    // more likely the real grid, and this coarser size is not taken.
-    if (rescued && s % 2 === 0 && s / 2 >= 16) {
+    // only when its cells look like one big sprite each (a full-height
+    // character), not like frames of half the size. It is not taken when
+    // the grid at half its size is nearly clean: its unforgiven cuts,
+    // counted over all of its lines at its own tolerance, average at most
+    // one half cell's length per line it adds (blocked only by a few frames
+    // that touch). Nor when every cell with content is split in two by a
+    // clean middle (frames that touch across the other axis). Both apply
+    // only when the half size is itself a candidate the slicer can answer.
+    if (rescued && s % 2 === 0 && sizes.includes(s / 2)) {
       const half = s / 2;
       if (countUnresolvedCuts(imageData, half, half) <= (columns + rows) * half) continue;
+      if (cellsSplitInTwo(imageData, s)) continue;
     }
 
     const per = s / block;
@@ -214,7 +240,7 @@ export function detectCleanGrid(imageData: {
         if (rescued) {
           // A forgiven spill is part of the sprite next door, so a cell whose
           // only content lies within tol px of its edges is not filled.
-          filled = holdsContentInside(imageData, c * s, r * s, s, tol);
+          filled = holdsContentInside(imageData, c * s, r * s, s, s, tol, tol);
         } else {
           for (let by = r * per; by < (r + 1) * per && !filled; by++) {
             const base = by * blockCols;
@@ -271,46 +297,31 @@ export function countGridCuts(
 /**
  * True when some cell of the cellW x cellH grid holds content in two or more
  * of its four quadrants (the cells of the grid at half the size). Content
- * within lineTolerance px of the lines between the quadrants does not count:
- * that is a sprite spilling across the middle of its cell, which edgeCuts
- * forgives, not a second sprite. Used with crossesOnlyThinly at half the
- * size: the half grid then separates that content, so the cell holds two
- * sprites, which a frame does not. cellW and cellH must be even.
+ * within lineTolerance px of a quadrant's edges does not count: that is a
+ * spill, across the cell's middle or into the cell from the one next door,
+ * which edgeCuts forgives, not a second sprite. Used when the grid at half
+ * the size has no unforgiven cut: it then separates that content, so the
+ * cell holds two sprites, which a frame does not. cellW and cellH must be
+ * even.
  */
 export function cellHoldsTwoQuadrants(
   imageData: { width: number; height: number; data: Uint8ClampedArray },
   cellW: number,
   cellH: number
 ): boolean {
-  const { width, height, data } = imageData;
   const halfW = cellW / 2;
   const halfH = cellH / 2;
   const tolW = lineTolerance(halfW);
   const tolH = lineTolerance(halfH);
-  const columns = Math.floor(width / cellW);
-  const rows = Math.floor(height / cellH);
+  const columns = Math.floor(imageData.width / cellW);
+  const rows = Math.floor(imageData.height / cellH);
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < columns; c++) {
       let quadrants = 0;
       for (let q = 0; q < 4 && quadrants < 2; q++) {
-        const right = q % 2;
-        const lower = Math.floor(q / 2);
-        // The quadrant, less the band along the cell's middle lines.
-        const x0 = c * cellW + right * (halfW + tolW);
-        const x1 = c * cellW + halfW - tolW + right * (halfW + tolW);
-        const y0 = r * cellH + lower * (halfH + tolH);
-        const y1 = r * cellH + halfH - tolH + lower * (halfH + tolH);
-        let found = false;
-        for (let y = y0; y < y1 && !found; y++) {
-          let i = (y * width + x0) * 4 + 3;
-          for (let x = x0; x < x1; x++, i += 4) {
-            if (data[i] > ALPHA_THRESHOLD) {
-              found = true;
-              break;
-            }
-          }
-        }
-        if (found) quadrants++;
+        const x0 = c * cellW + (q % 2) * halfW;
+        const y0 = r * cellH + Math.floor(q / 2) * halfH;
+        if (holdsContentInside(imageData, x0, y0, halfW, halfH, tolW, tolH)) quadrants++;
       }
       if (quadrants >= 2) return true;
     }

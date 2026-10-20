@@ -30,7 +30,7 @@ await build({
   bundle: true, platform: 'node', format: 'esm', outdir: OUT, logLevel: 'error',
   tsconfig: path.join(ROOT, 'tsconfig.json'), outExtension: { '.js': '.mjs' },
 });
-const { cellHoldsTwoQuadrants, countGridCuts, crossesOnlyThinly, detectCleanGrid } = await import(
+const { cellHoldsTwoQuadrants, countGridCuts, detectCleanGrid } = await import(
   pathToFileURL(path.join(OUT, 'gridDetect.mjs')).href
 );
 const { detectFrameGrid, detectFrameGridFromPixels } = await import(
@@ -567,30 +567,25 @@ const rz = (img) => {
   check('22. frames touching across x = 128, feet spilling past every row: resizer reads 4x4', rz(touch) === '4x4');
 }
 
-// ── 23: an effect that crosses into the next frame ──
+// ── 23: a sparse template whose feet spill into the next row ──
 
 {
-  // A 4x4 of 128 with one body per frame, and in every row an effect h px
-  // tall that reaches 8 px past x = 128 and x = 384. The x = 256 line stays
-  // clear, so the clean grid answers 256, and the resizer must see that the
-  // 4x4 grid is crossed only by those effects.
-  const fx = (h) => {
-    const img = blank(512, 512);
-    for (let r = 0; r < 4; r++) {
-      for (let c = 0; c < 4; c++) rect(img, c * 128 + 30, r * 128 + 10, c * 128 + 98, r * 128 + 120);
-      for (const c of [0, 2]) rect(img, c * 128 + 98, r * 128 + 50, (c + 1) * 128 + 8, r * 128 + 50 + h);
-    }
-    return img;
-  };
-  check('23. effects 6 px tall across x = 128 and 384: detectCleanGrid 256', same(detectCleanGrid(fx(6)), grid(256, 2, 2)));
-  const g = detectGridSmart(fx(6));
-  check('23. effects 6 px tall: resizer reads 4x4, not 2x2 of 256', `${g.cols}x${g.rows}` === '4x4');
-  check("23. effects 6 px tall: labelled 'medium'", g.confidence === 'medium');
-  // The limit is an eighth of the edge: 16 rows on a 128 px edge.
-  check('23. crossesOnlyThinly: 16 rows on a 128 px edge is thin, 17 is not',
-    crossesOnlyThinly(fx(16), 128, 128) === true && crossesOnlyThinly(fx(17), 128, 128) === false);
-  check('23. effects 16 px tall: resizer reads 4x4', rz(fx(16)) === '4x4');
-  check('23. effects 17 px tall: resizer reads 2x2', rz(fx(17)) === '2x2');
+  // A 4x4 template of 128 with the first 6 frames drawn, each standing on
+  // its cell's floor; the top row's feet reach 2 px into the row below
+  // (clear beyond). The clean grid answers 256 (128 is under half filled);
+  // the 4x4 grid cuts nothing the slicer would not forgive, so the resizer
+  // still reads 4x4.
+  const img = blank(512, 512);
+  for (let i = 0; i < 6; i++) {
+    const c = i % 4;
+    const r = Math.floor(i / 4);
+    rect(img, c * 128 + 20, r * 128 + 10, c * 128 + 108, r * 128 + 128);
+    if (r === 0) rect(img, c * 128 + 40, 128, c * 128 + 60, 130);
+  }
+  check('23. a 6-frame template of 128 whose feet spill 2 px: detectCleanGrid 256', same(detectCleanGrid(img), grid(256, 2, 2)));
+  const g = detectGridSmart(img);
+  check('23. a 6-frame template of 128 whose feet spill 2 px: resizer reads 4x4', `${g.cols}x${g.rows}` === '4x4');
+  check("23. a 6-frame template of 128 whose feet spill 2 px: labelled 'medium'", g.confidence === 'medium');
 }
 
 // ── 24: a sprite that reaches a few pixels across the middle of its cell ──
@@ -631,6 +626,115 @@ const rz = (img) => {
   }
   check('24. sprites 4 px across the middle of 128 px cells: detectCleanGrid 128', same(detectCleanGrid(q), grid(128, 4, 4)));
   check('24. sprites 4 px across the middle of 128 px cells: resizer reads 4x4', rz(q) === '4x4');
+}
+
+// ── 25: small sprites, thin arms and touching frames (audit r7) ──
+
+{
+  // A 4x4 of 128: 48x50 sprites standing on the floor of the right half of
+  // each cell, feet 2 px into the row below. The feet land in the top band
+  // of the quadrant below, which is a spill, not a second sprite.
+  const floor = blank(512, 512);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      rect(floor, c * 128 + 70, r * 128 + 78, c * 128 + 118, r * 128 + 128);
+      if (r < 3) rect(floor, c * 128 + 80, (r + 1) * 128, c * 128 + 100, (r + 1) * 128 + 2);
+    }
+  }
+  check('25. floor sprites with feet 2 px into the next row: resizer reads 4x4, not 8x8', rz(floor) === '4x4');
+  check('25. floor sprites: cellHoldsTwoQuadrants does not count the feet', cellHoldsTwoQuadrants(floor, 128, 128) === false);
+  // The same at 80 px cells (320x320).
+  const floor80 = blank(320, 320);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      rect(floor80, c * 80 + 40, r * 80 + 42, c * 80 + 78, r * 80 + 80);
+      if (r < 3) rect(floor80, c * 80 + 46, (r + 1) * 80, c * 80 + 60, (r + 1) * 80 + 2);
+    }
+  }
+  check('25. 4x4 of 80 floor sprites with feet 2 px: resizer reads 4x4', rz(floor80) === '4x4');
+  // A 4x4 of 128 with 40 px sprites at the top left of each cell; in cell
+  // (1, 1) a 6 px arm reaches 16 px past the cell's middle.
+  const arm = blank(512, 512);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) rect(arm, c * 128 + 8, r * 128 + 8, c * 128 + 48, r * 128 + 48);
+  }
+  rect(arm, 176, 148, 208, 154);
+  check('25. a 6 px arm across a cell\'s middle: resizer reads 4x4, not 8x8', rz(arm) === '4x4');
+  // A 2x2 of 256: a 100 px body in the top-left quadrant of each cell and a
+  // 6 px weapon from it to 40 px past the middle.
+  const weapon = blank(512, 512);
+  for (const [x, y] of [[0, 0], [256, 0], [0, 256], [256, 256]]) {
+    rect(weapon, x + 14, y + 14, x + 114, y + 114);
+    rect(weapon, x + 112, y + 60, x + 168, y + 66);
+  }
+  check('25. a body in one quadrant with a weapon across the middle: resizer keeps 2x2', rz(weapon) === '2x2');
+  // A 4x4 of 128 whose frames touch across x = 128 and x = 384 for their
+  // full height, with a gap at x = 256, feet 4 px past y = 128 and y = 384
+  // (the tolerance) and 2 px past y = 256. 256 is clean only by forgiving
+  // the feet, and every 256 cell is split in two by its horizontal middle,
+  // clean once the feet are forgiven, so 256 is not taken.
+  const touch = blank(512, 512);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const l = c % 2 === 1 ? 0 : 8;
+      const rr = c % 2 === 0 ? 0 : 8;
+      rect(touch, c * 128 + l, r * 128 + 6, (c + 1) * 128 - rr, (r + 1) * 128 - 6);
+    }
+  }
+  for (let c = 0; c < 4; c++) {
+    rect(touch, c * 128 + 30, 118, c * 128 + 60, 132);
+    rect(touch, c * 128 + 30, 250, c * 128 + 60, 258);
+    rect(touch, c * 128 + 30, 374, c * 128 + 60, 388);
+  }
+  check('25. frames touching across x = 128 and 384, feet past y = 256: detectCleanGrid does not take 256', same(detectCleanGrid(touch), null));
+  check('25. frames touching across x = 128 and 384, feet past y = 256: resizer reads 4x4', rz(touch) === '4x4');
+  // One cell split by a clean middle is not enough: George's four
+  // characters, with the top-left one narrow and a prop beside it.
+  const prop = blank(512, 512);
+  rect(prop, 20, 0, 80, 256);
+  rect(prop, 30, 250, 60, 258);
+  rect(prop, 180, 100, 220, 140);
+  rect(prop, 346, 0, 427, 256);
+  rect(prop, 360, 250, 400, 258);
+  rect(prop, 85, 260, 183, 512);
+  rect(prop, 330, 260, 447, 512);
+  check('25. one cell split by a clean middle, the others not: detectCleanGrid keeps 256', same(detectCleanGrid(prop), grid(256, 2, 2)));
+  // A 4x4 of 128 whose feet spill past every row line, and whose first
+  // frame touches both its neighbours (across x = 128 and across y = 128):
+  // that 256 cell is not split by either middle, but the 4x4 grid is cut
+  // only by those two contacts, so 256 is still not taken.
+  const both = blank(512, 512);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      rect(both, c * 128 + 30, r * 128 + 8, c * 128 + 98, r * 128 + 128);
+      if (r < 3) rect(both, c * 128 + 40, (r + 1) * 128, c * 128 + 60, (r + 1) * 128 + 2);
+    }
+  }
+  rect(both, 98, 40, 158, 80);
+  rect(both, 70, 120, 90, 140);
+  check('25. one frame touching both neighbours, feet spilling past every row: detectCleanGrid does not take 256', same(detectCleanGrid(both), null));
+  // A 4x2 of 256 with full-height characters in the left half of each cell
+  // whose right edge reaches 4 px past the cell's middle (a spill), feet
+  // 2 px past y = 256. Only that spill lies right of the middle, so no cell
+  // is split in two, and 256 stands.
+  const left = blank(1024, 512);
+  for (let r = 0; r < 2; r++) {
+    for (let c = 0; c < 4; c++) {
+      rect(left, c * 256 + 28, r * 256 + (r ? 4 : 0), c * 256 + 132, (r + 1) * 256);
+      if (r === 0) rect(left, c * 256 + 40, 256, c * 256 + 60, 258);
+    }
+  }
+  check('25. characters spilling 4 px across their cell\'s middle: detectCleanGrid keeps 256', same(detectCleanGrid(left), grid(256, 4, 2)));
+  // A rescued 80 is taken even though the 40 px grid is nearly clean: 40 is
+  // not a size the slicer answers.
+  const e80 = blank(320, 320);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      rect(e80, c * 80 + 6, r * 80 + 44, c * 80 + 34, r * 80 + 80);
+      if (r < 3) rect(e80, c * 80 + 10, (r + 1) * 80, c * 80 + 20, (r + 1) * 80 + 2);
+    }
+  }
+  check('25. a rescued 80 whose 40 px grid is nearly clean: detectCleanGrid 80', same(detectCleanGrid(e80), grid(80, 4, 4)));
 }
 
 // ── timing ──

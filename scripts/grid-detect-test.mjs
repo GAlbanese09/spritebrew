@@ -1,8 +1,8 @@
 // scripts/grid-detect-test.mjs
 //
-// Offline tests for detectCleanGrid in src/lib/gridDetect.ts and its call in
-// detectFrameGrid (src/lib/spriteUtils.ts): /upload Auto-detect on sheets
-// with large cells. Run from the repo root:
+// Offline tests for detectCleanGrid in src/lib/gridDetect.ts, its call in
+// detectFrameGrid (src/lib/spriteUtils.ts) and the resizer's grid detection
+// (src/lib/resizerGrid.ts): /upload Auto-detect on sheets with large cells. Run from the repo root:
 // `node scripts/grid-detect-test.mjs`.
 //
 // Sheets are synthetic RGBA buffers built in memory: a transparent
@@ -25,6 +25,7 @@ await build({
   entryPoints: {
     gridDetect: path.join(ROOT, 'src/lib/gridDetect.ts'),
     spriteUtils: path.join(ROOT, 'src/lib/spriteUtils.ts'),
+    resizerGrid: path.join(ROOT, 'src/lib/resizerGrid.ts'),
   },
   bundle: true, platform: 'node', format: 'esm', outdir: OUT, logLevel: 'error',
   tsconfig: path.join(ROOT, 'tsconfig.json'), outExtension: { '.js': '.mjs' },
@@ -32,8 +33,11 @@ await build({
 const { countGridCuts, detectCleanGrid } = await import(
   pathToFileURL(path.join(OUT, 'gridDetect.mjs')).href
 );
-const { detectFrameGrid } = await import(
+const { detectFrameGrid, detectFrameGridFromPixels } = await import(
   pathToFileURL(path.join(OUT, 'spriteUtils.mjs')).href
+);
+const { detectGridSmart } = await import(
+  pathToFileURL(path.join(OUT, 'resizerGrid.mjs')).href
 );
 
 let failed = 0;
@@ -385,6 +389,44 @@ function cells(width, height, fw, fh, margins) {
   rect(startY, 8, 8, 248, 248);
   rect(startY, 8, 256, 248, 504);
   check('19. countGridCuts: a blob starting on y = 256 is 0', countGridCuts(startY, 256, 256) === 0);
+}
+
+// ── 20: the resizer's grid detection (src/lib/resizerGrid.ts) ──
+//
+// Uploads over 128 px open the Resize Sprite Sheet step before the slicer,
+// and its grid detection used to go by the image's shape alone (a square
+// image read as 4x4 whatever its pixels). It now asks the slicer's
+// pixel-reading steps first.
+
+const rz = (img) => {
+  const g = detectGridSmart(img);
+  return `${g.cols}x${g.rows}`;
+};
+{
+  check('20. resizer: 512x512, 2x2 of 256 reads 2x2 (was 4x4)', rz(sheet(512, 512, 256, { margin: 8 })) === '2x2');
+  check('20. resizer: 1024x512, 4x2 of 256 reads 4x2 (was 4x4)', rz(sheet(1024, 512, 256, { margin: 8 })) === '4x2');
+  check('20. resizer: 768x256, 3x1 of 256 reads 3x1 (was 8x4)', rz(sheet(768, 256, 256, { margin: 8 })) === '3x1');
+  check('20. resizer: 640x640, 5x5 of 128 reads 5x5 (was 4x4)', rz(sheet(640, 640, 128)) === '5x5');
+  check('20. resizer: 2048x128, 16x1 of 128 reads 16x1 (was 8x1)', rz(sheet(2048, 128, 128)) === '16x1');
+  check('20. resizer: 512x512, 4x4 of 128 still reads 4x4', rz(sheet(512, 512, 128)) === '4x4');
+  check('20. resizer: 384x192 of 32x48 reads 12x4 (was 4x4)',
+    rz(cells(384, 192, 32, 48, () => [4, 4, 4, 4])) === '12x4');
+  // Only a pixel-based answer is taken: with nothing to read, the shape
+  // steps answer as before.
+  const solid = blank(512, 512);
+  rect(solid, 0, 0, 512, 512);
+  check('20. resizer: a fully opaque 512x512 still reads 4x4', rz(solid) === '4x4');
+  check('20. detectFrameGridFromPixels: fully opaque is null', detectFrameGridFromPixels(solid) === null);
+  const one = blank(512, 512);
+  rect(one, 8, 8, 48, 48);
+  check('20. resizer: one sprite on 512x512 still reads 4x4', rz(one) === '4x4');
+  check('20. detectFrameGridFromPixels: one sprite is null', detectFrameGridFromPixels(one) === null);
+  // A pixel answer the resizer cannot show (more than 16 columns) is
+  // skipped, and the shape steps answer as before.
+  check('20. resizer: 160x160 of 8 px icons (20 columns) still reads 4x4', rz(sheet(160, 160, 8, { margin: 1 })) === '4x4');
+  // detectFrameGrid is the pixel steps, then the shape steps: unchanged.
+  check('20. detectFrameGrid on the fully opaque sheet is still the base result (16)',
+    same(detectFrameGrid(solid), grid(16, 32, 32)));
 }
 
 // ── timing ──

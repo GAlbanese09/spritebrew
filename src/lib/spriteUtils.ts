@@ -41,13 +41,29 @@ const KNOWN_LAYOUTS: Array<{
   { imgW: 320, imgH: 160, frameW: 80, frameH: 80 },
 ];
 
+export interface FrameGrid {
+  width: number;
+  height: number;
+  columns: number;
+  rows: number;
+}
+
 /**
  * Analyze an image to detect frame grid dimensions.
  * Prioritizes known layouts and standard sprite sizes.
  */
-export function detectFrameGrid(
-  imageData: ImageData
-): { width: number; height: number; columns: number; rows: number } | null {
+export function detectFrameGrid(imageData: ImageData): FrameGrid | null {
+  return detectFrameGridFromPixels(imageData) ?? detectFrameGridFromShape(imageData);
+}
+
+/**
+ * The steps of detectFrameGrid that read the image: the known layouts
+ * table, the transparent gutters (with the near-size correction) and the
+ * clean grid. Null when none of them answers; detectFrameGrid then falls
+ * back to the image's shape alone. The resizer's grid detection
+ * (src/lib/resizerGrid.ts) uses this part on its own.
+ */
+export function detectFrameGridFromPixels(imageData: ImageData): FrameGrid | null {
   const { width, height, data } = imageData;
 
   // 1) Check known Retro Diffusion layouts first (highest priority)
@@ -128,6 +144,14 @@ export function detectFrameGrid(
   //     falls through to step 3 unchanged.
   const clean = detectCleanGrid(imageData);
   if (clean) return clean;
+
+  return null;
+}
+
+/** detectFrameGrid's shape-only fallbacks: a preset that divides the image,
+ *  any square size that does, then 32x32. Never null. */
+function detectFrameGridFromShape(imageData: ImageData): FrameGrid {
+  const { width, height } = imageData;
 
   // 3) Find all canonical SLICER_FRAME_PRESETS that evenly divide the image,
   //    prefer the one that produces the most frames (smallest frame size)

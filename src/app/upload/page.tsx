@@ -282,24 +282,30 @@ export default function UploadPage() {
   }, [uploaded, fromGenerated, restoreSavedSheet, ownership]);
 
   /** User accepted a resized sheet from FrameSizeResizer. Includes the chosen
-   *  frame dimensions so the slicer can pre-populate its grid. */
+   *  frame dimensions so the slicer can pre-populate its grid. Replaces the
+   *  sheet, so it bumps ownership and asks before discarding groups like the
+   *  other wholesale actions; Cancel leaves everything as it was, the resizer
+   *  included. */
   const handleResizeAccept = useCallback(
     (resizedDataUrl: string, sheetW: number, sheetH: number, frameW: number, frameH: number) => {
       if (!uploaded) return;
-      if (!fromGenerated) URL.revokeObjectURL(uploaded.blobUrl);
-      setUploaded({
-        ...uploaded,
-        blobUrl: resizedDataUrl,
-        width: sheetW,
-        height: sheetH,
+      ownership.bump();
+      askBeforeDiscard(() => {
+        if (!fromGenerated) URL.revokeObjectURL(uploaded.blobUrl);
+        setUploaded({
+          ...uploaded,
+          blobUrl: resizedDataUrl,
+          width: sheetW,
+          height: sheetH,
+        });
+        setFromGenerated(true); // treat as data URL so we don't revoke it
+        setPreferredFrameW(frameW);
+        setPreferredFrameH(frameH);
+        setSizeAcknowledged(true);
+        clearSpriteSheet();
       });
-      setFromGenerated(true); // treat as data URL so we don't revoke it
-      setPreferredFrameW(frameW);
-      setPreferredFrameH(frameH);
-      setSizeAcknowledged(true);
-      clearSpriteSheet();
     },
-    [uploaded, fromGenerated, clearSpriteSheet]
+    [uploaded, fromGenerated, clearSpriteSheet, askBeforeDiscard, ownership]
   );
 
   /** User chose to proceed with the original large image. The resizer passes

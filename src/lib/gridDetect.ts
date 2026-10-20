@@ -119,29 +119,31 @@ export function detectCleanGrid(imageData: {
 }
 
 /**
- * True when some interior line of the cellW x cellH grid (x = k * cellW or
- * y = k * cellH) has opaque pixels directly on both sides of it in the same
- * row or column, that is, when that grid cuts through a sprite. Same alpha
- * rule as detectCleanGrid.
+ * How much the cellW x cellH grid cuts through sprites: the number of pixel
+ * pairs, over every interior line (x = k * cellW or y = k * cellH), that are
+ * opaque directly on both sides of the line in the same row or column. Same
+ * alpha rule as detectCleanGrid. One effect reaching across a line gives a
+ * few; a grid at the wrong spacing, which cuts whole sprites, gives hundreds.
  */
-export function gridCutsSprite(
+export function countGridCuts(
   imageData: { width: number; height: number; data: Uint8ClampedArray },
   cellW: number,
   cellH: number
-): boolean {
+): number {
   const { width, height, data } = imageData;
+  let cuts = 0;
   for (let x = cellW; x < width; x += cellW) {
     for (let y = 0; y < height; y++) {
       const i = (y * width + x) * 4 + 3;
-      if (data[i] > ALPHA_THRESHOLD && data[i - 4] > ALPHA_THRESHOLD) return true;
+      if (data[i] > ALPHA_THRESHOLD && data[i - 4] > ALPHA_THRESHOLD) cuts++;
     }
   }
   for (let y = cellH; y < height; y += cellH) {
     const row = y * width * 4 + 3;
     const above = row - width * 4;
     for (let x = 0; x < width; x++) {
-      if (data[row + x * 4] > ALPHA_THRESHOLD && data[above + x * 4] > ALPHA_THRESHOLD) return true;
+      if (data[row + x * 4] > ALPHA_THRESHOLD && data[above + x * 4] > ALPHA_THRESHOLD) cuts++;
     }
   }
-  return false;
+  return cuts;
 }

@@ -1,5 +1,5 @@
 import { SLICER_FRAME_PRESETS, SLICER_DETECT_TRY_SIZES } from '@/lib/constants';
-import { detectCleanGrid, gridCutsSprite } from '@/lib/gridDetect';
+import { countGridCuts, detectCleanGrid } from '@/lib/gridDetect';
 
 // Square-only canonical sizes derived from the single-source-of-truth presets.
 // Used by detectFrameGrid's findBestStandardSize fallback.
@@ -98,13 +98,14 @@ export function detectFrameGrid(
     const standardMatch = findBestStandardSize(width, height, gutterW, gutterH);
     if (standardMatch) return standardMatch;
 
-    // A frame grid never cuts through a sprite. When the measured gutter
-    // grid does, and a clean grid of nearly the same size exists, the gutter
-    // spacing was mis-measured (walk cycles whose pose widths alternate give
-    // 122 for 128), so the clean grid wins. A clean grid of a different size
-    // (a multiple) does not: there the cut is usually one effect reaching
-    // into the next frame, and the gutter result stands (backlog-2 audit r2).
-    if (gridCutsSprite(imageData, gutterW, gutterH)) {
+    // A frame grid does not cut through sprites. When the measured gutter
+    // grid cuts through more pixels than one cell is long, it is cutting
+    // whole sprites: its spacing was mis-measured (walk cycles whose pose
+    // widths alternate give 122 for 128), and a clean grid of nearly the
+    // same size wins. A smaller cut is one effect reaching into the next
+    // frame, and a clean grid of a different size (a multiple) never wins,
+    // so in both cases the gutter result stands (backlog-2 audits r2, r3).
+    if (countGridCuts(imageData, gutterW, gutterH) > Math.max(gutterW, gutterH)) {
       const clean = detectCleanGrid(imageData);
       if (clean && isNearSize(clean.width, gutterW) && isNearSize(clean.height, gutterH)) {
         return clean;

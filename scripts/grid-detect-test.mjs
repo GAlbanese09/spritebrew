@@ -29,7 +29,7 @@ await build({
   bundle: true, platform: 'node', format: 'esm', outdir: OUT, logLevel: 'error',
   tsconfig: path.join(ROOT, 'tsconfig.json'), outExtension: { '.js': '.mjs' },
 });
-const { detectCleanGrid, gridCutsSprite } = await import(
+const { countGridCuts, detectCleanGrid } = await import(
   pathToFileURL(path.join(OUT, 'gridDetect.mjs')).href
 );
 const { detectFrameGrid } = await import(
@@ -268,7 +268,7 @@ function smallBlobs(width, height, cell, size, off) {
   check('15. one sprite on a 256x256 image: detectCleanGrid null', same(detectCleanGrid(img), null));
 }
 
-// ── 16 to 19: a gutter grid that cuts sprites (audit r2) ──
+// ── 16 to 19: a gutter grid that cuts sprites (audits r2 and r3) ──
 
 // Cells of fw x fh; margins(c, r) gives the blob's [left, top, right, bottom]
 // margins inside cell (c, r).
@@ -294,6 +294,20 @@ function cells(width, height, fw, fh, margins) {
   const img = cells(512, 512, 128, 128, (c, r) => [4, 4, c % 2 ? 10 : 4, r % 2 ? 10 : 4]);
   check('16b. the same with heights alternating too: detectFrameGrid 128 (gutter read 122x122)',
     same(detectFrameGrid(img), grid(128, 4, 4)));
+}
+{
+  // 128x64 frames with alternating widths: the gutter reads 122x64 and its
+  // grid cuts the sprites, but the clean grid (128x128) is near in width
+  // only, so it must not replace the result and halve the rows. The width
+  // stays mis-measured, as on base.
+  const g = detectFrameGrid(cells(512, 256, 128, 64, (c) => [4, 4, c % 2 ? 10 : 4, 4]));
+  check('16c. 512x256 of 128x64, widths alternate: keeps 64 px rows (clean 128x128 is near in width only)',
+    g !== null && g.height === 64 && g.rows === 4);
+}
+{
+  const g = detectFrameGrid(cells(256, 512, 64, 128, (c, r) => [4, 4, 4, r % 2 ? 10 : 4]));
+  check('16d. 256x512 of 64x128, heights alternate: keeps 64 px columns (clean 128x128 is near in height only)',
+    g !== null && g.width === 64 && g.columns === 4);
 }
 {
   // One effect reaches across x = 32 into the next frame. The 32x48 gutter
@@ -322,6 +336,18 @@ function cells(width, height, fw, fh, margins) {
     same(detectFrameGrid(img), { width: 120, height: 120, columns: 4, rows: 4 }));
 }
 {
+  // Test 18's texture plus one effect on the first sprite reaching 2 px past
+  // x = 120. The 120 grid cuts it in 4 pixel pairs, far fewer than one cell
+  // is long, so the near clean grid (128) does not replace 120 (audit r3).
+  const img = blank(512, 512);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) rect(img, c * 120 + 30, r * 120 + 30, c * 120 + 90, r * 120 + 90);
+  }
+  rect(img, 90, 50, 122, 54);
+  check('18c. the same texture with one effect 2 px past x = 120: detectFrameGrid keeps 120',
+    same(detectFrameGrid(img), { width: 120, height: 120, columns: 4, rows: 4 }));
+}
+{
   // A 512x512 texture holding 5x5 of 100 px cells, 20 px sprites near each
   // cell's start, and one effect across x = 100. The 100 gutter grid cuts
   // the effect and 128 is clean, but 128 is not near 100 (more than an
@@ -336,29 +362,29 @@ function cells(width, height, fw, fh, margins) {
 }
 {
   const img = sheet(512, 512, 256, { margin: 8 });
-  check('19. gridCutsSprite: 2x2 of 256 at 256 is false', gridCutsSprite(img, 256, 256) === false);
-  check('19. gridCutsSprite: 2x2 of 256 at 128 is true', gridCutsSprite(img, 128, 128) === true);
+  check('19. countGridCuts: 2x2 of 256 at 256 is 0', countGridCuts(img, 256, 256) === 0);
+  check('19. countGridCuts: 2x2 of 256 at 128 is 1920 (240 rows or columns on each of 8 line halves)', countGridCuts(img, 128, 128) === 1920);
   const touch = blank(512, 512);
   rect(touch, 8, 8, 256, 256);
   rect(touch, 257, 8, 504, 256);
   rect(touch, 8, 257, 256, 504);
   rect(touch, 257, 257, 504, 504);
-  check('19. gridCutsSprite: lines touched without crossing is false', gridCutsSprite(touch, 256, 256) === false);
+  check('19. countGridCuts: lines touched without crossing is 0', countGridCuts(touch, 256, 256) === 0);
   const crossX = blank(512, 512);
   rect(crossX, 8, 8, 257, 248);
-  check('19. gridCutsSprite: one pixel past x = 256 is true', gridCutsSprite(crossX, 256, 256) === true);
+  check('19. countGridCuts: one pixel past x = 256 over 240 rows is 240', countGridCuts(crossX, 256, 256) === 240);
   const crossY = blank(512, 512);
   rect(crossY, 8, 8, 248, 257);
-  check('19. gridCutsSprite: one pixel past y = 256 is true', gridCutsSprite(crossY, 256, 256) === true);
+  check('19. countGridCuts: one pixel past y = 256 over 240 columns is 240', countGridCuts(crossY, 256, 256) === 240);
   // Blobs that start exactly on a line, with nothing on the other side.
   const startX = blank(512, 512);
   rect(startX, 8, 8, 248, 248);
   rect(startX, 256, 8, 504, 248);
-  check('19. gridCutsSprite: a blob starting on x = 256 is false', gridCutsSprite(startX, 256, 256) === false);
+  check('19. countGridCuts: a blob starting on x = 256 is 0', countGridCuts(startX, 256, 256) === 0);
   const startY = blank(512, 512);
   rect(startY, 8, 8, 248, 248);
   rect(startY, 8, 256, 248, 504);
-  check('19. gridCutsSprite: a blob starting on y = 256 is false', gridCutsSprite(startY, 256, 256) === false);
+  check('19. countGridCuts: a blob starting on y = 256 is 0', countGridCuts(startY, 256, 256) === 0);
 }
 
 // ── timing ──

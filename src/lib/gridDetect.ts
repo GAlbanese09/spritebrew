@@ -147,3 +147,44 @@ export function countGridCuts(
   }
   return cuts;
 }
+
+/**
+ * True when some cell of the cellW x cellH grid holds content in two or more
+ * of its four quadrants (the cells of the grid at half the size). Used with
+ * countGridCuts of 0 at half the size: the half grid then separates that
+ * content, so the cell holds two sprites, which a frame does not.
+ * cellW and cellH must be even.
+ */
+export function cellHoldsTwoQuadrants(
+  imageData: { width: number; height: number; data: Uint8ClampedArray },
+  cellW: number,
+  cellH: number
+): boolean {
+  const { width, height, data } = imageData;
+  const halfW = cellW / 2;
+  const halfH = cellH / 2;
+  const columns = Math.floor(width / cellW);
+  const rows = Math.floor(height / cellH);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < columns; c++) {
+      let quadrants = 0;
+      for (let q = 0; q < 4 && quadrants < 2; q++) {
+        const x0 = c * cellW + (q % 2) * halfW;
+        const y0 = r * cellH + Math.floor(q / 2) * halfH;
+        let found = false;
+        for (let y = y0; y < y0 + halfH && !found; y++) {
+          let i = (y * width + x0) * 4 + 3;
+          for (let x = 0; x < halfW; x++, i += 4) {
+            if (data[i] > ALPHA_THRESHOLD) {
+              found = true;
+              break;
+            }
+          }
+        }
+        if (found) quadrants++;
+      }
+      if (quadrants >= 2) return true;
+    }
+  }
+  return false;
+}

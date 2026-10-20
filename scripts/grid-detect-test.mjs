@@ -30,7 +30,7 @@ await build({
   bundle: true, platform: 'node', format: 'esm', outdir: OUT, logLevel: 'error',
   tsconfig: path.join(ROOT, 'tsconfig.json'), outExtension: { '.js': '.mjs' },
 });
-const { countGridCuts, detectCleanGrid } = await import(
+const { cellHoldsTwoQuadrants, countGridCuts, detectCleanGrid } = await import(
   pathToFileURL(path.join(OUT, 'gridDetect.mjs')).href
 );
 const { detectFrameGrid, detectFrameGridFromPixels } = await import(
@@ -427,6 +427,56 @@ const rz = (img) => {
   // detectFrameGrid is the pixel steps, then the shape steps: unchanged.
   check('20. detectFrameGrid on the fully opaque sheet is still the base result (16)',
     same(detectFrameGrid(solid), grid(16, 32, 32)));
+}
+
+// ── 21: the resizer on sparse templates and charsets (audit r5) ──
+
+{
+  // A 4x4 template of 128 px frames with the first k frames drawn.
+  const template = (k) => {
+    const img = blank(512, 512);
+    for (let i = 0; i < k; i++) {
+      const c = i % 4;
+      const r = Math.floor(i / 4);
+      rect(img, c * 128 + 6, r * 128 + 6, c * 128 + 122, r * 128 + 124);
+    }
+    return img;
+  };
+  const g6 = detectGridSmart(template(6));
+  check('21. resizer: 4x4 template of 128 with 6 frames reads 4x4 (was 2x2 of 256)', `${g6.cols}x${g6.rows}` === '4x4');
+  check("21. resizer: that answer is labelled 'medium' (a grid the pixels allow)", g6.confidence === 'medium');
+  check('21. resizer: 4x4 template of 128 with 3 frames reads 4x4', rz(template(3)) === '4x4');
+  check('21. resizer: 4x4 template of 128 with 7 frames reads 4x4', rz(template(7)) === '4x4');
+  check("21. resizer: a full 4x4 of 128 stays 'high'", detectGridSmart(template(16)).confidence === 'high');
+  // 3x3 of 128 with 5 of 9 drawn: the 6x6 grid would cut the sprites, so 3x3 stands.
+  const nine = blank(384, 384);
+  for (let i = 0; i < 5; i++) rect(nine, (i % 3) * 128 + 4, Math.floor(i / 3) * 128 + 4, (i % 3) * 128 + 124, Math.floor(i / 3) * 128 + 124);
+  check('21. resizer: 3x3 of 128 with 5 of 9 drawn reads 3x3', rz(nine) === '3x3');
+  // A real 2x2 of 256 with one small sprite in a corner of each of two cells:
+  // the 4x4 grid cuts nothing, but no cell holds two sprites, so 2x2 stands.
+  const corner = blank(512, 512);
+  rect(corner, 8, 8, 108, 108);
+  rect(corner, 264, 8, 364, 108);
+  rect(corner, 8, 264, 108, 364);
+  check('21. resizer: 2x2 of 256 with one corner sprite per cell keeps 2x2', rz(corner) === '2x2');
+  check('21. cellHoldsTwoQuadrants: one sprite per 256 cell is false', cellHoldsTwoQuadrants(corner, 256, 256) === false);
+  check('21. cellHoldsTwoQuadrants: the 6-frame template at 256 is true', cellHoldsTwoQuadrants(template(6), 256, 256) === true);
+  // An RPG Maker XP charset (128x192, 4x4 of 32x48) whose gutter spacing
+  // measures 49 rows high: the slicer's pixel answer would make the resizer
+  // show 3 rows of 64, so the shape steps answer 4x4 as before.
+  const T = [1, 1, 2, 1], B = [2, 1, 0, 0], L = [1, 2, 1, 1], R = [1, 1, 1, 4];
+  const xp = blank(128, 192);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) rect(xp, c * 32 + L[c], r * 48 + T[r], (c + 1) * 32 - R[c], (r + 1) * 48 - B[r]);
+  }
+  check('21. resizer: an XP charset with rows measured 49 for 48 reads 4x4', rz(xp) === '4x4');
+  // A padded texture: 8x8 of 120 px cells in a 1024 texture, frames shown
+  // as 128 (within an eighth of 120), so the pixel grid stands.
+  const padded = blank(1024, 1024);
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) rect(padded, c * 120 + 4, r * 120 + 4, c * 120 + 116, r * 120 + 116);
+  }
+  check('21. resizer: 8x8 of 120 in a 1024 texture reads 8x8', rz(padded) === '8x8');
 }
 
 // ── timing ──

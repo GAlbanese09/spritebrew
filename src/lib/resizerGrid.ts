@@ -18,6 +18,7 @@
 //   4. Dimension-based fallback (square to 4x4, strip to W/H columns, etc.)
 
 import { SLICER_FRAME_PRESETS } from '@/lib/constants';
+import { cellHoldsTwoQuadrants, countGridCuts } from '@/lib/gridDetect';
 import { detectFrameGridFromPixels } from '@/lib/spriteUtils';
 
 export type DetectionConfidence = 'high' | 'medium' | 'low';
@@ -194,11 +195,40 @@ export function detectGridSmart(imgData: ImageData): DetectionResult {
   //    256 px frames comes back as 2x2, where the shape-only steps below
   //    answered 4x4 of 128 (PR #19). Only a pixel-based answer counts: a
   //    result the slicer reached by its own shape fallbacks (steps 3 to 5)
-  //    is no better than the shape steps here, so those are skipped. The
-  //    grid must also be one the resizer can show (isValidGrid).
+  //    is no better than the shape steps here, so those are skipped. Three
+  //    checks guard it:
+  //    - The grid must be one the resizer can show (isValidGrid).
+  //    - The resizer shows frames of width / cols by height / rows. When the
+  //      answer's cells do not tile the image (a padded texture, or a gutter
+  //      spacing measured a few pixels off), those frames must stay within
+  //      an eighth of the cells it measured; a charset whose rows measured
+  //      49 for 48 (3 rows of 64) falls through to the shape steps instead.
+  //    - The clean grid only takes a size whose cells are at least half
+  //      filled, so a 4x4 template of 128 px frames with 3 to 7 frames drawn
+  //      comes back as 2x2 of 256 (audit r5). When the grid with twice the
+  //      columns and rows is valid, cuts no sprite, and splits some cell's
+  //      content into two of its quadrants, that cell held two frames, not
+  //      one, and the finer grid answers instead, as 'medium': a grid the
+  //      pixels allow rather than force. One sprite per big cell (a real
+  //      2x2 of 256 with small sprites) keeps the coarse answer.
   const fromSlicer = detectFrameGridFromPixels(imgData);
-  if (fromSlicer && isValidGrid(W, H, fromSlicer.columns, fromSlicer.rows)) {
-    return { cols: fromSlicer.columns, rows: fromSlicer.rows, confidence: 'high' };
+  if (
+    fromSlicer &&
+    isValidGrid(W, H, fromSlicer.columns, fromSlicer.rows) &&
+    Math.abs(W / fromSlicer.columns - fromSlicer.width) * 8 <= fromSlicer.width &&
+    Math.abs(H / fromSlicer.rows - fromSlicer.height) * 8 <= fromSlicer.height
+  ) {
+    const { width: cellW, height: cellH, columns, rows } = fromSlicer;
+    if (
+      cellW % 2 === 0 &&
+      cellH % 2 === 0 &&
+      isValidGrid(W, H, columns * 2, rows * 2) &&
+      countGridCuts(imgData, cellW / 2, cellH / 2) === 0 &&
+      cellHoldsTwoQuadrants(imgData, cellW, cellH)
+    ) {
+      return { cols: columns * 2, rows: rows * 2, confidence: 'medium' };
+    }
+    return { cols: columns, rows: rows, confidence: 'high' };
   }
 
   const p1 = detectByCommonGrid(W, H);

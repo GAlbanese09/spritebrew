@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * latest version — there's nothing to announce to them).
  */
 
-export const CURRENT_VERSION = '0.6.1';
+export const CURRENT_VERSION = '0.6.2';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
@@ -23,6 +23,20 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  // ── 0.6.2: Easier animations (Oct 21, 2026) ──
+  {
+    releaseLabel: 'OCT 21, 2026: EASIER ANIMATIONS',
+    emoji: '🧩',
+    title: 'Drag frames to make animations',
+    description:
+      'In Sheet Tools, drag a frame onto the Animations panel to start a new animation, and drop more frames to add them. "Use all frames" makes one from the whole sheet in a click, and you can rename an animation and set its type right on its card.',
+  },
+  {
+    emoji: '🎯',
+    title: 'Your prepared character stays put',
+    description:
+      'On the Animate tab, changing the resolution no longer throws away a character you prepared or touched up by hand. Switch back and it is still there, or click "Prepare at" to make a fresh version at the new size. Pixel edits also survive padding changes now.',
+  },
   // ── 0.6.1: Privacy policy updated (Oct 4, 2026) ──
   {
     releaseLabel: 'OCT 4, 2026: PRIVACY POLICY UPDATED',

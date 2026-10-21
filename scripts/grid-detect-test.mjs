@@ -30,7 +30,14 @@ await build({
   bundle: true, platform: 'node', format: 'esm', outdir: OUT, logLevel: 'error',
   tsconfig: path.join(ROOT, 'tsconfig.json'), outExtension: { '.js': '.mjs' },
 });
-const { cellHoldsTwoHalves, cellHoldsTwoQuadrants, countGridCuts, countUnresolvedCuts, detectCleanGrid } = await import(
+const {
+  cellHoldsTwoHalves,
+  cellHoldsTwoQuadrants,
+  countGridCuts,
+  countUnresolvedCuts,
+  detectCleanGrid,
+  newSpillMemo,
+} = await import(
   pathToFileURL(path.join(OUT, 'gridDetect.mjs')).href
 );
 const { detectFrameGrid, detectFrameGridFromPixels } = await import(
@@ -949,6 +956,7 @@ const rz = (img) => {
   check('28. one pixel above the corner: resizer reads 4x4', rz(weapon((n) => [n, n - 1])) === '4x4');
   check('28. one pixel below the corner: resizer reads 4x4', rz(weapon((n) => [n, n + 1])) === '4x4');
   check('28. a mirrored diagonal through the corner: resizer reads 4x4', rz(weapon((n) => [n, 128 - n])) === '4x4');
+  check('28. a mirrored diagonal through the corner: detectCleanGrid 128', same(detectCleanGrid(weapon((n) => [n, 128 - n])), grid(128, 4, 4)));
   check('28. a transposed diagonal through the corner: resizer reads 4x4', rz(weapon((n) => [n - 1, n])) === '4x4');
   // A diagonal stub through the corner is a spill up to the tolerance
   // (4 px at 64) and a cut one pixel beyond it.
@@ -989,6 +997,361 @@ const rz = (img) => {
   const joined = feet('straight');
   rect(joined, 100, 259, 140, 260);
   check('28. feet running into the next character: detectCleanGrid does not take 256', same(detectCleanGrid(joined), null));
+}
+
+// ── 29: slanted weapons, branched crossings and long bars (Second 060) ──
+
+{
+  const pixel = (img, x, y) => rect(img, x, y, x + 1, y + 1);
+  const mirror = (img) => {
+    const out = blank(img.width, img.height);
+    for (let y = 0; y < img.height; y++) {
+      for (let x = 0; x < img.width; x++) if (img.data[(y * img.width + x) * 4 + 3]) pixel(out, img.width - 1 - x, y);
+    }
+    return out;
+  };
+  // 192x128 of 48x32 frames: a 14x20 body and an attached sword t px thick
+  // from x = 19 to 40, falling one pixel every two (slanted) or level. The
+  // table's 6x4 of 32 cuts every sword. A slanted line spans the half's
+  // width and height but holds no solid square, so it is no second body.
+  const swords = (t, slanted = () => true) => {
+    const img = blank(192, 128);
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) {
+        rect(img, c * 48 + 6, r * 32 + 6, c * 48 + 20, r * 32 + 26);
+        const fall = slanted(c, r) ? (n) => Math.floor((n - 19) / 2) : () => 0;
+        for (let n = 19; n <= 40; n++) rect(img, c * 48 + n, r * 32 + 10 + fall(n), c * 48 + n + 1, r * 32 + 10 + fall(n) + t);
+      }
+    }
+    return img;
+  };
+  for (const t of [1, 2, 3]) {
+    check(`29. 192x128 of 48x32 with ${t} px slanted swords: resizer reads 4x4`, rz(swords(t)) === '4x4');
+    check(`29. ${t} px slanted swords: cellHoldsTwoHalves false`, cellHoldsTwoHalves(swords(t), 48, 32) === false);
+  }
+  const one = (c, r) => c === 2 && r === 1;
+  check('29. one slanted 1 px sword among level ones: resizer reads 4x4', rz(swords(1, one)) === '4x4');
+  check('29. one slanted 3 px sword among level ones: resizer reads 4x4', rz(swords(3, one)) === '4x4');
+  check('29. level 1 px swords, the control: resizer reads 4x4', rz(swords(1, () => false)) === '4x4');
+  for (const t of [4, 6, 9]) check(`29. ${t} px level weapons: resizer reads 4x4`, rz(swords(t, () => false)) === '4x4');
+  // A band 4 px tall at 45 degrees holds no solid square wider than 2 px.
+  const steep = (up) => {
+    const img = blank(192, 128);
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) {
+        rect(img, c * 48 + 6, r * 32 + 6, c * 48 + 20, r * 32 + 26);
+        for (let n = 19; n <= 36; n++) rect(img, c * 48 + n, r * 32 + (up ? 26 - (n - 19) : 6 + (n - 19)), c * 48 + n + 1, r * 32 + (up ? 30 - (n - 19) : 10 + (n - 19)));
+      }
+    }
+    return img;
+  };
+  check('29. a 4 px sword at 45 degrees, falling: resizer reads 4x4', rz(steep(false)) === '4x4');
+  check('29. a 4 px sword at 45 degrees, rising: resizer reads 4x4', rz(steep(true)) === '4x4');
+  // The thickness test applies to a half holding under half the other
+  // half's pixels: a 3 px sword with about a third of a small body's pixels
+  // past the middle is still no body.
+  const longSwords = blank(192, 128);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      rect(longSwords, c * 48 + 6, r * 32 + 7, c * 48 + 17, r * 32 + 25);
+      for (let n = 16; n <= 46; n++) {
+        const y = r * 32 + 10 + Math.floor((n - 16) / 3);
+        rect(longSwords, c * 48 + n, y, c * 48 + n + 1, y + 3);
+      }
+    }
+  }
+  check('29. long 3 px swords beside a small body: resizer reads 4x4', rz(longSwords) === '4x4');
+  // A short stub is a line too: a 3 px sword reaching 8 px past the
+  // middle, about three times longer than thick there.
+  const stubs = blank(192, 128);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      rect(stubs, c * 48 + 4, r * 32 + 6, c * 48 + 18, r * 32 + 26);
+      for (let n = 17; n <= 32; n++) {
+        const y = r * 32 + 9 + Math.floor((n - 17) / 2);
+        rect(stubs, c * 48 + n, y, c * 48 + n + 1, y + 3);
+      }
+    }
+  }
+  check('29. short 3 px slanted stubs past the middle: resizer reads 4x4', rz(stubs) === '4x4');
+  // Halves of a size need no thickness: genuine tables of rings, dithered
+  // squares or stick figures, with one effect across a frame line, keep the
+  // table's grid (the independent review's round 2).
+  const clear = (img, x0, y0, x1, y1) => {
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) img.data[(y * img.width + x) * 4 + 3] = 0;
+  };
+  const ringStrip = blank(384, 64);
+  for (let c = 0; c < 6; c++) {
+    rect(ringStrip, c * 64 + 6, 6, c * 64 + 58, 58);
+    clear(ringStrip, c * 64 + 8, 8, c * 64 + 56, 56);
+  }
+  rect(ringStrip, 58, 30, 72, 33);
+  check('29. a 6x1 strip of 52 px rings with 2 px walls and an effect keeps 6x1', rz(ringStrip) === '6x1');
+  const ditherStrip = blank(384, 64);
+  for (let c = 0; c < 6; c++) for (let y = 6; y < 58; y++) for (let x = c * 64 + 6; x < c * 64 + 58; x++) if ((x + y) & 1) pixel(ditherStrip, x, y);
+  rect(ditherStrip, 58, 30, 72, 33);
+  check('29. a 6x1 strip of dithered squares with an effect keeps 6x1', rz(ditherStrip) === '6x1');
+  const stickStrip = blank(384, 64);
+  for (let c = 0; c < 6; c++) {
+    const cx = c * 64 + 26;
+    rect(stickStrip, cx - 2, 6, cx + 3, 11);
+    rect(stickStrip, cx - 1, 11, cx + 1, 45);
+    rect(stickStrip, c * 64 + 6, 13, c * 64 + 46, 15);
+    for (let k = 0; k < 13; k++) {
+      pixel(stickStrip, cx - 2 - k, 45 + k);
+      pixel(stickStrip, cx + 1 + k, 45 + k);
+    }
+  }
+  rect(stickStrip, 46, 30, 72, 33);
+  check('29. a 6x1 strip of stick figures with 2 px limbs and an effect keeps 6x1', rz(stickStrip) === '6x1');
+  const ringTable = blank(192, 128);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 6; c++) {
+      rect(ringTable, c * 32 + 4, r * 32 + 6, c * 32 + 16, r * 32 + 18);
+      clear(ringTable, c * 32 + 5, r * 32 + 7, c * 32 + 15, r * 32 + 17);
+    }
+  }
+  rect(ringTable, 16, 10, 36, 12);
+  check('29. 6x4 of 32 with 12 px rings and an effect keeps 6x4', rz(ringTable) === '6x4');
+  // A smaller half that is no line counts even with under half the pixels
+  // and no solid square: a dithered flash frame beside a solid one, and a
+  // small figure beside a big one, every pair joined by an effect.
+  const joinedPairs = (odd) => {
+    const img = blank(384, 64);
+    for (let c = 0; c < 6; c++) {
+      if (c % 2) odd(img, c * 64);
+      else rect(img, c * 64 + 6, 6, c * 64 + 58, 58);
+    }
+    for (const x of [54, 182, 310]) rect(img, x, 30, x + 20, 33);
+    return img;
+  };
+  check('29. a 6x1 strip of solid and dithered 50 px squares joined in pairs keeps 6x1',
+    rz(joinedPairs((img, x0) => { for (let y = 7; y < 57; y++) for (let x = x0 + 7; x < x0 + 57; x++) if ((x + y) & 1) pixel(img, x, y); })) === '6x1');
+  check('29. a 6x1 strip of solid squares and dithered 40x16 bars joined in pairs keeps 6x1',
+    rz(joinedPairs((img, x0) => { for (let y = 24; y < 40; y++) for (let x = x0 + 12; x < x0 + 52; x++) if ((x + y) & 1) pixel(img, x, y); })) === '6x1');
+  // Halves of a size need no test at all: a genuine strip of diagonal
+  // slash frames, each a line, keeps 6x1. And a solid bar is a body, line or
+  // not: a genuine 6x4 of 32 alternating sprites and 5x20 bars keeps 6x4.
+  const slashes = blank(384, 64);
+  for (let c = 0; c < 6; c++) for (let n = 12; n < (c % 2 ? 48 : 52); n++) rect(slashes, c * 64 + n, n, c * 64 + n + 2, n + 1);
+  rect(slashes, 58, 30, 72, 33);
+  check('29. a 6x1 strip of 2 px slash frames with an effect keeps 6x1', rz(slashes) === '6x1');
+  const twoSlashes = blank(128, 64);
+  for (let n = 12; n < 52; n++) rect(twoSlashes, n, n, n + 2, n + 1);
+  for (let n = 12; n < 48; n++) rect(twoSlashes, 64 + n, n, 64 + n + 2, n + 1);
+  check('29. cellHoldsTwoHalves: two slashes of a size, one in each half, are two things', cellHoldsTwoHalves(twoSlashes, 128, 64) === true);
+  // A solid bar is a body even when it lies along a line: 52 px squares
+  // alternating with 40x10 bars, each pair joined along the bar's axis.
+  const barStrip = blank(384, 64);
+  for (let c = 0; c < 6; c++) {
+    if (c % 2) rect(barStrip, c * 64 + 12, 27, c * 64 + 52, 37);
+    else rect(barStrip, c * 64 + 6, 6, c * 64 + 58, 58);
+  }
+  for (const x of [58, 186, 314]) rect(barStrip, x, 30, x + 18, 34);
+  check('29. a 6x1 strip of 52 px squares and 40x10 bars joined in pairs keeps 6x1', rz(barStrip) === '6x1');
+  const bars6x4 = blank(192, 128);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 6; c++) {
+      if (c % 2) rect(bars6x4, c * 32 + 6, r * 32 + 6, c * 32 + 11, r * 32 + 26);
+      else rect(bars6x4, c * 32 + 4, r * 32 + 6, c * 32 + 16, r * 32 + 26);
+    }
+  }
+  rect(bars6x4, 16, 14, 38, 16);
+  check('29. 6x4 of 32 alternating 12x20 sprites and 5x20 bars, one effect, keeps 6x4', rz(bars6x4) === '6x4');
+  check('29. a 6x1 strip of 52 px squares and 20 px figures joined in pairs keeps 6x1',
+    rz(joinedPairs((img, x0) => {
+      rect(img, x0 + 29, 22, x0 + 35, 28);
+      rect(img, x0 + 26, 28, x0 + 38, 36);
+      rect(img, x0 + 26, 36, x0 + 29, 42);
+      rect(img, x0 + 35, 36, x0 + 38, 42);
+    })) === '6x1');
+  // A body with a club head, a fist or an axe head past the middle, the
+  // body straddling the middle thickly: one thing (the independent review's
+  // fixtures, which a body test at the table's lines got wrong).
+  const axes = (head, bx) => {
+    const img = blank(192, 128);
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) {
+        const x0 = c * 48;
+        const y0 = r * 32;
+        rect(img, x0 + bx, y0 + 6, x0 + bx + 14, y0 + 26);
+        rect(img, x0 + bx + 13, y0 + 10, x0 + 45 - head, y0 + 11);
+        rect(img, x0 + 45 - head, y0 + 10 - (head >> 1), x0 + 45, y0 + 10 - (head >> 1) + head);
+      }
+    }
+    return img;
+  };
+  check('29. a centred body with an 8 px axe head past the middle: resizer reads 4x4', rz(axes(8, 16)) === '4x4');
+  check('29. the same, mirrored: resizer reads 4x4', rz(mirror(axes(8, 16))) === '4x4');
+  const punch = (fist) => {
+    const img = blank(192, 128);
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) {
+        const x0 = c * 48 + 14;
+        const y0 = r * 32;
+        rect(img, x0 + 2, y0 + 4, x0 + 10, y0 + 11);
+        rect(img, x0 + 5, y0 + 11, x0 + 7, y0 + 12);
+        rect(img, x0, y0 + 12, x0 + 14, y0 + 20);
+        rect(img, x0, y0 + 20, x0 + 4, y0 + 28);
+        rect(img, x0 + 10, y0 + 20, x0 + 14, y0 + 28);
+        rect(img, x0 + 13, y0 + 14, c * 48 + 36, y0 + 15);
+        rect(img, c * 48 + 35, y0 + 14 - ((fist - 1) >> 1), c * 48 + 35 + fist, y0 + 14 - ((fist - 1) >> 1) + fist);
+      }
+    }
+    return img;
+  };
+  check('29. a figure punching with a 6 px fist past the middle: resizer reads 4x4', rz(punch(6)) === '4x4');
+  // A 384x64 sheet of three 128x64 frames is the nested case: the table's
+  // 64 px frames halve each cell. A body with a weapon across the middle is
+  // one frame; the table yields.
+  const halves = (draw) => {
+    const img = blank(384, 64);
+    for (let c = 0; c < 3; c++) {
+      rect(img, c * 128 + 15, 12, c * 128 + 54, 52);
+      draw(img, c * 128);
+    }
+    return img;
+  };
+  check('29. 3x1 of 128x64, an 8 px weapon across the middle: resizer reads 3x1', rz(halves((img, x) => rect(img, x + 53, 19, x + 111, 27))) === '3x1');
+  check('29. 3x1 of 128x64, a slanted 1 px weapon across the middle: resizer reads 3x1',
+    rz(halves((img, x) => { for (let n = 53; n <= 111; n++) pixel(img, x + n, 19 + ((n - 53) >> 1)); })) === '3x1');
+  // Genuine table strips keep 6x1: effects between frames 0-1, 2-3 and 4-5,
+  // small frames between big ones joined in pairs, and a thick overlap
+  // beside an effect.
+  const strip = (frame, extra) => {
+    const img = blank(384, 64);
+    for (let c = 0; c < 6; c++) frame(img, c * 64, c);
+    extra(img);
+    return img;
+  };
+  const big = (img, x) => rect(img, x + 6, 6, x + 58, 58);
+  const pairs = (rows) => (img) => { for (const x of [58, 186, 314]) rect(img, x, 30, x + 14, 30 + rows); };
+  check('29. a 6x1 strip of 64 with effects between frames 0-1, 2-3 and 4-5 keeps 6x1', rz(strip(big, pairs(3))) === '6x1');
+  check('29. the same with 6 px effects keeps 6x1', rz(strip(big, pairs(6))) === '6x1');
+  const small = (size) => (img, x, c) => (c % 2 ? rect(img, x + 32 - (size >> 1), 32 - (size >> 1), x + 32 - (size >> 1) + size, 32 - (size >> 1) + size) : big(img, x));
+  check('29. a 6x1 strip of 52 px and 20 px sprites joined in pairs keeps 6x1',
+    rz(strip(small(20), (img) => { for (const x of [54, 182, 310]) rect(img, x, 30, x + 20, 33); })) === '6x1');
+  check('29. a 6x1 strip of 52 px and 12 px sprites, one effect, keeps 6x1', rz(strip(small(12), (img) => rect(img, 58, 30, 90, 32))) === '6x1');
+  check('29. a 6x1 strip of 64 with an effect and a 12 px thick overlap keeps 6x1',
+    rz(strip(big, (img) => { rect(img, 58, 30, 72, 33); rect(img, 186, 20, 198, 32); })) === '6x1');
+  // Genuine 6x4 of 32 sheets keep 6x4: small sprites that miss the 4x4's
+  // lines with one effect of up to 5 rows, sprites placed right of centre,
+  // and a bulge 3 px past a frame line.
+  const table = (bx, rows, end) => {
+    const img = blank(192, 128);
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 6; c++) rect(img, c * 32 + bx, r * 32 + 6, c * 32 + bx + 12, r * 32 + 26);
+    rect(img, bx + 12, 12, end, 12 + rows);
+    return img;
+  };
+  check('29. 6x4 of 32 with small sprites and a 2 px effect keeps 6x4', rz(table(4, 2, 36)) === '6x4');
+  check('29. 6x4 of 32 with small sprites and a 5 px effect keeps 6x4', rz(table(4, 5, 36)) === '6x4');
+  check('29. 6x4 of 32 with sprites right of centre and a 4 px effect keeps 6x4', rz(table(18, 4, 44)) === '6x4');
+  const bulge = blank(192, 128);
+  for (let r = 0; r < 4; r++) for (let c = 0; c < 6; c++) rect(bulge, c * 32 + 16, r * 32 + 6, c * 32 + 30, r * 32 + 26);
+  rect(bulge, 30, 10, 35, 22);
+  check('29. 6x4 of 32 with a bulge 3 px past a frame line keeps 6x4', rz(bulge) === '6x4');
+
+  // B: every pixel a crossing touches across the line is followed. Two
+  // one-pixel spurs beside 059's corner weapon do not hide the weapon, in
+  // any of the sheet's mirror images.
+  const spurred = (spurs, map = (x, y) => [x, y]) => {
+    const img = blank(512, 512);
+    const put = (c, r, x, y) => {
+      const [mx, my] = map(x, y);
+      pixel(img, c * 128 + mx, r * 128 + my);
+    };
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) {
+        for (let y = 8; y < 48; y++) for (let x = 8; x < 48; x++) put(c, r, x, y);
+        for (let n = 47; n <= 95; n++) put(c, r, n, n);
+        for (const [x, y] of spurs) put(c, r, x, y);
+      }
+    }
+    return img;
+  };
+  const both = [[64, 62], [62, 64]];
+  const two = spurred(both);
+  check('29. two spurs beside a corner weapon: resizer reads 4x4, not 8x8', rz(two) === '4x4');
+  check('29. two spurs beside a corner weapon: detectCleanGrid 128', same(detectCleanGrid(two), grid(128, 4, 4)));
+  check('29. two spurs beside a corner weapon: the 64 px grid has unforgiven cuts', countUnresolvedCuts(two, 64, 64) > 0);
+  check('29. the spur above the corner alone: resizer reads 4x4', rz(spurred([[64, 62]])) === '4x4');
+  check('29. the spur left of the corner alone: resizer reads 4x4', rz(spurred([[62, 64]])) === '4x4');
+  for (const [name, map] of [
+    ['mirrored left to right', (x, y) => [127 - x, y]],
+    ['mirrored top to bottom', (x, y) => [x, 127 - y]],
+    ['turned half round', (x, y) => [127 - x, 127 - y]],
+    ['transposed', (x, y) => [y, x]],
+  ]) {
+    const img = spurred(both, map);
+    check(`29. two spurs, ${name}: resizer reads 4x4 and the 64 px grid cuts`, rz(img) === '4x4' && countUnresolvedCuts(img, 64, 64) > 0);
+  }
+  // A run of pixels along the line touches one pixel across it: three cuts,
+  // the pixel straight across and its two diagonal neighbours, in either
+  // direction. Nothing near the line is clear, so nothing is forgiven.
+  const run = (vertical) => {
+    const img = vertical ? blank(128, 64) : blank(64, 128);
+    const at = (a, l) => (vertical ? [a, l] : [l, a]);
+    for (let l = 0; l < 64; l++) {
+      for (let a = 59; a < 64; a++) pixel(img, ...at(a, l));
+      for (let a = 65; a < 69; a++) pixel(img, ...at(a, l));
+    }
+    pixel(img, ...at(64, 15));
+    return img;
+  };
+  check('29. a run of pixels beside one pixel across a vertical line: 3 cuts', countUnresolvedCuts(run(true), 64, 64) === 3);
+  check('29. the same across a horizontal line: 3 cuts', countUnresolvedCuts(run(false), 64, 64) === 3);
+  // The walks' memo changes no answer: a bar beyond the line whose far side
+  // leaks at row 9, walked first from the edge below (64 px cells), then
+  // from the top edge of 4 px cells, cuts the same as walked afresh.
+  const leakTop = blank(128, 128);
+  rect(leakTop, 59, 0, 65, 128);
+  rect(leakTop, 65, 9, 69, 10);
+  const shared = newSpillMemo();
+  countUnresolvedCuts(leakTop, 64, 64, shared);
+  check('29. a memo shared between grids gives the cuts a fresh one does',
+    countUnresolvedCuts(leakTop, 64, 4, shared) === countUnresolvedCuts(leakTop, 64, 4));
+  // With no tolerance (cells under 16 px) nothing is a spill: a diagonal
+  // touch through a corner of an 8 px grid is a cut.
+  const touch = blank(32, 32);
+  pixel(touch, 7, 7);
+  pixel(touch, 8, 8);
+  check('29. a diagonal touch through a corner of an 8 px grid is a cut', countUnresolvedCuts(touch, 8, 8) > 0);
+
+  // C: two-pixel bars the full height of the sheet beside every 16 px line.
+  // Every edge on those lines is a spill candidate, and the walks follow the
+  // bars past their own edges; each band pixel is walked once per detection,
+  // so the work grows four times when the sheet doubles each way.
+  const bars = (size) => {
+    const img = blank(size, size);
+    for (let x = 16; x < size; x += 16) rect(img, x - 1, 0, x + 1, size);
+    return img;
+  };
+  const walked = (img) => {
+    const memo = newSpillMemo();
+    const g = detectCleanGrid(img, memo);
+    return { g, n: memo.walked };
+  };
+  const w = [512, 1024, 2048].map((size) => walked(bars(size)));
+  check('29. long bars: detectCleanGrid null, as before', w.every((x) => x.g === null));
+  check('29. long bars: the walks are not repeated (work grows with the image, at most 4.5x per doubling)',
+    w[0].n > 0 && w[1].n <= 4.5 * w[0].n && w[2].n <= 4.5 * w[1].n);
+  check('29. long bars: fewer pixels walked than the 2048 px sheet holds', w[2].n < 2048 * 2048);
+  // The same bars, each with a 5 px run off its foot past the line: every
+  // walk down a bar's far side fails at the very bottom. Failures are
+  // remembered too, so they are not walked again from the next crossing.
+  const leaky = (size) => {
+    const img = bars(size);
+    for (let x = 16; x < size; x += 16) rect(img, x + 1, size - 1, x + 6, size);
+    return img;
+  };
+  const f = [512, 1024, 2048].map((size) => walked(leaky(size)));
+  check('29. leaking bars: detectCleanGrid null, as before', f.every((x) => x.g === null));
+  check('29. leaking bars: failed walks are not repeated (at most 4.5x per doubling)',
+    f[0].n > 0 && f[1].n <= 4.5 * f[0].n && f[2].n <= 4.5 * f[1].n);
+  check('29. long bars: resizer reads 4x4 at 1024, as before', rz(bars(1024)) === '4x4');
+  const t0 = performance.now();
+  rz(bars(2048));
+  console.log(`time  2048x2048 long bars, resizer ${(performance.now() - t0).toFixed(1)} ms (walked ${w.map((x) => x.n).join(', ')} px, leaking ${f.map((x) => x.n).join(', ')} px, at 512, 1024, 2048)`);
 }
 
 // ── timing ──

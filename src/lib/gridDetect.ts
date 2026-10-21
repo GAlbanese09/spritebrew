@@ -12,6 +12,53 @@ function lineTolerance(cell: number): number {
 type Pixels = { width: number; height: number; data: Uint8ClampedArray };
 
 /**
+ * Memo for the spill walks of one detection pass. For each grid line, side
+ * and tolerance there is one band: the columns (or rows) within the
+ * tolerance of the line on that side, by the image's length along the line.
+ * A walk visits a band pixel at most once in the whole pass and marks it as
+ * part of something that stays within the band (1) or reaches past it (-1),
+ * so a long bar beside a line is walked once, not once per edge and
+ * crossing, and the work stays in proportion to the bands (Second 060).
+ * walked counts the band pixels visited, which the tests read.
+ */
+type Band = { lo: number; hi: number; span: number; marks: Int8Array; opaque: Uint8Array };
+export type SpillMemo = { bands: Map<number, Band>; walked: number };
+
+export function newSpillMemo(): SpillMemo {
+  return { bands: new Map(), walked: 0 };
+}
+
+/**
+ * The band of the line at pos on one side: pos..pos + tol - 1 on the far
+ * side, pos - tol..pos - 1 on the near side. Its opacity is copied once, in
+ * one sweep along the line, with the column (or row) just past the band
+ * after it, so the walks read a small local copy instead of the image.
+ */
+function bandFor(img: Pixels, memo: SpillMemo, vertical: boolean, pos: number, tol: number, far: boolean): Band {
+  const key = ((pos * 8 + tol) * 2 + (vertical ? 1 : 0)) * 2 + (far ? 1 : 0);
+  let band = memo.bands.get(key);
+  if (!band) {
+    const { width, height, data } = img;
+    const span = vertical ? height : width;
+    const limit = vertical ? width : height;
+    const lo = far ? pos : pos - tol;
+    const hi = lo + tol - 1;
+    const past = far ? hi + 1 : lo - 1;
+    const opaque = new Uint8Array((tol + 1) * span);
+    for (let l = 0; l < span; l++) {
+      for (let k = 0; k <= tol; k++) {
+        const a = k < tol ? lo + k : past;
+        if (a < 0 || a >= limit) continue;
+        if (data[vertical ? (l * width + a) * 4 + 3 : (a * width + l) * 4 + 3] > ALPHA_THRESHOLD) opaque[k * span + l] = 1;
+      }
+    }
+    band = { lo, hi, span, marks: new Int8Array(tol * span), opaque };
+    memo.bands.set(key, band);
+  }
+  return band;
+}
+
+/**
  * Unforgiven cuts along one cell's edge on a grid line: the pixels just left
  * of the vertical line at x = pos (over rows from to to - 1), or just above
  * the horizontal line at y = pos (over columns from to to - 1), that touch an
@@ -21,116 +68,159 @@ type Pixels = { width: number; height: number; data: Uint8ClampedArray };
  *
  * 0 when there are none, or when every crossing is a spill: a sprite
  * reaching a few pixels past its cell line, with a clear column (or row)
- * within tol px of the line over this edge, and everything the crossing
- * joins on one side of the line, followed across other edges too, within
- * tol px of it. A weapon that passes through a grid corner and runs on for
- * thirty pixels is not a spill, however clear this edge's own columns are
- * (Second 059); feet two pixels into the row below are.
+ * within tol px of the line over this edge, and, for each crossing, either
+ * everything it touches across the line or everything it joins on its own
+ * side, followed across other edges too, within tol px of the line. Every
+ * pixel it touches across the line is followed, not only the first: a
+ * one-pixel spur beside a weapon does not hide the weapon (Second 060). A
+ * weapon that passes through a grid corner and runs on for thirty pixels is
+ * not a spill, however clear this edge's own columns are (Second 059); feet
+ * two pixels into the row below are.
  */
-function edgeCuts(img: Pixels, vertical: boolean, pos: number, from: number, to: number, tol: number): number {
+function edgeCuts(
+  img: Pixels,
+  vertical: boolean,
+  pos: number,
+  from: number,
+  to: number,
+  tol: number,
+  memo: SpillMemo = newSpillMemo()
+): number {
   const { width, height, data } = img;
-  const opaque = (x: number, y: number) => data[(y * width + x) * 4 + 3] > ALPHA_THRESHOLD;
   const span = vertical ? height : width;
-  const end = Math.min(to, span);
-  // Each crossing as its near coordinate t and far coordinate u.
-  const crossings: number[] = [];
-  for (let t = from; t < end; t++) {
-    if (!(vertical ? opaque(pos - 1, t) : opaque(t, pos - 1))) continue;
-    for (let u = Math.max(0, t - 1); u <= Math.min(span - 1, t + 1); u++) {
-      if (vertical ? opaque(pos, u) : opaque(u, pos)) {
-        crossings.push(t, u);
-        break;
-      }
-    }
-  }
-  const cuts = crossings.length / 2;
-  if (cuts === 0) return 0;
   const limit = vertical ? width : height;
+  const end = Math.min(to, span);
+  // Alpha byte offsets: one step along the line, one step across it.
+  const along = vertical ? width * 4 : 4;
+  const across = vertical ? 4 : width * 4;
+  const alphaAt = (a: number, l: number) => (vertical ? (l * width + a) * 4 + 3 : (a * width + l) * 4 + 3);
+  // Each crossing is stored as t * 8 + the far pixels it touches: bit 0 for
+  // u = t - 1, bit 1 for u = t, bit 2 for u = t + 1. farBits keeps those of
+  // the last row with a near pixel, so a run of rows reads each far pixel once.
+  let crossings: Int32Array | null = null;
+  let cuts = 0;
+  let farBits = 0;
+  let last = -2;
+  for (let t = from, near = alphaAt(pos - 1, from); t < end; t++, near += along) {
+    if (data[near] <= ALPHA_THRESHOLD) continue;
+    const farI = near + across;
+    if (last === t - 1) {
+      farBits >>= 1;
+    } else {
+      farBits = 0;
+      if (t > 0 && data[farI - along] > ALPHA_THRESHOLD) farBits |= 1;
+      if (data[farI] > ALPHA_THRESHOLD) farBits |= 2;
+    }
+    if (t + 1 < span && data[farI + along] > ALPHA_THRESHOLD) farBits |= 4;
+    last = t;
+    if (farBits === 0) continue;
+    if (!crossings) crossings = new Int32Array(end - t);
+    crossings[cuts++] = t * 8 + farBits;
+  }
+  if (!crossings) return 0;
+  // With no tolerance (cells under 16 px) nothing is a spill.
+  if (tol < 1) return cuts;
   let gap = false;
   for (let g = Math.max(0, pos - 1 - tol); g <= Math.min(limit - 1, pos + tol) && !gap; g++) {
     let clear = true;
-    for (let t = from; t < end && clear; t++) clear = !(vertical ? opaque(g, t) : opaque(t, g));
+    for (let t = from, i = alphaAt(g, from); t < end && clear; t++, i += along) clear = data[i] <= ALPHA_THRESHOLD;
     gap = clear;
   }
   if (!gap) return cuts;
-  const near = new Set<number>();
-  const far = new Set<number>();
-  for (let i = 0; i < crossings.length; i += 2) {
-    const t = crossings[i];
-    const u = crossings[i + 1];
-    const farPixel = vertical ? [pos, u] : [u, pos];
-    const nearPixel = vertical ? [pos - 1, t] : [t, pos - 1];
-    if (
-      !staysWithin(img, vertical, farPixel[0], farPixel[1], pos, pos + tol - 1, true, far) &&
-      !staysWithin(img, vertical, nearPixel[0], nearPixel[1], pos - tol, pos - 1, false, near)
-    ) {
-      return cuts;
+  // The far band starts at the line, so the pixel at (pos, u) is marks[u];
+  // the near pixel at (pos - 1, t) is marks[(tol - 1) * span + t].
+  const farBand = bandFor(img, memo, vertical, pos, tol, true);
+  let nearBand: Band | null = null;
+  for (let i = 0; i < cuts; i++) {
+    const t = crossings[i] >> 3;
+    const bits = crossings[i] & 7;
+    let farStays = true;
+    for (let k = 0; k < 3 && farStays; k++) {
+      if ((bits & (1 << k)) === 0) continue;
+      const u = t - 1 + k;
+      const m = farBand.marks[u];
+      farStays = m === 1 || (m === 0 && staysWithin(pos, u, farBand, true, memo));
     }
+    if (farStays) continue;
+    if (!nearBand) nearBand = bandFor(img, memo, vertical, pos, tol, false);
+    const m = nearBand.marks[(tol - 1) * span + t];
+    if (m === 1 || (m === 0 && staysWithin(pos - 1, t, nearBand, false, memo))) continue;
+    return cuts;
   }
   return 0;
 }
 
 /**
- * True when every opaque pixel joined (eight-connected) to (x0, y0) on its
- * side of the line stays within the band of columns (or rows) lo to hi:
- * the far side when far is true (the band starts at the line, and pixels
- * past hi fail), the near side otherwise (the band ends at the line, and
- * pixels before lo fail). The walk crosses cell edges freely. Pixels in
- * `seen` belong to a component already found to stay within, so a crossing
- * into one answers at once.
+ * True when every opaque pixel joined (eight-connected) to the opaque pixel
+ * at (across0, along0) on its side of the line stays within the band: the
+ * far side when far is true (an opaque pixel just past band.hi fails), the
+ * near side otherwise (one just before band.lo fails). across is the
+ * coordinate across the line (x for a vertical line), along the one along
+ * it. The walk reads the band's copy, crosses cell edges freely, stops at the
+ * first pixel an earlier walk judged, and marks its answer on every band
+ * pixel it visited.
  */
-function staysWithin(
-  img: Pixels,
-  vertical: boolean,
-  x0: number,
-  y0: number,
-  lo: number,
-  hi: number,
-  far: boolean,
-  seen: Set<number>
-): boolean {
-  const { width, height, data } = img;
-  const key = y0 * width + x0;
-  if (seen.has(key)) return true;
-  const stack = [key];
-  const visited = new Set<number>([key]);
-  while (stack.length > 0) {
-    const k = stack.pop() as number;
-    const x = k % width;
-    const y = (k - x) / width;
-    const across = vertical ? x : y;
-    if (far ? across > hi : across < lo) return false;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (dx === 0 && dy === 0) continue;
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-        const side = vertical ? nx : ny;
-        if (far ? side < lo : side > hi) continue;
-        const nk = ny * width + nx;
-        if (visited.has(nk) || data[nk * 4 + 3] <= ALPHA_THRESHOLD) continue;
-        visited.add(nk);
-        stack.push(nk);
+function staysWithin(across0: number, along0: number, band: Band, far: boolean, memo: SpillMemo): boolean {
+  const { lo, hi, span, marks, opaque } = band;
+  const first = (across0 - lo) * span + along0;
+  if (marks[first] === 1) return true;
+  if (marks[first] === -1) return false;
+  const past = (hi - lo + 1) * span;
+  // Marked pixels are opaque: 2 while this walk is on them, then 1 or -1.
+  const visited = [first];
+  const stack = [across0, along0];
+  marks[first] = 2;
+  let result = true;
+  walk: while (stack.length > 0) {
+    const along = stack.pop() as number;
+    const across = stack.pop() as number;
+    for (let da = -1; da <= 1; da++) {
+      const na = across + da;
+      if (far ? na < lo : na > hi) continue;
+      const inBand = na >= lo && na <= hi;
+      for (let dl = -1; dl <= 1; dl++) {
+        const nl = along + dl;
+        if ((da === 0 && dl === 0) || nl < 0 || nl >= span) continue;
+        if (!inBand) {
+          if (opaque[past + nl]) {
+            result = false;
+            break walk;
+          }
+          continue;
+        }
+        const j = (na - lo) * span + nl;
+        const m = marks[j];
+        if (m === 2) continue;
+        if (m !== 0) {
+          // Joined to a part an earlier walk already judged.
+          result = m === 1;
+          break walk;
+        }
+        if (!opaque[j]) continue;
+        marks[j] = 2;
+        visited.push(j);
+        stack.push(na, nl);
       }
     }
   }
-  for (const k of visited) seen.add(k);
-  return true;
+  const mark = result ? 1 : -1;
+  for (const j of visited) marks[j] = mark;
+  memo.walked += visited.length;
+  return result;
 }
 
 /**
  * countGridCuts, edge by edge, without the cuts a nearby clear gap forgives
  * (see edgeCuts; tolerance lineTolerance of the cell).
  */
-export function countUnresolvedCuts(img: Pixels, cellW: number, cellH: number): number {
+export function countUnresolvedCuts(img: Pixels, cellW: number, cellH: number, memo: SpillMemo = newSpillMemo()): number {
   const { width, height } = img;
   let cuts = 0;
   for (let x = cellW; x < width; x += cellW) {
-    for (let y = 0; y < height; y += cellH) cuts += edgeCuts(img, true, x, y, y + cellH, lineTolerance(cellW));
+    for (let y = 0; y < height; y += cellH) cuts += edgeCuts(img, true, x, y, y + cellH, lineTolerance(cellW), memo);
   }
   for (let y = cellH; y < height; y += cellH) {
-    for (let x = 0; x < width; x += cellW) cuts += edgeCuts(img, false, y, x, x + cellW, lineTolerance(cellH));
+    for (let x = 0; x < width; x += cellW) cuts += edgeCuts(img, false, y, x, x + cellW, lineTolerance(cellH), memo);
   }
   return cuts;
 }
@@ -181,7 +271,7 @@ export function cellsWithContent(img: Pixels, cellW: number, cellH: number): num
  * neighbours across one axis look like big cut sprites to countUnresolvedCuts;
  * a clean middle with content on both sides shows the cell is two frames.
  */
-function cellsSplitInTwo(img: Pixels, s: number): boolean {
+function cellsSplitInTwo(img: Pixels, s: number, memo: SpillMemo): boolean {
   const half = s / 2;
   const tol = lineTolerance(half);
   const columns = img.width / s;
@@ -197,8 +287,8 @@ function cellsSplitInTwo(img: Pixels, s: number): boolean {
       const bottom = holdsContentInside(img, x0, y0 + half, s, half, tol, tol);
       if (!left && !right && !top && !bottom) continue;
       any = true;
-      const splitV = left && right && edgeCuts(img, true, x0 + half, y0, y0 + s, tol) === 0;
-      const splitH = top && bottom && edgeCuts(img, false, y0 + half, x0, x0 + s, tol) === 0;
+      const splitV = left && right && edgeCuts(img, true, x0 + half, y0, y0 + s, tol, memo) === 0;
+      const splitH = top && bottom && edgeCuts(img, false, y0 + half, x0, x0 + s, tol, memo) === 0;
       if (!splitV && !splitH) return false;
     }
   }
@@ -241,12 +331,11 @@ function gcd(a: number, b: number): number {
  * blocks hold content; each candidate is then checked from those arrays, and
  * only a straddled line is looked at again, edge by edge.
  */
-export function detectCleanGrid(imageData: {
-  width: number;
-  height: number;
-  data: Uint8ClampedArray;
-}): { width: number; height: number; columns: number; rows: number } | null {
-  const found = findCleanGrid(imageData);
+export function detectCleanGrid(
+  imageData: { width: number; height: number; data: Uint8ClampedArray },
+  memo: SpillMemo = newSpillMemo()
+): { width: number; height: number; columns: number; rows: number } | null {
+  const found = findCleanGrid(imageData, memo);
   return found && { width: found.width, height: found.height, columns: found.columns, rows: found.rows };
 }
 
@@ -254,12 +343,12 @@ export function detectCleanGrid(imageData: {
  * detectCleanGrid's answer, plus whether that size was clean only because a
  * spill was forgiven (rescued). The gutter step's near-size correction uses
  * it: a measured gutter grid yields only to a grid that is clean outright.
+ * Every spill walk of the search shares memo (see SpillMemo).
  */
-export function findCleanGrid(imageData: {
-  width: number;
-  height: number;
-  data: Uint8ClampedArray;
-}): { width: number; height: number; columns: number; rows: number; rescued: boolean } | null {
+export function findCleanGrid(
+  imageData: { width: number; height: number; data: Uint8ClampedArray },
+  memo: SpillMemo = newSpillMemo()
+): { width: number; height: number; columns: number; rows: number; rescued: boolean } | null {
   const { width, height, data } = imageData;
 
   const sizes = SLICER_DETECT_TRY_SIZES
@@ -327,14 +416,14 @@ export function findCleanGrid(imageData: {
       if (!vSplit[k * s]) continue;
       rescued = true;
       for (let r = 0; r < rows && clean; r++) {
-        clean = edgeCuts(imageData, true, k * s, r * s, (r + 1) * s, tol) === 0;
+        clean = edgeCuts(imageData, true, k * s, r * s, (r + 1) * s, tol, memo) === 0;
       }
     }
     for (let k = 1; k < rows && clean; k++) {
       if (!hSplit[k * s]) continue;
       rescued = true;
       for (let c = 0; c < columns && clean; c++) {
-        clean = edgeCuts(imageData, false, k * s, c * s, (c + 1) * s, tol) === 0;
+        clean = edgeCuts(imageData, false, k * s, c * s, (c + 1) * s, tol, memo) === 0;
       }
     }
     if (!clean) continue;
@@ -350,8 +439,8 @@ export function findCleanGrid(imageData: {
     // only when the half size is itself a candidate the slicer can answer.
     if (rescued && s % 2 === 0 && sizes.includes(s / 2)) {
       const half = s / 2;
-      if (countUnresolvedCuts(imageData, half, half) <= (columns + rows) * half) continue;
-      if (cellsSplitInTwo(imageData, s)) continue;
+      if (countUnresolvedCuts(imageData, half, half, memo) <= (columns + rows) * half) continue;
+      if (cellsSplitInTwo(imageData, s, memo)) continue;
     }
 
     const per = s / block;
@@ -416,49 +505,107 @@ export function countGridCuts(
   return cuts;
 }
 
-/** True when the w x h box at (x0, y0) holds content more than tolX px
- *  inside its left and right edges and tolY px inside its top and bottom
- *  whose extent is more than an eighth of the box each way: a body, not a
- *  stray arm or a line of pixels. */
-function holdsThickContent(
-  img: Pixels,
-  x0: number,
-  y0: number,
-  w: number,
-  h: number,
-  tolX: number,
-  tolY: number
-): boolean {
+type Content = { spans: boolean; count: number; square: number; line: boolean };
+
+/**
+ * What the w x h box at (x0, y0) holds, less tolX px at its left and right
+ * and tolY px at its top and bottom: whether its content spans more than an
+ * eighth of the box each way, how many opaque pixels it has, the side of its
+ * largest solid square of opaque pixels, and whether its pixels lie along a
+ * line, their spread across their main direction under a third of their
+ * spread along it (from the pixels' covariance), at any slant.
+ */
+function measureContent(img: Pixels, x0: number, y0: number, w: number, h: number, tolX: number, tolY: number): Content {
   const { width, data } = img;
+  const xs = x0 + tolX;
+  const n = Math.max(0, w - 2 * tolX);
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
   let maxY = -Infinity;
+  let count = 0;
+  let sumX = 0;
+  let sumY = 0;
+  let sumXX = 0;
+  let sumYY = 0;
+  let sumXY = 0;
+  // side[x]: the side of the largest solid square whose bottom right pixel
+  // is at column xs + x - 1 of this row; prev holds the row above.
+  let prev = new Int32Array(n + 1);
+  let side = new Int32Array(n + 1);
+  let square = 0;
   for (let y = y0 + tolY; y < y0 + h - tolY; y++) {
-    let i = (y * width + x0 + tolX) * 4 + 3;
-    for (let x = x0 + tolX; x < x0 + w - tolX; x++, i += 4) {
+    let i = (y * width + xs) * 4 + 3;
+    for (let x = 1; x <= n; x++, i += 4) {
       if (data[i] > ALPHA_THRESHOLD) {
+        const v = 1 + Math.min(prev[x], prev[x - 1], side[x - 1]);
+        side[x] = v;
+        if (v > square) square = v;
+        count++;
+        const dy = y - y0;
+        sumX += x;
+        sumY += dy;
+        sumXX += x * x;
+        sumYY += dy * dy;
+        sumXY += x * dy;
         if (x < minX) minX = x;
         if (x > maxX) maxX = x;
         if (y < minY) minY = y;
         if (y > maxY) maxY = y;
+      } else {
+        side[x] = 0;
       }
     }
+    const done = prev;
+    prev = side;
+    side = done;
   }
-  return maxX >= minX && (maxX - minX + 1) * 8 > w && (maxY - minY + 1) * 8 > h;
+  const spans = count > 0 && (maxX - minX + 1) * 8 > w && (maxY - minY + 1) * 8 > h;
+  let line = false;
+  if (count > 0) {
+    const mx = sumX / count;
+    const my = sumY / count;
+    const cxx = sumXX / count - mx * mx;
+    const cyy = sumYY / count - my * my;
+    const cxy = sumXY / count - mx * my;
+    const half = (cxx + cyy) / 2;
+    const root = Math.sqrt(Math.max(0, half * half - (cxx * cyy - cxy * cxy)));
+    // Variances along and across the main direction; a third of the
+    // spread is a ninth of the variance.
+    line = (half - root) * 9 < half + root;
+  }
+  return { spans, count, square, line };
+}
+
+/**
+ * True when the two halves a and b of a cell (each w x h, measured by
+ * measureContent) each hold a body. Content counts when it spans more than
+ * an eighth of its half each way, unless it is a line beside a body: under
+ * half the other half's pixels, with no solid square more than an eighth of
+ * its half's shorter side, and lying along one direction. A weapon or arm
+ * reaching across from the body, straight or slanted, is no second body
+ * (Second 060); outlined, dithered, thin-limbed or small sprites beside a
+ * bigger one, and any two halves of a size, stay two frames.
+ */
+function twoBodies(a: Content, b: Content, w: number, h: number): boolean {
+  if (!a.spans || !b.spans) return false;
+  const small = a.count <= b.count ? a : b;
+  const large = a.count <= b.count ? b : a;
+  return small.count * 2 >= large.count || small.square * 8 > Math.min(w, h) || !small.line;
 }
 
 /**
  * True when some cell of the cellW x cellH grid holds two things side by
- * side or one above the other: a body (content wider and taller than an
- * eighth of the half, more than the tolerance inside its edges) in each
- * half of the cell, with the middle line crossed by nothing thicker than an
- * effect (at most an eighth of the edge's length, unforgiven). A grid whose
- * cell holds two frames' sprites, joined only by an effect between them, is
- * too coarse; a sprite whose body straddles the middle, or whose arm alone
- * reaches across it, is one.
+ * side or one above the other: a body (see twoBodies, more than the
+ * tolerance inside its edges) in each half of the cell, with the middle
+ * line crossed by nothing thicker than an effect (at most an eighth of the
+ * edge's length, unforgiven). A grid whose cell holds two frames' sprites,
+ * joined only by an effect between them, is too coarse; a sprite whose body
+ * straddles the middle, or whose arm or weapon alone reaches across it, at
+ * any slant, is one.
  */
 export function cellHoldsTwoHalves(img: Pixels, cellW: number, cellH: number): boolean {
+  const memo = newSpillMemo();
   const halfW = cellW / 2;
   const halfH = cellH / 2;
   const tolW = lineTolerance(halfW);
@@ -471,17 +618,25 @@ export function cellHoldsTwoHalves(img: Pixels, cellW: number, cellH: number): b
       const y0 = r * cellH;
       if (
         Number.isInteger(halfW) &&
-        holdsThickContent(img, x0, y0, halfW, cellH, tolW, tolH) &&
-        holdsThickContent(img, x0 + halfW, y0, halfW, cellH, tolW, tolH) &&
-        edgeCuts(img, true, x0 + halfW, y0, y0 + cellH, tolW) * 8 <= cellH
+        twoBodies(
+          measureContent(img, x0, y0, halfW, cellH, tolW, tolH),
+          measureContent(img, x0 + halfW, y0, halfW, cellH, tolW, tolH),
+          halfW,
+          cellH
+        ) &&
+        edgeCuts(img, true, x0 + halfW, y0, y0 + cellH, tolW, memo) * 8 <= cellH
       ) {
         return true;
       }
       if (
         Number.isInteger(halfH) &&
-        holdsThickContent(img, x0, y0, cellW, halfH, tolW, tolH) &&
-        holdsThickContent(img, x0, y0 + halfH, cellW, halfH, tolW, tolH) &&
-        edgeCuts(img, false, y0 + halfH, x0, x0 + cellW, tolH) * 8 <= cellW
+        twoBodies(
+          measureContent(img, x0, y0, cellW, halfH, tolW, tolH),
+          measureContent(img, x0, y0 + halfH, cellW, halfH, tolW, tolH),
+          cellW,
+          halfH
+        ) &&
+        edgeCuts(img, false, y0 + halfH, x0, x0 + cellW, tolH, memo) * 8 <= cellW
       ) {
         return true;
       }

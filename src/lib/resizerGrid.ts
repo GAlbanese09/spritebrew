@@ -8,7 +8,9 @@
 // that look at the image.
 //
 // Priority order:
-//   0. The slicer's pixel-based steps (known layouts, gutters, clean grid).
+//   0. The slicer's pixel-based steps (known layouts, gutters, clean grid),
+//      except that the answer of steps 1 to 4 wins when it is finer and the
+//      pixels allow it (see detectGridSmart).
 //   1. Common grid layouts (4x4, 3x4, 8x8, etc.) that divide the image
 //      evenly with a reasonable per-frame size. This catches the 800x800 to
 //      4x4 case that the old algorithm missed.
@@ -18,7 +20,7 @@
 //   4. Dimension-based fallback (square to 4x4, strip to W/H columns, etc.)
 
 import { SLICER_FRAME_PRESETS } from '@/lib/constants';
-import { cellHoldsTwoQuadrants, countUnresolvedCuts } from '@/lib/gridDetect';
+import { cellHoldsTwoQuadrants, cellsWithContent, countUnresolvedCuts } from '@/lib/gridDetect';
 import { detectFrameGridFromPixels } from '@/lib/spriteUtils';
 
 export type DetectionConfidence = 'high' | 'medium' | 'low';
@@ -186,10 +188,57 @@ function detectByDimensions(imgW: number, imgH: number): DetectionResult {
   return { cols: 4, rows: 4, confidence: 'low' };
 }
 
+/** Steps 1 to 4: the grid from the image's shape and its gutters alone,
+ *  which is what the resizer answered before PR #19. */
+function detectByShape(imgData: ImageData): DetectionResult {
+  const { width: W, height: H } = imgData;
+  return (
+    detectByCommonGrid(W, H) ??
+    detectByStandardSize(W, H) ??
+    detectByGutters(imgData) ??
+    detectByDimensions(W, H)
+  );
+}
+
+/** True when the pixels allow the grid g: its cells tile the image, it cuts
+ *  nothing the slicer would not forgive, and at least three quarters of its
+ *  cells hold content of their own. */
+function pixelsAllow(imgData: ImageData, g: DetectionResult): boolean {
+  const { width: W, height: H } = imgData;
+  const cellW = W / g.cols;
+  const cellH = H / g.rows;
+  if (!Number.isInteger(cellW) || !Number.isInteger(cellH)) return false;
+  if (countUnresolvedCuts(imgData, cellW, cellH) !== 0) return false;
+  return cellsWithContent(imgData, cellW, cellH) * 4 >= g.cols * g.rows * 3;
+}
+
+/** Step 0: the slicer's pixel answer, as described in detectGridSmart. */
+function detectByPixels(imgData: ImageData): DetectionResult | null {
+  const { width: W, height: H } = imgData;
+  const fromSlicer = detectFrameGridFromPixels(imgData);
+  if (
+    !fromSlicer ||
+    !isValidGrid(W, H, fromSlicer.columns, fromSlicer.rows) ||
+    Math.abs(W / fromSlicer.columns - fromSlicer.width) * 8 > fromSlicer.width ||
+    Math.abs(H / fromSlicer.rows - fromSlicer.height) * 8 > fromSlicer.height
+  ) {
+    return null;
+  }
+  const { width: cellW, height: cellH, columns, rows } = fromSlicer;
+  if (
+    cellW % 2 === 0 &&
+    cellH % 2 === 0 &&
+    isValidGrid(W, H, columns * 2, rows * 2) &&
+    countUnresolvedCuts(imgData, cellW / 2, cellH / 2) === 0 &&
+    cellHoldsTwoQuadrants(imgData, cellW, cellH)
+  ) {
+    return { cols: columns * 2, rows: rows * 2, confidence: 'medium' };
+  }
+  return { cols: columns, rows: rows, confidence: 'high' };
+}
+
 /** Main detection entry point. Runs all priorities and returns the first match. */
 export function detectGridSmart(imgData: ImageData): DetectionResult {
-  const { width: W, height: H } = imgData;
-
   // 0) The slicer's own detector first. Its gutter step and clean-grid step
   //    (src/lib/gridDetect.ts) read the pixels, so a 512x512 sheet of four
   //    256 px frames comes back as 2x2, where the shape-only steps below
@@ -216,34 +265,17 @@ export function detectGridSmart(imgData: ImageData): DetectionResult {
   //      whose sprite the finer grid would cut, even with only a thin arm or
   //      weapon (audit r7). An effect that reaches farther than a spill into
   //      the next frame keeps the coarse answer too.
-  const fromSlicer = detectFrameGridFromPixels(imgData);
-  if (
-    fromSlicer &&
-    isValidGrid(W, H, fromSlicer.columns, fromSlicer.rows) &&
-    Math.abs(W / fromSlicer.columns - fromSlicer.width) * 8 <= fromSlicer.width &&
-    Math.abs(H / fromSlicer.rows - fromSlicer.height) * 8 <= fromSlicer.height
-  ) {
-    const { width: cellW, height: cellH, columns, rows } = fromSlicer;
-    if (
-      cellW % 2 === 0 &&
-      cellH % 2 === 0 &&
-      isValidGrid(W, H, columns * 2, rows * 2) &&
-      countUnresolvedCuts(imgData, cellW / 2, cellH / 2) === 0 &&
-      cellHoldsTwoQuadrants(imgData, cellW, cellH)
-    ) {
-      return { cols: columns * 2, rows: rows * 2, confidence: 'medium' };
-    }
-    return { cols: columns, rows: rows, confidence: 'high' };
+  //    The shape steps' answer, which every upload got before PR #19, still
+  //    wins over a coarser pixel answer when the pixels allow it
+  //    (pixelsAllow): its grid cuts no sprite and nearly every cell holds
+  //    one. Square-only clean grids cannot read non-square frames, so a
+  //    4x4 of 48x64 or of 128x64 came back as 64 or 128 squares (audit r8);
+  //    the shape steps read those 4x4, and then this keeps 4x4, as 'medium'.
+  const shape = detectByShape(imgData);
+  const fromPixels = detectByPixels(imgData);
+  if (!fromPixels) return shape;
+  if (shape.cols * shape.rows > fromPixels.cols * fromPixels.rows && pixelsAllow(imgData, shape)) {
+    return { cols: shape.cols, rows: shape.rows, confidence: 'medium' };
   }
-
-  const p1 = detectByCommonGrid(W, H);
-  if (p1) return p1;
-
-  const p2 = detectByStandardSize(W, H);
-  if (p2) return p2;
-
-  const p3 = detectByGutters(imgData);
-  if (p3) return p3;
-
-  return detectByDimensions(W, H);
+  return fromPixels;
 }

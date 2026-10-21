@@ -75,6 +75,23 @@ function holdsContentInside(
 }
 
 /**
+ * How many cells of the cellW x cellH grid hold an opaque pixel more than
+ * lineTolerance px inside their edges (a spill from the cell next door is
+ * not content of its own).
+ */
+export function cellsWithContent(img: Pixels, cellW: number, cellH: number): number {
+  const tolW = lineTolerance(cellW);
+  const tolH = lineTolerance(cellH);
+  let n = 0;
+  for (let y = 0; y + cellH <= img.height; y += cellH) {
+    for (let x = 0; x + cellW <= img.width; x += cellW) {
+      if (holdsContentInside(img, x, y, cellW, cellH, tolW, tolH)) n++;
+    }
+  }
+  return n;
+}
+
+/**
  * True when every s x s cell that holds content holds two things that the
  * grid at half the size separates: along the cell's vertical (or horizontal)
  * middle no cut is left unforgiven, and both halves hold content more than
@@ -147,6 +164,20 @@ export function detectCleanGrid(imageData: {
   height: number;
   data: Uint8ClampedArray;
 }): { width: number; height: number; columns: number; rows: number } | null {
+  const found = findCleanGrid(imageData);
+  return found && { width: found.width, height: found.height, columns: found.columns, rows: found.rows };
+}
+
+/**
+ * detectCleanGrid's answer, plus whether that size was clean only because a
+ * spill was forgiven (rescued). The gutter step's near-size correction uses
+ * it: a measured gutter grid yields only to a grid that is clean outright.
+ */
+export function findCleanGrid(imageData: {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+}): { width: number; height: number; columns: number; rows: number; rescued: boolean } | null {
   const { width, height, data } = imageData;
 
   const sizes = SLICER_DETECT_TRY_SIZES
@@ -257,7 +288,7 @@ export function detectCleanGrid(imageData: {
     }
 
     if (contentCells * 2 >= columns * rows) {
-      return { width: s, height: s, columns, rows };
+      return { width: s, height: s, columns, rows, rescued };
     }
   }
 

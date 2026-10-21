@@ -737,6 +737,85 @@ const rz = (img) => {
   check('25. a rescued 80 whose 40 px grid is nearly clean: detectCleanGrid 80', same(detectCleanGrid(e80), grid(80, 4, 4)));
 }
 
+// ── 26: frames that are not square, and the shape answer (audit r8) ──
+
+{
+  // A 4x4 of 48x64 (192x256): characters 19 px wide and 50 tall on their
+  // cell's floor, feet 1 px into the row below, swaying so the gutter step
+  // finds no column spacing. 64 px squares are clean once their lines are
+  // forgiven a few pixels into the sprites, but the shape steps' 4x4 cuts
+  // nothing and every cell holds a character, so the resizer keeps 4x4.
+  const offA = [[0, 0, 0, 3], [-2, -2, -2, -3], [0, 0, 0, 3], [-2, -2, -2, -3]];
+  const tall = blank(192, 256);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const x = c * 48 + 14 + offA[r][c];
+      rect(tall, x, (r + 1) * 64 - 50, x + 19, (r + 1) * 64);
+      if (r < 3) rect(tall, x + 4, (r + 1) * 64, x + 12, (r + 1) * 64 + 1);
+    }
+  }
+  const gt = detectGridSmart(tall);
+  check('26. a 4x4 of 48x64 with narrow characters: resizer reads 4x4, not 3x4 of 64', `${gt.cols}x${gt.rows}` === '4x4');
+  check("26. a 4x4 of 48x64 with narrow characters: labelled 'medium'", gt.confidence === 'medium');
+  // A 4x4 of 128x64 (512x256): 90x48 sprites on their cell's floor, feet
+  // 2 px, swaying. Squares of 128 are clean; the shape steps' 4x4 is too.
+  const offB = [[-3, -3, -3, 0], [-1, -1, -1, 2], [-1, -1, -1, -2], [-2, -2, -2, 1]];
+  const wide = blank(512, 256);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const x = c * 128 + 19 + offB[r][c];
+      rect(wide, x, (r + 1) * 64 - 48, x + 90, (r + 1) * 64);
+      if (r < 3) rect(wide, x + 20, (r + 1) * 64, x + 40, (r + 1) * 64 + 2);
+    }
+  }
+  check('26. a 4x4 of 128x64 frames: resizer reads 4x4, not 4x2 of 128', rz(wide) === '4x4');
+  // A 4x2 of 256 (1024x512) with 80x110 characters on the floor of each
+  // cell, the top row's feet 2 px into the row below. The shape steps' 4x4
+  // of 256x128 cuts nothing, but only half its cells hold a character (the
+  // feet do not count), so the pixel answer 4x2 stands.
+  const short = blank(1024, 512);
+  for (let r = 0; r < 2; r++) {
+    for (let c = 0; c < 4; c++) {
+      const x = c * 256 + 88;
+      rect(short, x, (r + 1) * 256 - 110, x + 80, (r + 1) * 256);
+      if (r === 0) rect(short, x + 20, 256, x + 40, 258);
+    }
+  }
+  check('26. short characters on the floor of a 4x2 of 256: resizer keeps 4x2', rz(short) === '4x2');
+  // A 512x512 of 64 px frames reads 8x8: a finer pixel answer is never
+  // replaced by the coarser shape answer.
+  check('26. 8x8 of 64 still reads 8x8', rz(sheet(512, 512, 64, { margin: 6 })) === '8x8');
+  // A padded texture: 512x512 holding a 4x4 of 120 px cells, 66x94
+  // characters on the floor, feet 2 px; the last row's tops reach 2 px past
+  // y = 384, so 128 is clean only by forgiveness and does not replace the
+  // measured 120.
+  const pad = blank(512, 512);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const x = c * 120 + 27;
+      if (r < 3) {
+        rect(pad, x, (r + 1) * 120 - 94, x + 66, (r + 1) * 120);
+        rect(pad, x + 10, (r + 1) * 120, x + 24, (r + 1) * 120 + 2);
+      } else {
+        rect(pad, x, 382, x + 66, 476);
+      }
+    }
+  }
+  check('26. a padded texture of 120 with spilling feet: detectFrameGrid keeps 120', same(detectFrameGrid(pad), { width: 120, height: 120 }));
+  // A 4x4 of 24 (96x96, from BUILD's random small sheets) whose gutters
+  // measure 25 across. The 25 px grid cuts sprites, and some of those cuts
+  // lie within the tolerance of a clear column; they still count here, or
+  // the mis-measured 25 would stand.
+  const small24 = blank(96, 96);
+  for (const [x0, y0, x1, y1] of [
+    [1, 1, 21, 21], [28, 5, 44, 20], [51, 5, 68, 24], [73, 6, 89, 20],
+    [5, 27, 18, 47], [26, 29, 46, 45], [54, 31, 70, 46], [75, 29, 95, 45],
+    [1, 54, 17, 72], [28, 50, 41, 70], [53, 55, 70, 72], [74, 49, 91, 69],
+    [4, 79, 19, 96], [29, 78, 46, 92], [49, 77, 71, 93], [74, 76, 90, 93],
+  ]) rect(small24, x0, y0, x1, y1);
+  check('26. a 4x4 of 24 whose gutters measure 25: detectFrameGrid 24', same(detectFrameGrid(small24), grid(24, 4, 4)));
+}
+
 // ── timing ──
 
 {

@@ -1,5 +1,5 @@
 import { SLICER_FRAME_PRESETS, SLICER_DETECT_TRY_SIZES } from '@/lib/constants';
-import { countGridCuts, detectCleanGrid } from '@/lib/gridDetect';
+import { countGridCuts, detectCleanGrid, findCleanGrid } from '@/lib/gridDetect';
 
 // Square-only canonical sizes derived from the single-source-of-truth presets.
 // Used by detectFrameGrid's findBestStandardSize fallback.
@@ -121,10 +121,13 @@ export function detectFrameGridFromPixels(imageData: ImageData): FrameGrid | nul
     // same size wins. A smaller cut is one effect reaching into the next
     // frame, and a clean grid of a different size (a multiple) never wins,
     // so in both cases the gutter result stands (backlog-2 audits r2, r3).
+    // Only a grid that is clean outright wins here: one that is clean only
+    // because a spill was forgiven does not replace a measured spacing (a
+    // padded texture of 120 px cells whose feet spill read 128, audit r8).
     if (countGridCuts(imageData, gutterW, gutterH) > Math.max(gutterW, gutterH)) {
-      const clean = detectCleanGrid(imageData);
-      if (clean && isNearSize(clean.width, gutterW) && isNearSize(clean.height, gutterH)) {
-        return clean;
+      const clean = findCleanGrid(imageData);
+      if (clean && !clean.rescued && isNearSize(clean.width, gutterW) && isNearSize(clean.height, gutterH)) {
+        return { width: clean.width, height: clean.height, columns: clean.columns, rows: clean.rows };
       }
     }
 

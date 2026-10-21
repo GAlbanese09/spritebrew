@@ -10,7 +10,8 @@
 // Priority order:
 //   0. The slicer's pixel-based steps (known layouts, gutters, clean grid),
 //      except that the answer of steps 1 to 4 wins when the pixels allow it
-//      and it is finer, or the pixel answer cuts sprites (see detectGridSmart).
+//      and it is finer, or the pixel answer came from the known layouts
+//      table and cuts anything (see detectGridSmart).
 //   1. Common grid layouts (4x4, 3x4, 8x8, etc.) that divide the image
 //      evenly with a reasonable per-frame size. This catches the 800x800 to
 //      4x4 case that the old algorithm missed.
@@ -20,8 +21,8 @@
 //   4. Dimension-based fallback (square to 4x4, strip to W/H columns, etc.)
 
 import { SLICER_FRAME_PRESETS } from '@/lib/constants';
-import { cellHoldsTwoQuadrants, cellsWithContent, countUnresolvedCuts } from '@/lib/gridDetect';
-import { detectFrameGridFromPixels } from '@/lib/spriteUtils';
+import { cellHoldsTwoHalves, cellHoldsTwoQuadrants, cellsWithContent, countUnresolvedCuts } from '@/lib/gridDetect';
+import { detectFrameGridFromPixels, knownLayoutGrid } from '@/lib/spriteUtils';
 
 export type DetectionConfidence = 'high' | 'medium' | 'low';
 
@@ -212,13 +213,12 @@ function pixelsAllow(imgData: ImageData, g: DetectionResult): boolean {
   return cellsWithContent(imgData, cellW, cellH) * 4 >= g.cols * g.rows * 3;
 }
 
-/** True when the grid g cuts through sprites: its unforgiven cuts exceed the
- *  length of one of its cells. */
-function cutsSprites(imgData: ImageData, g: DetectionResult): boolean {
+/** The unforgiven cuts of the grid g, or 0 when its cells do not tile the image. */
+function gridCuts(imgData: ImageData, g: DetectionResult): number {
   const cellW = imgData.width / g.cols;
   const cellH = imgData.height / g.rows;
-  if (!Number.isInteger(cellW) || !Number.isInteger(cellH)) return false;
-  return countUnresolvedCuts(imgData, cellW, cellH) > Math.max(cellW, cellH);
+  if (!Number.isInteger(cellW) || !Number.isInteger(cellH)) return 0;
+  return countUnresolvedCuts(imgData, cellW, cellH);
 }
 
 /** Step 0: the slicer's pixel answer, as described in detectGridSmart. */
@@ -248,6 +248,7 @@ function detectByPixels(imgData: ImageData): DetectionResult | null {
 
 /** Main detection entry point. Runs all priorities and returns the first match. */
 export function detectGridSmart(imgData: ImageData): DetectionResult {
+  const { width: W, height: H } = imgData;
   // 0) The slicer's own detector first. Its gutter step and clean-grid step
   //    (src/lib/gridDetect.ts) read the pixels, so a 512x512 sheet of four
   //    256 px frames comes back as 2x2, where the shape-only steps below
@@ -280,15 +281,28 @@ export function detectGridSmart(imgData: ImageData): DetectionResult {
   //    one. Square-only clean grids cannot read non-square frames, so a
   //    4x4 of 48x64 or of 128x64 came back as 64 or 128 squares (audit r8);
   //    the shape steps read those 4x4, and then this keeps 4x4, as 'medium'.
-  //    It also wins, finer or not, when the pixel answer's own grid cuts
-  //    through sprites, more pixels than one of its cells is long: the known
-  //    layouts table answers from the image size alone, and a 192x128 sheet
-  //    of 48x32 frames is not the 6x4 of 32 px squares it lists (Second 058).
+  //    It also wins, finer or not, when the image size is in the known
+  //    layouts table: the pixel answer then came from that table alone,
+  //    without reading a pixel, so it yields at any unforgiven cut, unless
+  //    some cell of the shape grid holds two things joined by nothing
+  //    thicker than an effect (cellHoldsTwoHalves). A 192x128 sheet of
+  //    48x32 frames is not the 6x4 of 32 px squares the table lists, even
+  //    when that grid only clips a thin arm in every frame (Second 058,
+  //    059); a 384x64 strip of six 64 px frames with an effect between two
+  //    of them is not three frames of 128x64. A grid measured from the
+  //    pixels is not unseated this way.
   const shape = detectByShape(imgData);
   const fromPixels = detectByPixels(imgData);
   if (!fromPixels) return shape;
+  if (shape.cols === fromPixels.cols && shape.rows === fromPixels.rows) return fromPixels;
+  const tableCut =
+    knownLayoutGrid(W, H) !== null &&
+    gridCuts(imgData, fromPixels) > 0 &&
+    Number.isInteger(W / shape.cols) &&
+    Number.isInteger(H / shape.rows) &&
+    !cellHoldsTwoHalves(imgData, W / shape.cols, H / shape.rows);
   if (
-    (shape.cols * shape.rows > fromPixels.cols * fromPixels.rows || cutsSprites(imgData, fromPixels)) &&
+    (shape.cols * shape.rows > fromPixels.cols * fromPixels.rows || tableCut) &&
     pixelsAllow(imgData, shape)
   ) {
     return { cols: shape.cols, rows: shape.rows, confidence: 'medium' };

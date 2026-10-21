@@ -57,16 +57,11 @@ export function detectFrameGrid(imageData: ImageData): FrameGrid | null {
 }
 
 /**
- * The steps of detectFrameGrid that read the image: the known layouts
- * table, the transparent gutters (with the near-size correction) and the
- * clean grid. Null when none of them answers; detectFrameGrid then falls
- * back to the image's shape alone. The resizer's grid detection
- * (src/lib/resizerGrid.ts) uses this part on its own.
+ * The KNOWN_LAYOUTS entry for an image of this size, as a frame grid, or
+ * null. It answers from the size alone, without reading a pixel, so a
+ * caller that can check the pixels should (src/lib/resizerGrid.ts).
  */
-export function detectFrameGridFromPixels(imageData: ImageData): FrameGrid | null {
-  const { width, height, data } = imageData;
-
-  // 1) Check known Retro Diffusion layouts first (highest priority)
+export function knownLayoutGrid(width: number, height: number): FrameGrid | null {
   for (const layout of KNOWN_LAYOUTS) {
     if (width === layout.imgW && height === layout.imgH) {
       return {
@@ -77,6 +72,22 @@ export function detectFrameGridFromPixels(imageData: ImageData): FrameGrid | nul
       };
     }
   }
+  return null;
+}
+
+/**
+ * The steps of detectFrameGrid that read the image: the known layouts
+ * table, the transparent gutters (with the near-size correction) and the
+ * clean grid. Null when none of them answers; detectFrameGrid then falls
+ * back to the image's shape alone. The resizer's grid detection
+ * (src/lib/resizerGrid.ts) uses this part on its own.
+ */
+export function detectFrameGridFromPixels(imageData: ImageData): FrameGrid | null {
+  const { width, height, data } = imageData;
+
+  // 1) Check known Retro Diffusion layouts first (highest priority)
+  const known = knownLayoutGrid(width, height);
+  if (known) return known;
 
   // 2) Try transparent gutter detection
   const isTransparentColumn = (col: number): boolean => {

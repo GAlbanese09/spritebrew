@@ -30,7 +30,7 @@ await build({
   bundle: true, platform: 'node', format: 'esm', outdir: OUT, logLevel: 'error',
   tsconfig: path.join(ROOT, 'tsconfig.json'), outExtension: { '.js': '.mjs' },
 });
-const { cellHoldsTwoQuadrants, countGridCuts, countUnresolvedCuts, detectCleanGrid } = await import(
+const { cellHoldsTwoHalves, cellHoldsTwoQuadrants, countGridCuts, countUnresolvedCuts, detectCleanGrid } = await import(
   pathToFileURL(path.join(OUT, 'gridDetect.mjs')).href
 );
 const { detectFrameGrid, detectFrameGridFromPixels } = await import(
@@ -881,6 +881,114 @@ const rz = (img) => {
   rect(stair, 85, 260, 183, 512);
   rect(stair, 330, 260, 447, 512);
   check('27. feet spilling past y = 256 as a diagonal stair: resizer reads 2x2', rz(stair) === '2x2');
+}
+
+// ── 28: thin arms at a table size, and diagonals through a grid corner (Second 059) ──
+
+{
+  // 192x128 of 48x32 frames: a 12x20 body and an attached 36 px arm t px
+  // thick in every frame. The table's 6x4 of 32 clips every arm, a few
+  // pixels each; the 4x4 cuts nothing, and no 48x32 cell holds two bodies.
+  const arms = (t) => {
+    const img = blank(192, 128);
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) {
+        rect(img, c * 48 + 18, r * 32 + 6, c * 48 + 30, r * 32 + 26);
+        rect(img, c * 48 + 6, r * 32 + 15, c * 48 + 42, r * 32 + 15 + t);
+      }
+    }
+    return img;
+  };
+  check('28. 192x128 of 48x32 with 1 px arms: resizer reads 4x4', rz(arms(1)) === '4x4');
+  check('28. 192x128 of 48x32 with 2 px arms: resizer reads 4x4', rz(arms(2)) === '4x4');
+  check('28. 192x128 of 48x32 with 3 px arms: resizer reads 4x4', rz(arms(3)) === '4x4');
+  check('28. cellHoldsTwoHalves: a body with an arm across the middle is one thing', cellHoldsTwoHalves(arms(1), 48, 32) === false);
+  // 288x192 of 72x48: a 14 px body ending at its cell's vertical middle
+  // and a one-pixel spear across the whole frame. The right half holds the
+  // spear alone, which is no body, so the cell holds one thing and the
+  // table's 6x4 of 48 yields to 4x4.
+  const spear = blank(288, 192);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      rect(spear, c * 72 + 22, r * 48 + 8, c * 72 + 36, r * 48 + 40);
+      rect(spear, c * 72 + 2, r * 48 + 20, c * 72 + 70, r * 48 + 21);
+    }
+  }
+  check('28. a body ending at the middle with a spear across the frame: resizer reads 4x4', rz(spear) === '4x4');
+  check('28. cellHoldsTwoHalves: a spear alone in one half is no second body', cellHoldsTwoHalves(spear, 72, 48) === false);
+  // A table answer yields only to a shape grid whose cells hold one thing:
+  // a 384x64 strip of six 64 px frames with an effect between the first
+  // two keeps 6x1, not the shape steps' 3x1 of 128x64.
+  const strip = blank(384, 64);
+  for (let c = 0; c < 6; c++) rect(strip, c * 64 + 6, 6, c * 64 + 58, 58);
+  rect(strip, 58, 30, 72, 33);
+  check('28. a 6x1 strip of 64 with one effect into the next frame keeps 6x1', rz(strip) === '6x1');
+  check('28. cellHoldsTwoHalves: two frames joined by an effect are two things', cellHoldsTwoHalves(strip, 128, 64) === true);
+  // A 4x4 of 128 whose one-pixel diagonal weapon runs through the corner
+  // where the finer grid's lines meet, (n, n) from the body to n = 95. The
+  // crossing at (63, 63) to (64, 64) is seen by an edge whose own columns
+  // look clear; following the weapon shows it runs 31 px on, so it is not
+  // a spill.
+  const weapon = (path) => {
+    const img = blank(512, 512);
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) {
+        rect(img, c * 128 + 8, r * 128 + 8, c * 128 + 48, r * 128 + 48);
+        for (let n = 47; n <= 95; n++) {
+          const [x, y] = path(n);
+          rect(img, c * 128 + x, r * 128 + y, c * 128 + x + 1, r * 128 + y + 1);
+        }
+      }
+    }
+    return img;
+  };
+  const corner = weapon((n) => [n, n]);
+  check('28. a diagonal weapon through the grid corner: resizer reads 4x4, not 8x8', rz(corner) === '4x4');
+  check('28. a diagonal weapon through the grid corner: the 64 px grid has unforgiven cuts', countUnresolvedCuts(corner, 64, 64) > 0);
+  check('28. a diagonal weapon through the grid corner: detectCleanGrid 128', same(detectCleanGrid(corner), grid(128, 4, 4)));
+  check('28. one pixel above the corner: resizer reads 4x4', rz(weapon((n) => [n, n - 1])) === '4x4');
+  check('28. one pixel below the corner: resizer reads 4x4', rz(weapon((n) => [n, n + 1])) === '4x4');
+  check('28. a mirrored diagonal through the corner: resizer reads 4x4', rz(weapon((n) => [n, 128 - n])) === '4x4');
+  check('28. a transposed diagonal through the corner: resizer reads 4x4', rz(weapon((n) => [n - 1, n])) === '4x4');
+  // A diagonal stub through the corner is a spill up to the tolerance
+  // (4 px at 64) and a cut one pixel beyond it.
+  const stub = (len) => {
+    const img = blank(512, 512);
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) {
+        rect(img, c * 128 + 8, r * 128 + 8, c * 128 + 48, r * 128 + 48);
+        for (let n = 47; n < 64 + len; n++) rect(img, c * 128 + n, r * 128 + n, c * 128 + n + 1, r * 128 + n + 1);
+      }
+    }
+    return img;
+  };
+  check('28. a diagonal stub 4 px past the corner is a spill: no unforgiven cut at 64', countUnresolvedCuts(stub(4), 64, 64) === 0);
+  check('28. a diagonal stub 5 px past the corner is a cut at 64', countUnresolvedCuts(stub(5), 64, 64) > 0);
+  // Feet that reach 3 px into the row below and stop are still a spill, in
+  // a straight stair or a diagonal one; feet that run on into the next
+  // character are not.
+  const feet = (shape) => {
+    const img = blank(512, 512);
+    rect(img, 90, 0, 167, 256);
+    rect(img, 346, 0, 427, 256);
+    if (shape === 'straight') {
+      rect(img, 100, 256, 140, 259);
+      rect(img, 360, 256, 400, 259);
+    } else {
+      for (let k = 0; k < 3; k++) {
+        rect(img, 100 + k, 256 + k, 101 + k, 257 + k);
+        rect(img, 360 + k, 256 + k, 361 + k, 257 + k);
+      }
+    }
+    rect(img, 85, 260, 183, 512);
+    rect(img, 330, 260, 447, 512);
+    return img;
+  };
+  check('28. feet 3 px into the row below, then a gap: resizer reads 2x2', rz(feet('straight')) === '2x2');
+  check('28. a diagonal stair of feet 3 px into the row below: resizer reads 2x2', rz(feet('stair')) === '2x2');
+  const joined = feet('straight');
+  rect(joined, 100, 259, 140, 260);
+  check('28. feet running into the next character: detectCleanGrid does not take 256', same(detectCleanGrid(joined), null));
 }
 
 // ── timing ──

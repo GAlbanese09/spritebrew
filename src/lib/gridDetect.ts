@@ -17,34 +17,106 @@ type Pixels = { width: number; height: number; data: Uint8ClampedArray };
  * the horizontal line at y = pos (over columns from to to - 1), that touch an
  * opaque pixel just across it, straight across or diagonally. Diagonal
  * neighbours count because the slicer's own sprite detection joins them, so
- * a line through a one-pixel diagonal weapon cuts it. 0 when there are none,
- * or when a column (or row) within tol px of the line is fully transparent
- * over that edge: a sprite spilling a few pixels past its cell line with a
- * clear gap beyond.
+ * a line through a one-pixel diagonal weapon cuts it.
+ *
+ * 0 when there are none, or when every crossing is a spill: a sprite
+ * reaching a few pixels past its cell line, with a clear column (or row)
+ * within tol px of the line over this edge, and everything the crossing
+ * joins on one side of the line, followed across other edges too, within
+ * tol px of it. A weapon that passes through a grid corner and runs on for
+ * thirty pixels is not a spill, however clear this edge's own columns are
+ * (Second 059); feet two pixels into the row below are.
  */
 function edgeCuts(img: Pixels, vertical: boolean, pos: number, from: number, to: number, tol: number): number {
   const { width, height, data } = img;
   const opaque = (x: number, y: number) => data[(y * width + x) * 4 + 3] > ALPHA_THRESHOLD;
   const span = vertical ? height : width;
   const end = Math.min(to, span);
-  let cuts = 0;
+  // Each crossing as its near coordinate t and far coordinate u.
+  const crossings: number[] = [];
   for (let t = from; t < end; t++) {
     if (!(vertical ? opaque(pos - 1, t) : opaque(t, pos - 1))) continue;
     for (let u = Math.max(0, t - 1); u <= Math.min(span - 1, t + 1); u++) {
       if (vertical ? opaque(pos, u) : opaque(u, pos)) {
-        cuts++;
+        crossings.push(t, u);
         break;
       }
     }
   }
+  const cuts = crossings.length / 2;
   if (cuts === 0) return 0;
   const limit = vertical ? width : height;
-  for (let g = Math.max(0, pos - 1 - tol); g <= Math.min(limit - 1, pos + tol); g++) {
+  let gap = false;
+  for (let g = Math.max(0, pos - 1 - tol); g <= Math.min(limit - 1, pos + tol) && !gap; g++) {
     let clear = true;
     for (let t = from; t < end && clear; t++) clear = !(vertical ? opaque(g, t) : opaque(t, g));
-    if (clear) return 0;
+    gap = clear;
   }
-  return cuts;
+  if (!gap) return cuts;
+  const near = new Set<number>();
+  const far = new Set<number>();
+  for (let i = 0; i < crossings.length; i += 2) {
+    const t = crossings[i];
+    const u = crossings[i + 1];
+    const farPixel = vertical ? [pos, u] : [u, pos];
+    const nearPixel = vertical ? [pos - 1, t] : [t, pos - 1];
+    if (
+      !staysWithin(img, vertical, farPixel[0], farPixel[1], pos, pos + tol - 1, true, far) &&
+      !staysWithin(img, vertical, nearPixel[0], nearPixel[1], pos - tol, pos - 1, false, near)
+    ) {
+      return cuts;
+    }
+  }
+  return 0;
+}
+
+/**
+ * True when every opaque pixel joined (eight-connected) to (x0, y0) on its
+ * side of the line stays within the band of columns (or rows) lo to hi:
+ * the far side when far is true (the band starts at the line, and pixels
+ * past hi fail), the near side otherwise (the band ends at the line, and
+ * pixels before lo fail). The walk crosses cell edges freely. Pixels in
+ * `seen` belong to a component already found to stay within, so a crossing
+ * into one answers at once.
+ */
+function staysWithin(
+  img: Pixels,
+  vertical: boolean,
+  x0: number,
+  y0: number,
+  lo: number,
+  hi: number,
+  far: boolean,
+  seen: Set<number>
+): boolean {
+  const { width, height, data } = img;
+  const key = y0 * width + x0;
+  if (seen.has(key)) return true;
+  const stack = [key];
+  const visited = new Set<number>([key]);
+  while (stack.length > 0) {
+    const k = stack.pop() as number;
+    const x = k % width;
+    const y = (k - x) / width;
+    const across = vertical ? x : y;
+    if (far ? across > hi : across < lo) return false;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const side = vertical ? nx : ny;
+        if (far ? side < lo : side > hi) continue;
+        const nk = ny * width + nx;
+        if (visited.has(nk) || data[nk * 4 + 3] <= ALPHA_THRESHOLD) continue;
+        visited.add(nk);
+        stack.push(nk);
+      }
+    }
+  }
+  for (const k of visited) seen.add(k);
+  return true;
 }
 
 /**
@@ -342,6 +414,80 @@ export function countGridCuts(
     }
   }
   return cuts;
+}
+
+/** True when the w x h box at (x0, y0) holds content more than tolX px
+ *  inside its left and right edges and tolY px inside its top and bottom
+ *  whose extent is more than an eighth of the box each way: a body, not a
+ *  stray arm or a line of pixels. */
+function holdsThickContent(
+  img: Pixels,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number,
+  tolX: number,
+  tolY: number
+): boolean {
+  const { width, data } = img;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let y = y0 + tolY; y < y0 + h - tolY; y++) {
+    let i = (y * width + x0 + tolX) * 4 + 3;
+    for (let x = x0 + tolX; x < x0 + w - tolX; x++, i += 4) {
+      if (data[i] > ALPHA_THRESHOLD) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  return maxX >= minX && (maxX - minX + 1) * 8 > w && (maxY - minY + 1) * 8 > h;
+}
+
+/**
+ * True when some cell of the cellW x cellH grid holds two things side by
+ * side or one above the other: a body (content wider and taller than an
+ * eighth of the half, more than the tolerance inside its edges) in each
+ * half of the cell, with the middle line crossed by nothing thicker than an
+ * effect (at most an eighth of the edge's length, unforgiven). A grid whose
+ * cell holds two frames' sprites, joined only by an effect between them, is
+ * too coarse; a sprite whose body straddles the middle, or whose arm alone
+ * reaches across it, is one.
+ */
+export function cellHoldsTwoHalves(img: Pixels, cellW: number, cellH: number): boolean {
+  const halfW = cellW / 2;
+  const halfH = cellH / 2;
+  const tolW = lineTolerance(halfW);
+  const tolH = lineTolerance(halfH);
+  const columns = Math.floor(img.width / cellW);
+  const rows = Math.floor(img.height / cellH);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < columns; c++) {
+      const x0 = c * cellW;
+      const y0 = r * cellH;
+      if (
+        Number.isInteger(halfW) &&
+        holdsThickContent(img, x0, y0, halfW, cellH, tolW, tolH) &&
+        holdsThickContent(img, x0 + halfW, y0, halfW, cellH, tolW, tolH) &&
+        edgeCuts(img, true, x0 + halfW, y0, y0 + cellH, tolW) * 8 <= cellH
+      ) {
+        return true;
+      }
+      if (
+        Number.isInteger(halfH) &&
+        holdsThickContent(img, x0, y0, cellW, halfH, tolW, tolH) &&
+        holdsThickContent(img, x0, y0 + halfH, cellW, halfH, tolW, tolH) &&
+        edgeCuts(img, false, y0 + halfH, x0, x0 + cellW, tolH) * 8 <= cellW
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**

@@ -12,20 +12,30 @@ function lineTolerance(cell: number): number {
 type Pixels = { width: number; height: number; data: Uint8ClampedArray };
 
 /**
- * Unforgiven cuts along one cell's edge on a grid line: the pixel pairs
- * opaque on both sides of the vertical line at x = pos (over rows from to
- * to - 1), or of the horizontal line at y = pos (over columns from to to - 1).
- * 0 when there are none, or when a column (or row) within tol px of the line
- * is fully transparent over that edge: a sprite spilling a few pixels past
- * its cell line with a clear gap beyond.
+ * Unforgiven cuts along one cell's edge on a grid line: the pixels just left
+ * of the vertical line at x = pos (over rows from to to - 1), or just above
+ * the horizontal line at y = pos (over columns from to to - 1), that touch an
+ * opaque pixel just across it, straight across or diagonally. Diagonal
+ * neighbours count because the slicer's own sprite detection joins them, so
+ * a line through a one-pixel diagonal weapon cuts it. 0 when there are none,
+ * or when a column (or row) within tol px of the line is fully transparent
+ * over that edge: a sprite spilling a few pixels past its cell line with a
+ * clear gap beyond.
  */
 function edgeCuts(img: Pixels, vertical: boolean, pos: number, from: number, to: number, tol: number): number {
   const { width, height, data } = img;
   const opaque = (x: number, y: number) => data[(y * width + x) * 4 + 3] > ALPHA_THRESHOLD;
-  const end = Math.min(to, vertical ? height : width);
+  const span = vertical ? height : width;
+  const end = Math.min(to, span);
   let cuts = 0;
   for (let t = from; t < end; t++) {
-    if (vertical ? opaque(pos - 1, t) && opaque(pos, t) : opaque(t, pos - 1) && opaque(t, pos)) cuts++;
+    if (!(vertical ? opaque(pos - 1, t) : opaque(t, pos - 1))) continue;
+    for (let u = Math.max(0, t - 1); u <= Math.min(span - 1, t + 1); u++) {
+      if (vertical ? opaque(pos, u) : opaque(u, pos)) {
+        cuts++;
+        break;
+      }
+    }
   }
   if (cuts === 0) return 0;
   const limit = vertical ? width : height;
@@ -193,8 +203,8 @@ export function findCleanGrid(imageData: {
   const blockRows = height / block;
   const blockFilled = new Uint8Array(blockCols * blockRows);
 
-  // vSplit[x] = 1 when some row has opaque pixels at both x - 1 and x;
-  // hSplit[y] = 1 when some column has opaque pixels at both y - 1 and y.
+  // vSplit[x] = 1 when an opaque pixel at x - 1 touches one at x, straight
+  // across or diagonally; hSplit[y] the same across y - 1 and y.
   const vSplit = new Uint8Array(width);
   const hSplit = new Uint8Array(height);
   // Opacity of the previous row, overwritten in place as the scan advances.
@@ -206,12 +216,20 @@ export function findCleanGrid(imageData: {
   for (let y = 0; y < height; y++) {
     const rowBlock = Math.floor(y / block) * blockCols;
     let left = 0;
+    // The previous row at x - 1, read before above[x - 1] was overwritten.
+    let upLeft = 0;
     let idx = y * width * 4 + 3;
     for (let x = 0; x < width; x++, idx += 4) {
+      const up = above[x];
       if (data[idx] > ALPHA_THRESHOLD) {
         anyOpaque = true;
-        if (left) vSplit[x] = 1;
-        if (above[x]) hSplit[y] = 1;
+        if (left || upLeft) vSplit[x] = 1;
+        if (up || upLeft) hSplit[y] = 1;
+        // A diagonal neighbour up and to the right crosses x + 1 and y.
+        if (x + 1 < width && above[x + 1]) {
+          vSplit[x + 1] = 1;
+          hSplit[y] = 1;
+        }
         blockFilled[rowBlock + Math.floor(x / block)] = 1;
         above[x] = 1;
         left = 1;
@@ -220,6 +238,7 @@ export function findCleanGrid(imageData: {
         above[x] = 0;
         left = 0;
       }
+      upLeft = up;
     }
   }
 

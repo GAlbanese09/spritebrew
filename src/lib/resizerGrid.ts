@@ -9,8 +9,8 @@
 //
 // Priority order:
 //   0. The slicer's pixel-based steps (known layouts, gutters, clean grid),
-//      except that the answer of steps 1 to 4 wins when it is finer and the
-//      pixels allow it (see detectGridSmart).
+//      except that the answer of steps 1 to 4 wins when the pixels allow it
+//      and it is finer, or the pixel answer cuts sprites (see detectGridSmart).
 //   1. Common grid layouts (4x4, 3x4, 8x8, etc.) that divide the image
 //      evenly with a reasonable per-frame size. This catches the 800x800 to
 //      4x4 case that the old algorithm missed.
@@ -212,6 +212,15 @@ function pixelsAllow(imgData: ImageData, g: DetectionResult): boolean {
   return cellsWithContent(imgData, cellW, cellH) * 4 >= g.cols * g.rows * 3;
 }
 
+/** True when the grid g cuts through sprites: its unforgiven cuts exceed the
+ *  length of one of its cells. */
+function cutsSprites(imgData: ImageData, g: DetectionResult): boolean {
+  const cellW = imgData.width / g.cols;
+  const cellH = imgData.height / g.rows;
+  if (!Number.isInteger(cellW) || !Number.isInteger(cellH)) return false;
+  return countUnresolvedCuts(imgData, cellW, cellH) > Math.max(cellW, cellH);
+}
+
 /** Step 0: the slicer's pixel answer, as described in detectGridSmart. */
 function detectByPixels(imgData: ImageData): DetectionResult | null {
   const { width: W, height: H } = imgData;
@@ -271,10 +280,17 @@ export function detectGridSmart(imgData: ImageData): DetectionResult {
   //    one. Square-only clean grids cannot read non-square frames, so a
   //    4x4 of 48x64 or of 128x64 came back as 64 or 128 squares (audit r8);
   //    the shape steps read those 4x4, and then this keeps 4x4, as 'medium'.
+  //    It also wins, finer or not, when the pixel answer's own grid cuts
+  //    through sprites, more pixels than one of its cells is long: the known
+  //    layouts table answers from the image size alone, and a 192x128 sheet
+  //    of 48x32 frames is not the 6x4 of 32 px squares it lists (Second 058).
   const shape = detectByShape(imgData);
   const fromPixels = detectByPixels(imgData);
   if (!fromPixels) return shape;
-  if (shape.cols * shape.rows > fromPixels.cols * fromPixels.rows && pixelsAllow(imgData, shape)) {
+  if (
+    (shape.cols * shape.rows > fromPixels.cols * fromPixels.rows || cutsSprites(imgData, fromPixels)) &&
+    pixelsAllow(imgData, shape)
+  ) {
     return { cols: shape.cols, rows: shape.rows, confidence: 'medium' };
   }
   return fromPixels;

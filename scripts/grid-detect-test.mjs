@@ -30,7 +30,7 @@ await build({
   bundle: true, platform: 'node', format: 'esm', outdir: OUT, logLevel: 'error',
   tsconfig: path.join(ROOT, 'tsconfig.json'), outExtension: { '.js': '.mjs' },
 });
-const { cellHoldsTwoQuadrants, countGridCuts, detectCleanGrid } = await import(
+const { cellHoldsTwoQuadrants, countGridCuts, countUnresolvedCuts, detectCleanGrid } = await import(
   pathToFileURL(path.join(OUT, 'gridDetect.mjs')).href
 );
 const { detectFrameGrid, detectFrameGridFromPixels } = await import(
@@ -801,7 +801,7 @@ const rz = (img) => {
       }
     }
   }
-  check('26. a padded texture of 120 with spilling feet: detectFrameGrid keeps 120', same(detectFrameGrid(pad), { width: 120, height: 120 }));
+  check('26. a padded texture of 120 with spilling feet: detectFrameGrid keeps 120', same(detectFrameGrid(pad), { width: 120, height: 120, columns: 4, rows: 4 }));
   // A 4x4 of 24 (96x96, from BUILD's random small sheets) whose gutters
   // measure 25 across. The 25 px grid cuts sprites, and some of those cuts
   // lie within the tolerance of a clear column; they still count here, or
@@ -814,6 +814,73 @@ const rz = (img) => {
     [4, 79, 19, 96], [29, 78, 46, 92], [49, 77, 71, 93], [74, 76, 90, 93],
   ]) rect(small24, x0, y0, x1, y1);
   check('26. a 4x4 of 24 whose gutters measure 25: detectFrameGrid 24', same(detectFrameGrid(small24), grid(24, 4, 4)));
+}
+
+// ── 27: a size-only table answer, and diagonal pixels (Second 058) ──
+
+{
+  // The known layouts table answers from the image size alone. Sheets of
+  // that size with other frames (every cell drawn, 4 px insets) keep the
+  // grid that cuts nothing; genuine table layouts keep the table's answer.
+  const cellsSheet = (w, h, cols, rows) => {
+    const img = blank(w, h);
+    const cw = w / cols;
+    const ch = h / rows;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) rect(img, c * cw + 4, r * ch + 4, (c + 1) * cw - 4, (r + 1) * ch - 4);
+    }
+    return img;
+  };
+  const g48x32 = detectGridSmart(cellsSheet(192, 128, 4, 4));
+  check('27. 192x128 of 48x32 frames: resizer reads 4x4, not the table\'s 6x4', `${g48x32.cols}x${g48x32.rows}` === '4x4');
+  check("27. 192x128 of 48x32 frames: labelled 'medium'", g48x32.confidence === 'medium');
+  check('27. 288x192 of 72x48 frames: resizer reads 4x4', rz(cellsSheet(288, 192, 4, 4)) === '4x4');
+  check('27. 192x288 of 48x72 frames: resizer reads 4x4', rz(cellsSheet(192, 288, 4, 4)) === '4x4');
+  check('27. control: 192x128 of 32 px frames keeps the table\'s 6x4', rz(cellsSheet(192, 128, 6, 4)) === '6x4');
+  check('27. control: 288x192 of 48 px frames keeps 6x4', rz(cellsSheet(288, 192, 6, 4)) === '6x4');
+  check('27. control: 192x288 of 48 px frames keeps 4x6', rz(cellsSheet(192, 288, 4, 6)) === '4x6');
+  // A pixel answer is replaced only when its grid cuts whole sprites, not
+  // for one effect: an 8x4 of 64 (512x256) whose first frame's effect
+  // reaches 6 px into the next keeps 8x4, although the shape steps' 4x4 of
+  // 128x64 cuts nothing.
+  const fx8 = cellsSheet(512, 256, 8, 4);
+  rect(fx8, 52, 30, 70, 33);
+  check('27. control: an 8x4 of 64 with one effect into the next frame keeps 8x4', rz(fx8) === '8x4');
+  // A 4x4 of 128 whose sprites hold a one-pixel diagonal weapon reaching
+  // across the middle of their cell: the 8x8 grid cuts every weapon, even
+  // though no two opaque pixels face each other straight across a line.
+  const weapon = (path) => {
+    const img = blank(512, 512);
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) {
+        rect(img, c * 128 + 8, r * 128 + 8, c * 128 + 48, r * 128 + 48);
+        for (let n = 47; n <= 95; n++) {
+          const [x, y] = path(n);
+          rect(img, c * 128 + x, r * 128 + y, c * 128 + x + 1, r * 128 + y + 1);
+        }
+      }
+    }
+    return img;
+  };
+  const down = weapon((n) => [n, n - 20]);
+  check('27. a diagonal weapon across the cell middles: resizer reads 4x4, not 8x8', rz(down) === '4x4');
+  check('27. a diagonal weapon: the 64 px grid has unforgiven cuts', countUnresolvedCuts(down, 64, 64) > 0);
+  check('27. a diagonal weapon: detectCleanGrid 128, not 64', same(detectCleanGrid(down), grid(128, 4, 4)));
+  check('27. a mirrored diagonal weapon: resizer reads 4x4', rz(weapon((n) => [n, 102 - n])) === '4x4');
+  check('27. a transposed diagonal weapon: resizer reads 4x4', rz(weapon((n) => [n - 20, n])) === '4x4');
+  check('27. control: the same weapon drawn straight across reads 4x4', rz(weapon((n) => [n, 30])) === '4x4');
+  // Feet that spill 2 px past y = 256 as a diagonal stair, with clear rows
+  // beyond, are still a forgiven spill: George's four characters stay 2x2.
+  const stair = blank(512, 512);
+  rect(stair, 90, 0, 167, 256);
+  rect(stair, 346, 0, 427, 256);
+  for (let k = 0; k < 2; k++) {
+    rect(stair, 100 + k, 256 + k, 101 + k, 257 + k);
+    rect(stair, 360 + k, 256 + k, 361 + k, 257 + k);
+  }
+  rect(stair, 85, 260, 183, 512);
+  rect(stair, 330, 260, 447, 512);
+  check('27. feet spilling past y = 256 as a diagonal stair: resizer reads 2x2', rz(stair) === '2x2');
 }
 
 // ── timing ──

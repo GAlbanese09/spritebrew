@@ -36,6 +36,7 @@ import {
   type DecodeImage,
 } from '@/lib/animateCharacter';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
+import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
 import { ANIMATE_INPUT_B64_CLIENT_MAX } from '@/lib/constants';
 import { generatedFrameSize } from '@/lib/animationGeometry';
@@ -804,7 +805,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   }, [characterDataUrl, charWidth, charHeight]);
 
   const handleGenerate = useCallback(async () => {
-    if (!characterDataUrl || isGenerating) return;
+    if (GENERATION_PAUSED || !characterDataUrl || isGenerating) return;
 
     // 1s click-debounce.
     const clickedAt = Date.now();
@@ -1068,7 +1069,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         rawMessage.includes('timed out');
 
       const customerMessage = isUpstreamError
-        ? `Animation failed due to a temporary issue with the AI service.${refundedNote} Please try again in a few minutes, or try a smaller frame count (6 or 8) if the issue persists.`
+        ? upstreamFailureMessage('animation', refundedNote)
         : `${rawMessage}${refundedNote}`;
 
       console.error('[generation error]', { rawMessage, errorCode: poll.error?.errorCode });
@@ -1096,7 +1097,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   // sizeWarning: the character is present and not the selected size.
   // generateBlockedReason: the first reason Generate is disabled, in
   // canGenerate's order; null while generating or when Generate is enabled.
-  const { canGenerate, sizeWarning, blockedReason: generateBlockedReason } = generateGate({
+  // A generation pause (src/lib/generationPause.ts) comes before all of them.
+  const gate = generateGate({
     character,
     selectedResolution,
     isCustomAction,
@@ -1105,6 +1107,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     tokenCost,
     isGenerating,
   });
+  const { sizeWarning } = gate;
+  const canGenerate = !GENERATION_PAUSED && gate.canGenerate;
+  const generateBlockedReason = GENERATION_PAUSED && !isGenerating ? GENERATION_PAUSED_MESSAGE : gate.blockedReason;
 
   return (
     <>

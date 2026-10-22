@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import GenerationPauseBanner from './GenerationPauseBanner';
 import RewardModal from '@/components/rewards/RewardModal';
 import GenerationErrorNotice from '@/components/sprites/GenerationErrorNotice';
 import { ViewportVars } from '@/components/sprites/ViewportVars';
@@ -24,6 +25,7 @@ export default function AppShell({ children }: AppShellProps) {
   if (pathname === '/') {
     return (
       <>
+        <GenerationPauseBanner />
         {children}
         <RewardModal />
       </>
@@ -43,6 +45,7 @@ export default function AppShell({ children }: AppShellProps) {
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className="flex min-w-0 flex-1 flex-col lg:ml-[var(--sidebar-width)]">
+        <GenerationPauseBanner />
         <Header onMenuClick={() => setSidebarOpen(true)} />
 
         <main className={`flex-1 pixel-grid overscroll-none ${isEditor ? 'overflow-hidden' : 'overflow-y-auto'}`}>

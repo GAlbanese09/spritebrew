@@ -25,9 +25,10 @@
 /* Visible viewport minus the app Header. Used by the full-page /editor route
    so its h-full grid fills exactly the area below the Header — without this,
    h-app-vh + the Header would total > viewport, AppShell's <main> would scroll,
-   and on mobile portrait the editor's bottom toolbar lands below the fold. */
+   and on mobile portrait the editor's bottom toolbar lands below the fold.
+   --pause-banner-h is set only while GenerationPauseBanner shows (0 otherwise). */
 @utility h-editor-page {
-  height: calc(var(--app-vh, 100dvh) - var(--header-height, 4rem));
+  height: calc(var(--app-vh, 100dvh) - var(--header-height, 4rem) - var(--pause-banner-h, 0px));
 }
 
 /* ── Theme tokens ── */

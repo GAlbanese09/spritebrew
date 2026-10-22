@@ -163,11 +163,13 @@ export default function SlicerConfig({
       // Sanity-check the result. Don't block the user — apply and warn so they
       // can sanity-check what was picked.
       const detectedFrameCount = result.columns * result.rows;
+      // A single row or column of frames is a normal strip, so only a result
+      // that is the whole image (one frame) counts as unusual here, not a
+      // frame wider or taller than half the image (backlog-2 audit r1).
       const isAbsurd =
         detectedFrameCount > 256 ||
         result.width < 16 || result.height < 16 ||
-        result.width > imageWidth / 2 ||
-        result.height > imageHeight / 2;
+        detectedFrameCount < 2;
 
       if (isAbsurd) {
         setSanityWarning({

@@ -1,4 +1,5 @@
 import { SLICER_FRAME_PRESETS, SLICER_DETECT_TRY_SIZES } from '@/lib/constants';
+import { countGridCuts, detectCleanGrid, findCleanGrid } from '@/lib/gridDetect';
 
 // Square-only canonical sizes derived from the single-source-of-truth presets.
 // Used by detectFrameGrid's findBestStandardSize fallback.
@@ -40,16 +41,27 @@ const KNOWN_LAYOUTS: Array<{
   { imgW: 320, imgH: 160, frameW: 80, frameH: 80 },
 ];
 
+export interface FrameGrid {
+  width: number;
+  height: number;
+  columns: number;
+  rows: number;
+}
+
 /**
  * Analyze an image to detect frame grid dimensions.
  * Prioritizes known layouts and standard sprite sizes.
  */
-export function detectFrameGrid(
-  imageData: ImageData
-): { width: number; height: number; columns: number; rows: number } | null {
-  const { width, height, data } = imageData;
+export function detectFrameGrid(imageData: ImageData): FrameGrid | null {
+  return detectFrameGridFromPixels(imageData) ?? detectFrameGridFromShape(imageData);
+}
 
-  // 1) Check known Retro Diffusion layouts first (highest priority)
+/**
+ * The KNOWN_LAYOUTS entry for an image of this size, as a frame grid, or
+ * null. It answers from the size alone, without reading a pixel, so a
+ * caller that can check the pixels should (src/lib/resizerGrid.ts).
+ */
+export function knownLayoutGrid(width: number, height: number): FrameGrid | null {
   for (const layout of KNOWN_LAYOUTS) {
     if (width === layout.imgW && height === layout.imgH) {
       return {
@@ -60,6 +72,22 @@ export function detectFrameGrid(
       };
     }
   }
+  return null;
+}
+
+/**
+ * The steps of detectFrameGrid that read the image: the known layouts
+ * table, the transparent gutters (with the near-size correction) and the
+ * clean grid. Null when none of them answers; detectFrameGrid then falls
+ * back to the image's shape alone. The resizer's grid detection
+ * (src/lib/resizerGrid.ts) uses this part on its own.
+ */
+export function detectFrameGridFromPixels(imageData: ImageData): FrameGrid | null {
+  const { width, height, data } = imageData;
+
+  // 1) Check known Retro Diffusion layouts first (highest priority)
+  const known = knownLayoutGrid(width, height);
+  if (known) return known;
 
   // 2) Try transparent gutter detection
   const isTransparentColumn = (col: number): boolean => {
@@ -97,6 +125,23 @@ export function detectFrameGrid(
     const standardMatch = findBestStandardSize(width, height, gutterW, gutterH);
     if (standardMatch) return standardMatch;
 
+    // A frame grid does not cut through sprites. When the measured gutter
+    // grid cuts through more pixels than one cell is long, it is cutting
+    // whole sprites: its spacing was mis-measured (walk cycles whose pose
+    // widths alternate give 122 for 128), and a clean grid of nearly the
+    // same size wins. A smaller cut is one effect reaching into the next
+    // frame, and a clean grid of a different size (a multiple) never wins,
+    // so in both cases the gutter result stands (backlog-2 audits r2, r3).
+    // Only a grid that is clean outright wins here: one that is clean only
+    // because a spill was forgiven does not replace a measured spacing (a
+    // padded texture of 120 px cells whose feet spill read 128, audit r8).
+    if (countGridCuts(imageData, gutterW, gutterH) > Math.max(gutterW, gutterH)) {
+      const clean = findCleanGrid(imageData);
+      if (clean && !clean.rescued && isNearSize(clean.width, gutterW) && isNearSize(clean.height, gutterH)) {
+        return { width: clean.width, height: clean.height, columns: clean.columns, rows: clean.rows };
+      }
+    }
+
     return {
       width: gutterW,
       height: gutterH,
@@ -104,6 +149,23 @@ export function detectFrameGrid(
       rows: Math.floor(height / gutterH),
     };
   }
+
+  // 2b) Smallest clean grid with content: catches large-cell sheets (128 or
+  //     256 px) that step 3 cuts at a smaller preset. It runs only when the
+  //     gutter step found nothing, so a gutter result (non-square frames,
+  //     sizes outside SLICER_DETECT_TRY_SIZES) wins (audit r1), apart from
+  //     the near-size correction inside the gutter step (audit r2). Null
+  //     falls through to step 3 unchanged.
+  const clean = detectCleanGrid(imageData);
+  if (clean) return clean;
+
+  return null;
+}
+
+/** detectFrameGrid's shape-only fallbacks: a preset that divides the image,
+ *  any square size that does, then 32x32. Never null. */
+function detectFrameGridFromShape(imageData: ImageData): FrameGrid {
+  const { width, height } = imageData;
 
   // 3) Find all canonical SLICER_FRAME_PRESETS that evenly divide the image,
   //    prefer the one that produces the most frames (smallest frame size)
@@ -238,6 +300,12 @@ function detectConsistentSpacing(gutters: number[], totalSize: number): number |
   }
 
   return null;
+}
+
+/** True when a is within one eighth of b: the same grid, measured a few
+ *  pixels off, not a multiple of it. */
+function isNearSize(a: number, b: number): boolean {
+  return Math.abs(a - b) * 8 <= b;
 }
 
 function findMode(arr: number[]): number | null {

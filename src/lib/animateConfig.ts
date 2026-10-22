@@ -27,6 +27,8 @@
 import {
   ADVANCED_ANIM_RESOLUTION_PRESETS,
   ADVANCED_ANIM_DEFAULT_RESOLUTION,
+  getResolutionMode,
+  type ResolutionMode,
 } from '@/lib/styleRegistry';
 
 // ── Validation lists ─────────────────────────────────────────────────────────
@@ -49,8 +51,9 @@ const VALID_ACTION_IDS: readonly string[] = [
 const VALID_FRAME_COUNTS: readonly number[] = [4, 6, 8, 10, 12, 16];
 
 // Defaults — used as the fallback when a stale field can't be validated.
-// Must match AnimateForm.tsx's useState defaults.
-const DEFAULT_ACTION = 'walking';
+// Must match AnimateForm.tsx's useState defaults (DEFAULT_ACTION is the
+// form's initial action, so it is exported and used there directly).
+export const DEFAULT_ACTION = 'walking';
 const DEFAULT_FRAME_COUNT = 4;
 const DEFAULT_BG_COLOR = '#ff00ff';
 const DEFAULT_CHARACTER_SIZE_PCT = 75;
@@ -59,6 +62,82 @@ const MAX_CHARACTER_SIZE_PCT = 95;
 const MAX_MOTION_PROMPT_LEN = 500;
 
 const KEY = 'spritebrew:animate:latest';
+
+// ── Action to prompt style, and the snap-skip decision ──────────────────────
+
+/** Map action id to the RD prompt_style for token cost and resolution lookup. */
+export const ACTION_STYLE_MAP: Record<string, string> = {
+  walking: 'rd_advanced_animation__walking',
+  idle: 'rd_advanced_animation__idle',
+  attack: 'rd_advanced_animation__attack',
+  jump: 'rd_advanced_animation__jump',
+  crouch: 'rd_advanced_animation__crouch',
+  destroy: 'rd_advanced_animation__destroy',
+  subtle_motion: 'rd_advanced_animation__subtle_motion',
+  custom_action: 'rd_advanced_animation__custom_action',
+};
+
+const DEFAULT_ACTION_STYLE = 'rd_advanced_animation__walking';
+
+/** The prompt style for an action; unknown actions use the walking style. */
+export function actionPromptStyle(action: string): string {
+  return ACTION_STYLE_MAP[action] ?? DEFAULT_ACTION_STYLE;
+}
+
+/**
+ * Resolution mode when the registry has none for the action's style. One
+ * module object, so that two actions with no registered mode share it and
+ * compare equal by identity (the form's resolution snap effect depends on
+ * the mode object, not on the action).
+ */
+const FALLBACK_RESOLUTION_MODE: ResolutionMode = {
+  kind: 'variable',
+  min: 32,
+  max: 256,
+  default: ADVANCED_ANIM_DEFAULT_RESOLUTION,
+};
+
+/**
+ * The resolution mode for an action. Returns the registry's own mode object
+ * (getResolutionMode returns the same object for every rd_advanced_animation
+ * style), so identity changes only when the mode really changes.
+ */
+export function resolutionModeForAction(action: string): ResolutionMode {
+  return getResolutionMode(actionPromptStyle(action)) ?? FALLBACK_RESOLUTION_MODE;
+}
+
+export interface SnapSkips {
+  /** Arm the padding snap skip: the [selectedAction] effect will fire. */
+  padding: boolean;
+  /** Arm the resolution snap skip: the [currentMode] effect will fire. */
+  resolution: boolean;
+}
+
+/**
+ * Which snap-effect skips to arm when the form's action is set to
+ * `nextAction` while `currentAction` is selected (auto-restore on mount and
+ * template load). A skip must be armed only when its effect will actually
+ * fire, or it stays armed and swallows the user's next real action change:
+ *
+ * - the padding snap runs on every selectedAction change, so it fires only
+ *   when the action really changes (React drops an identical set);
+ * - the resolution snap runs on every currentMode change, so it fires only
+ *   when the two actions map to different mode objects. Today every Animate
+ *   action maps to the same object, so this is always false.
+ *
+ * `modeFor` exists so a test can stub a differing mode without changing the
+ * registry; the form uses the default.
+ */
+export function snapSkips(
+  nextAction: string,
+  currentAction: string,
+  modeFor: (action: string) => ResolutionMode = resolutionModeForAction
+): SnapSkips {
+  return {
+    padding: nextAction !== currentAction,
+    resolution: modeFor(nextAction) !== modeFor(currentAction),
+  };
+}
 
 // ── Transparent-background toggle (fix a) ────────────────────────────────────
 // Separate top-level key from `KEY` above (which stores form config as one

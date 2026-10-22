@@ -330,6 +330,42 @@ reset();
     landGeneratedImage(page, token) === 'stale' && sameSheet(before));
 }
 
+// ── Resize accept (handleResizeAccept): bumps before the confirm, clears only on Go ahead ──
+
+/** handleResizeAccept: the bump happens when the user accepts, before any
+ *  confirm; `confirmed` stands for askBeforeDiscard's Go ahead (true) or
+ *  Cancel (false), since the dialog itself is React state outside this test. */
+function resizeAccept(page, confirmed) {
+  page.bump();
+  if (!confirmed) return 'cancelled';
+  store().clearSpriteSheet();
+  return 'applied';
+}
+
+reset();
+{
+  const page = newPage();
+  page.bump(); // Slice click: its image load is in flight
+  const sliceToken = page.capture();
+  store().restoreSheetSession(savedSessionA()); // the sheet with a group the user would lose
+  const before = { spriteSheet: store().spriteSheet, animations: store().animations, frameDataUrls: store().frameDataUrls };
+  const result = resizeAccept(page, false); // user accepts a size, then cancels the discard dialog
+  const X = makeSheet('X', 8);
+  check('resize accept then Cancel: the sheet and its group stay as they were',
+    result === 'cancelled' && sameSheet(before) && store().animations.length === 1);
+  check('resize accept bumps the epoch before the confirm: an older slice landing now is stale',
+    landSlice(page, sliceToken, X.spriteSheet, X.urls) === 'stale' && sameSheet(before));
+}
+
+reset();
+{
+  const page = newPage();
+  store().restoreSheetSession(savedSessionA());
+  const result = resizeAccept(page, true); // Go ahead
+  check('resize accept then Go ahead: the sheet and group are cleared',
+    result === 'applied' && store().spriteSheet === null && store().animations.length === 0);
+}
+
 // ── sheetVersion moves on every wholesale action, and only on those ──
 
 reset();

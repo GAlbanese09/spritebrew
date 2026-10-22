@@ -138,6 +138,15 @@ export interface PixelEditorState {
   // entry that currently matches `pixels`.
   historyStack: Uint8ClampedArray[];
   historyIndex: number; // -1 = empty, 0 = initial state, 1+ = edits
+  /**
+   * Bumps on every history write that changes what the editor holds (load,
+   * stroke end, undo, redo, revert, flip, reset; not the redo branch dropped
+   * at a stroke's start, which endStroke follows). The "something changed" signal for
+   * subscribers such as useEditorRecovery: historyIndex alone stops moving
+   * once the stack is at MAX_HISTORY, because endStroke shifts the stack and
+   * leaves the index at MAX_HISTORY - 1.
+   */
+  revision: number;
 
   /**
    * Flips true on the first paint-pointer-down (see beginStroke) and survives
@@ -328,6 +337,7 @@ export const useEditorStore = create<PixelEditorState>()(
     height: 0,
     historyStack: [],
     historyIndex: -1,
+    revision: 0,
     originalPixels: null,
     hasAttemptedEdit: false,
     activeTool: 'pencil',
@@ -388,6 +398,7 @@ export const useEditorStore = create<PixelEditorState>()(
         pixels: liveCopy,
         historyStack: [historySeed],
         historyIndex: 0,
+        revision: get().revision + 1,
         originalPixels: baselineCopy,
         hasAttemptedEdit: false, // fresh load — no edit attempts yet
         foregroundColor: p.color.foreground,
@@ -486,6 +497,9 @@ export const useEditorStore = create<PixelEditorState>()(
       // only stroke. Cleared only by loadProject / reset.
       const next: Partial<PixelEditorState> = {};
       if (historyIndex < historyStack.length - 1) {
+        // Drops the redo branch. No revision bump: the recovery draft stores
+        // pixels only, and endStroke bumps; a bump here would start the
+        // autosave debounce mid-stroke (backlog-1 audit r1).
         next.historyStack = historyStack.slice(0, historyIndex + 1);
       }
       if (!hasAttemptedEdit) {
@@ -499,7 +513,7 @@ export const useEditorStore = create<PixelEditorState>()(
       if (!pixels) return;
       const next = [...historyStack, new Uint8ClampedArray(pixels)];
       while (next.length > MAX_HISTORY) next.shift();
-      set({ historyStack: next, historyIndex: next.length - 1 });
+      set({ historyStack: next, historyIndex: next.length - 1, revision: get().revision + 1 });
     },
 
     paintPixel: (x, y, color) => {
@@ -591,6 +605,7 @@ export const useEditorStore = create<PixelEditorState>()(
       const restored = new Uint8ClampedArray(historyStack[newIndex]);
       set({
         historyIndex: newIndex,
+        revision: get().revision + 1,
         pixels: restored,
         lastDirtyRect: null, // wholesale pixel replacement → full repaint
         // Clear the attempted-edit flag only when the canvas truly equals the
@@ -609,6 +624,7 @@ export const useEditorStore = create<PixelEditorState>()(
       const restored = new Uint8ClampedArray(historyStack[newIndex]);
       set({
         historyIndex: newIndex,
+        revision: get().revision + 1,
         pixels: restored,
         lastDirtyRect: null, // wholesale pixel replacement → full repaint
         // Same baseline-equality rule as undo (see comment there).
@@ -638,6 +654,7 @@ export const useEditorStore = create<PixelEditorState>()(
         pixels: new Uint8ClampedArray(originalPixels),
         historyStack: nextStack,
         historyIndex: nextStack.length - 1,
+        revision: get().revision + 1,
         lastDirtyRect: null, // wholesale replacement → full repaint
         // Pixels are back at the loaded baseline; drop the attempted-edit flag.
         hasAttemptedEdit: false,
@@ -660,6 +677,7 @@ export const useEditorStore = create<PixelEditorState>()(
         pixels: flipped,
         historyStack: nextStack,
         historyIndex: nextStack.length - 1,
+        revision: get().revision + 1,
         lastDirtyRect: null, // wholesale replacement, full repaint
         // Same baseline rule as undo: clean only on a byte match to the load.
         hasAttemptedEdit: !pixelsMatchOriginal(flipped, originalPixels),
@@ -691,6 +709,7 @@ export const useEditorStore = create<PixelEditorState>()(
         height: 0,
         historyStack: [],
         historyIndex: -1,
+        revision: get().revision + 1,
         originalPixels: null,
         hasAttemptedEdit: false,
         activeTool: 'pencil',

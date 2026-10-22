@@ -18,7 +18,6 @@ import CharacterAutoPrep from './CharacterAutoPrep';
 import { loadImage, imageToCanvas, despillChromaEdges } from '@/lib/spriteUtils';
 import {
   getTokenCost,
-  getResolutionMode,
   ADVANCED_ANIM_RESOLUTION_PRESETS,
   ADVANCED_ANIM_DEFAULT_RESOLUTION,
 } from '@/lib/styleRegistry';
@@ -48,6 +47,10 @@ import {
   deleteTemplate,
   MAX_TEMPLATES,
   MAX_TEMPLATE_NAME_LEN,
+  ACTION_STYLE_MAP,
+  DEFAULT_ACTION,
+  resolutionModeForAction,
+  snapSkips,
   type AnimateTemplate,
 } from '@/lib/animateConfig';
 
@@ -69,18 +72,6 @@ const PADDING_ON_ACTIONS = new Set([
   'destroy',
   'custom_action',
 ]);
-
-/** Map action id to the RD prompt_style for token cost lookup. */
-const ACTION_STYLE_MAP: Record<string, string> = {
-  walking: 'rd_advanced_animation__walking',
-  idle: 'rd_advanced_animation__idle',
-  attack: 'rd_advanced_animation__attack',
-  jump: 'rd_advanced_animation__jump',
-  crouch: 'rd_advanced_animation__crouch',
-  destroy: 'rd_advanced_animation__destroy',
-  subtle_motion: 'rd_advanced_animation__subtle_motion',
-  custom_action: 'rd_advanced_animation__custom_action',
-};
 
 const FRAME_COUNTS = [4, 6, 8, 10, 12, 16] as const;
 
@@ -269,6 +260,13 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   // source order so commit-1 (initial-mount, default deps) snap effects
   // fire BEFORE the refs get set — those no-op default snaps don't
   // consume the refs.
+  //
+  // A ref is armed only when its effect will actually fire (snapSkips in
+  // src/lib/animateConfig.ts decides). When the restored or loaded action
+  // equals the current one, React drops the identical setSelectedAction and
+  // the padding effect never runs; an armed ref would then survive and
+  // swallow the snap of the user's next real action change. The resolution
+  // ref likewise is armed only when the mode object will change.
   const restoringPaddingRef = useRef(false);
   const restoringResolutionRef = useRef(false);
 
@@ -302,7 +300,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   // calls below, which now always pass DEFAULT_BG_COLOR).
   const [paddingEnabled, setPaddingEnabled] = useState(false);
   const [characterSizePct, setCharacterSizePct] = useState(75);
-  const [selectedAction, setSelectedAction] = useState('walking');
+  const [selectedAction, setSelectedAction] = useState(DEFAULT_ACTION);
   const [frameCount, setFrameCount] = useState<number>(4);
   const [motionPrompt, setMotionPrompt] = useState('');
   const [selectedResolution, setSelectedResolution] = useState<number>(ADVANCED_ANIM_DEFAULT_RESOLUTION);
@@ -324,14 +322,16 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   // Resolution mode for the currently selected action's prompt style.
   // Family B (rd_advanced_animation__*) always returns a 'variable' mode 32–256.
   // If a future action ever maps to a Family A style, the mode adapts.
-  const currentMode = useMemo(
-    () => getResolutionMode(actionPromptStyle) ?? { kind: 'variable' as const, min: 32 as const, max: 256 as const, default: ADVANCED_ANIM_DEFAULT_RESOLUTION },
-    [actionPromptStyle]
-  );
+  // resolutionModeForAction returns the registry's own mode object (or one
+  // module fallback), so this identity changes only when the mode really
+  // changes, and the resolution snap effect below fires only then.
+  const currentMode = useMemo(() => resolutionModeForAction(selectedAction), [selectedAction]);
 
   // Auto-toggle animation padding based on selected action.
-  // Skip exactly once when auto-restore set selectedAction — the saved
-  // paddingEnabled should win over the action's default.
+  // Skip exactly once when auto-restore or a template load changed
+  // selectedAction: the saved paddingEnabled should win over the action's
+  // default. The ref is armed only when the action really changed (see
+  // snapSkips), so this effect always consumes it in the next commit.
   useEffect(() => {
     if (restoringPaddingRef.current) {
       restoringPaddingRef.current = false;
@@ -341,7 +341,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   }, [selectedAction]);
 
   // When the selected action's mode changes, snap selectedResolution to its default/locked size.
-  // Same one-shot skip pattern as the padding snap above.
+  // Same one-shot skip pattern as the padding snap above; the ref is armed
+  // only when the mode object really changes.
   useEffect(() => {
     if (restoringResolutionRef.current) {
       restoringResolutionRef.current = false;
@@ -354,10 +355,13 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   // Auto-restore last-used config on mount. Placed AFTER the snap effects
   // in source order so the initial-mount snap effects fire FIRST with
   // default deps (those default snaps are no-ops and don't consume the
-  // skip refs). When this effect runs, it sets the refs to true AFTER
-  // calling the setters; the post-restore commit's snap effects then
-  // consume the refs and skip, preserving the restored paddingEnabled /
-  // selectedResolution.
+  // skip refs). When this effect runs, it arms the refs AFTER calling the
+  // setters; the post-restore commit's snap effects then consume the refs
+  // and skip, preserving the restored paddingEnabled / selectedResolution.
+  // A ref is armed only when its effect will fire: this effect is
+  // mount-only, so the saved action is compared against the initial
+  // action (DEFAULT_ACTION, the useState default) rather than against
+  // selectedAction, which would add a dependency and re-run the restore.
   //
   // Read inside useEffect (never during render) — no SSR hydration risk
   // and no first-paint flash because the effect fires after first commit.
@@ -373,11 +377,12 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     // SavedAnimateConfig for schema stability with older writes.
     setPaddingEnabled(saved.paddingEnabled);
     setCharacterSizePct(saved.characterSizePct);
-    // Tell the snap effects to skip their next fire (the post-restore
-    // commit). Set AFTER the setters so the refs aren't consumed by
-    // commit-1's no-op default snaps.
-    restoringPaddingRef.current = true;
-    restoringResolutionRef.current = true;
+    // Tell the snap effects that will fire to skip their next run (the
+    // post-restore commit). Set AFTER the setters so the refs aren't
+    // consumed by commit-1's no-op default snaps.
+    const skips = snapSkips(saved.selectedAction, DEFAULT_ACTION);
+    restoringPaddingRef.current = skips.padding;
+    restoringResolutionRef.current = skips.resolution;
   }, []);
 
   // Mount-only: hydrate templates list from localStorage. Read inside
@@ -568,11 +573,13 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
   // Template handlers (v0.5.12 Piece B).
   //
-  // Load: writes all 7 config fields from the template, then sets BOTH
-  // snap-effect-guard refs to true — same pattern as the Piece A
-  // auto-restore effect. Without this, the post-load commit's padding /
+  // Load: writes all 7 config fields from the template, then arms the
+  // snap-effect-guard refs whose effects will fire, the same pattern as the
+  // Piece A auto-restore effect, compared against the current
+  // selectedAction. Without this, the post-load commit's padding /
   // resolution snap effects would clobber the just-loaded paddingEnabled
-  // and selectedResolution back to the action's defaults.
+  // and selectedResolution back to the action's defaults; arming a ref
+  // whose effect will not fire would skip the user's next real change.
   //
   // The auto-save cascade is automatic: the seven setters change the
   // Piece A auto-save effect's deps, which then writes the loaded values
@@ -588,10 +595,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     // July 15. Field is still on AnimateTemplate for schema stability.
     setPaddingEnabled(c.paddingEnabled);
     setCharacterSizePct(c.characterSizePct);
-    restoringPaddingRef.current = true;
-    restoringResolutionRef.current = true;
+    const skips = snapSkips(c.selectedAction, selectedAction);
+    restoringPaddingRef.current = skips.padding;
+    restoringResolutionRef.current = skips.resolution;
     setTemplateError(null);
-  }, []);
+  }, [selectedAction]);
 
   // Save: pre-flight validates name and cap so we can surface specific
   // errors. saveTemplate returns null on cap/empty-name/persistence

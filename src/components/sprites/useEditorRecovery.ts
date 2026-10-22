@@ -104,9 +104,12 @@ export function useEditorRecovery({
       void doSave('lifecycle');
     };
 
-    // historyIndex is the existing per-stroke revision signal (bumps on stroke
-    // end, undo, redo, revert). subscribeWithSelector is already enabled.
-    const unsub = useEditorStore.subscribe((s) => s.historyIndex, () => scheduleSave());
+    // revision bumps on every history write (stroke end, undo, redo, revert,
+    // flip, load, reset). historyIndex alone stops moving once the stack is
+    // at its cap, since endStroke then shifts the stack and leaves the index
+    // in place, which silently ended autosave after 50 strokes.
+    // subscribeWithSelector is already enabled.
+    const unsub = useEditorStore.subscribe((s) => s.revision, () => scheduleSave());
 
     // popstate is the SPA Back signal in this App Router app (pagehide does NOT
     // fire for client-side back). popstate and visibilitychange keep the page

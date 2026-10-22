@@ -42,7 +42,7 @@ export default function AppShell({ children }: AppShellProps) {
       <ViewportVars />
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-      <div className="flex flex-1 flex-col lg:ml-[var(--sidebar-width)]">
+      <div className="flex min-w-0 flex-1 flex-col lg:ml-[var(--sidebar-width)]">
         <Header onMenuClick={() => setSidebarOpen(true)} />
 
         <main className={`flex-1 pixel-grid overscroll-none ${isEditor ? 'overflow-hidden' : 'overflow-y-auto'}`}>

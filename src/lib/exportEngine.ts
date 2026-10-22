@@ -9,6 +9,7 @@ import {
   sanitizeFilename,
 } from '@/lib/downloadUtils';
 import { loadImage } from '@/lib/spriteUtils';
+import { exportNames } from '@/lib/exportNames';
 
 export interface ExportOptions {
   animations: SpriteAnimation[];
@@ -64,13 +65,15 @@ export async function exportTexturePacker(opts: ExportOptions): Promise<void> {
   const fw = opts.resizeWidth ?? opts.frameWidth;
   const fh = opts.resizeHeight ?? opts.frameHeight;
 
-  // Collect all frames across animations
+  // Collect all frames across animations. Group names are made unique per
+  // export (exportNames) so same-named groups keep separate frame keys.
+  const names = exportNames(animations.map((a) => a.name), (i) => animations[i].frames.length === 0);
   const allFrames: { anim: SpriteAnimation; frameIdx: number; canvas: HTMLCanvasElement; name: string }[] = [];
 
-  for (const anim of animations) {
+  for (const [animIdx, anim] of animations.entries()) {
     const canvases = await loadFrameCanvases(anim.frames, frameDataUrls, fw, fh);
     for (let i = 0; i < canvases.length; i++) {
-      const name = `${sanitizeFilename(anim.name)}_${i}`;
+      const name = `${names[animIdx].file}_${i}`;
       allFrames.push({ anim, frameIdx: i, canvas: canvases[i], name });
     }
   }
@@ -108,11 +111,11 @@ export async function exportTexturePacker(opts: ExportOptions): Promise<void> {
   // Build frameTags
   const frameTags: unknown[] = [];
   let frameOffset = 0;
-  for (const anim of animations) {
+  for (const [animIdx, anim] of animations.entries()) {
     const count = anim.frames.length;
     if (count === 0) continue;
     frameTags.push({
-      name: anim.name,
+      name: names[animIdx].label,
       from: frameOffset,
       to: frameOffset + count - 1,
       direction: 'forward',
@@ -153,12 +156,13 @@ export async function exportAseprite(opts: ExportOptions): Promise<void> {
   const fw = opts.resizeWidth ?? opts.frameWidth;
   const fh = opts.resizeHeight ?? opts.frameHeight;
 
+  const names = exportNames(animations.map((a) => a.name), (i) => animations[i].frames.length === 0);
   const allFrames: { anim: SpriteAnimation; frameIdx: number; canvas: HTMLCanvasElement; name: string }[] = [];
 
-  for (const anim of animations) {
+  for (const [animIdx, anim] of animations.entries()) {
     const canvases = await loadFrameCanvases(anim.frames, frameDataUrls, fw, fh);
     for (let i = 0; i < canvases.length; i++) {
-      const name = `${sanitizeFilename(anim.name)}_${i}`;
+      const name = `${names[animIdx].file}_${i}`;
       allFrames.push({ anim, frameIdx: i, canvas: canvases[i], name });
     }
   }
@@ -203,7 +207,7 @@ export async function exportAseprite(opts: ExportOptions): Promise<void> {
     const count = anim.frames.length;
     if (count === 0) return;
     frameTags.push({
-      name: anim.name,
+      name: names[idx].label,
       from: frameOffset,
       to: frameOffset + count - 1,
       direction: 'forward',
@@ -247,13 +251,14 @@ export async function exportGameMaker(opts: ExportOptions): Promise<void> {
   const fh = opts.resizeHeight ?? opts.frameHeight;
 
   const files: { name: string; data: Blob }[] = [];
+  const names = exportNames(animations.map((a) => a.name), (i) => animations[i].frames.length === 0);
 
-  for (const anim of animations) {
+  for (const [animIdx, anim] of animations.entries()) {
     if (anim.frames.length === 0) continue;
     const canvases = await loadFrameCanvases(anim.frames, frameDataUrls, fw, fh);
     const strip = assembleStripSheet(canvases);
     const blob = await canvasToBlob(strip);
-    const name = `${sanitizeFilename(anim.name)}_strip${canvases.length}.png`;
+    const name = `${names[animIdx].file}_strip${canvases.length}.png`;
     files.push({ name, data: blob });
   }
 
@@ -327,11 +332,13 @@ export async function exportGodot(opts: ExportOptions): Promise<void> {
   // Build combined sheet
   const allCanvases: HTMLCanvasElement[] = [];
   const animMeta: { name: string; startIdx: number; count: number; fps: number }[] = [];
+  // SpriteFrames animation names must be unique.
+  const names = exportNames(animations.map((a) => a.name), (i) => animations[i].frames.length === 0);
 
-  for (const anim of animations) {
+  for (const [animIdx, anim] of animations.entries()) {
     if (anim.frames.length === 0) continue;
     const canvases = await loadFrameCanvases(anim.frames, frameDataUrls, fw, fh);
-    animMeta.push({ name: anim.name, startIdx: allCanvases.length, count: canvases.length, fps: anim.fps });
+    animMeta.push({ name: names[animIdx].label, startIdx: allCanvases.length, count: canvases.length, fps: anim.fps });
     allCanvases.push(...canvases);
   }
 
@@ -418,11 +425,12 @@ export async function exportRawFrames(opts: ExportOptions & { includeManifest: b
 
   const files: { name: string; data: Blob | string }[] = [];
   const manifestAnimations: unknown[] = [];
+  const names = exportNames(animations.map((a) => a.name), (i) => animations[i].frames.length === 0);
 
-  for (const anim of animations) {
+  for (const [animIdx, anim] of animations.entries()) {
     if (anim.frames.length === 0) continue;
     const canvases = await loadFrameCanvases(anim.frames, frameDataUrls, fw, fh);
-    const animName = sanitizeFilename(anim.name);
+    const animName = names[animIdx].file;
     const frameFiles: string[] = [];
 
     for (let i = 0; i < canvases.length; i++) {
@@ -433,7 +441,7 @@ export async function exportRawFrames(opts: ExportOptions & { includeManifest: b
     }
 
     manifestAnimations.push({
-      name: anim.name,
+      name: names[animIdx].label,
       type: anim.type,
       fps: anim.fps,
       loop: anim.loop,

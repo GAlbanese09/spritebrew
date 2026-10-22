@@ -16,9 +16,9 @@
  * changes nothing on the server.
  */
 
-// DRAFT COPY (HQ `2026-10-22-002`): George approves it before the pause is turned on.
+// DRAFT COPY (HQ `2026-10-22-002`, scoped after Second 063): George approves it before the pause is turned on.
 export const GENERATION_PAUSED_MESSAGE =
-  "Sprite generation is paused while our AI provider is down for maintenance. Your tokens are safe, and nothing is charged while it's paused. We'll turn it back on as soon as it's back.";
+  "Sprite generation is paused while our AI provider is down for maintenance. New generations can't be started until it's back, so no tokens are spent on them. We'll turn it back on as soon as it's back.";
 
 /** Reads the switch's value: on only for 1 or true, any case, spaces ignored. */
 export function generationPausedFrom(value: string | undefined): boolean {

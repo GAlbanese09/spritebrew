@@ -56,7 +56,7 @@ function stubFetch() {
 }
 
 const DRAFT =
-  "Sprite generation is paused while our AI provider is down for maintenance. Your tokens are safe, and nothing is charged while it's paused. We'll turn it back on as soon as it's back.";
+  "Sprite generation is paused while our AI provider is down for maintenance. New generations can't be started until it's back, so no tokens are spent on them. We'll turn it back on as soon as it's back.";
 
 // The upstream-failure copy on main before this change, word for word.
 const BEFORE = {
@@ -72,7 +72,7 @@ const NOTE = ' Your tokens have been refunded.';
   const off = [undefined, '', '0', 'false', 'yes', 'on', '2', ' ', 'paused'];
   check(`on for ${on.map((v) => JSON.stringify(v)).join(', ')}`, on.every((v) => pause.generationPausedFrom(v) === true));
   check(`off for ${off.map((v) => (v === undefined ? 'unset' : JSON.stringify(v))).join(', ')}`, off.every((v) => pause.generationPausedFrom(v) === false));
-  check('the message is HQ\'s draft, character for character', pause.GENERATION_PAUSED_MESSAGE === DRAFT);
+  check('the message is the text George approved, character for character', pause.GENERATION_PAUSED_MESSAGE === DRAFT);
 }
 
 // ── Off (unset, 0, false): nothing changes ──

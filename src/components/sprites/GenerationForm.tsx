@@ -15,6 +15,7 @@ import {
 } from '@/lib/styleRegistry';
 import { isAdminUser } from '@/lib/generationLimits';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
+import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
 import { StyleExamplesLightbox } from './StyleExamplesLightbox';
 
@@ -163,7 +164,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const effectiveHeight = selectedStyle.fixedSize ? selectedStyle.defaultHeight : customHeight;
 
   const handleGenerate = useCallback(async () => {
-    if (!prompt.trim() || isGenerating) return;
+    if (GENERATION_PAUSED || !prompt.trim() || isGenerating) return;
 
     // 1s click-debounce. Guards against rapid double-clicks beyond the
     // isGenerating React-state check, which has a one-render race window.
@@ -323,7 +324,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         rawMessage.includes('timed out');
 
       const customerMessage = isUpstreamError
-        ? `Generation failed due to a temporary issue with the AI service.${refundedNote} Please try again in a few minutes.`
+        ? upstreamFailureMessage('generation', refundedNote)
         : `${rawMessage}${refundedNote}`;
 
       console.error('[generation error]', { rawMessage, errorCode: poll.error?.errorCode });
@@ -601,9 +602,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
           <Button
             size="lg"
             onClick={handleGenerate}
-            disabled={!prompt.trim() || isGenerating || insufficientTokens}
-            className={`w-full sm:w-auto whitespace-nowrap ${!isGenerating && prompt.trim() && !insufficientTokens ? 'animate-pulse' : ''}`}
-            title={insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
+            disabled={GENERATION_PAUSED || !prompt.trim() || isGenerating || insufficientTokens}
+            className={`w-full sm:w-auto whitespace-nowrap ${!GENERATION_PAUSED && !isGenerating && prompt.trim() && !insufficientTokens ? 'animate-pulse' : ''}`}
+            title={GENERATION_PAUSED ? GENERATION_PAUSED_MESSAGE : insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
+            aria-describedby={GENERATION_PAUSED ? 'generate-paused-reason' : undefined}
           >
             {isGenerating ? (
               <>
@@ -622,6 +624,11 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
               </>
             )}
           </Button>
+          {GENERATION_PAUSED && (
+            <span id="generate-paused-reason" className="sr-only">
+              {GENERATION_PAUSED_MESSAGE}
+            </span>
+          )}
         </div>
       </div>
     </div>

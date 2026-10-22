@@ -19,6 +19,8 @@
  *   data: [DONE]                           ← stream end
  */
 
+import { GENERATION_PAUSED, GenerationPausedError } from '@/lib/generationPause';
+
 export interface GenerationSSEResult {
   success: boolean;
   imageUrl?: string;
@@ -45,6 +47,10 @@ export async function fetchGeneration(
   payload: Payload,
   authToken: string | null
 ): Promise<FetchGenerationResult> {
+  // Generation paused for a provider outage (src/lib/generationPause.ts): no
+  // request leaves the page, whichever form or path called.
+  if (GENERATION_PAUSED) throw new GenerationPausedError();
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };

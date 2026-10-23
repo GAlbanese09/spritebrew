@@ -128,7 +128,10 @@ RESEND_API_KEY=re_...
 RESEND_AUDIENCE_ID=...
 APP_ENV=dev
 QUEUE_KICKOFF_ENABLED=true
+ADMIN_USER_IDS=
 ```
+
+`ADMIN_USER_IDS` is a comma-separated list of Clerk user ids with admin rights. On Cloudflare Pages it is a Secret, set for both Production and Preview, and it is read server-side only. Unset or empty means no admins.
 
 ```bash
 # Run development server

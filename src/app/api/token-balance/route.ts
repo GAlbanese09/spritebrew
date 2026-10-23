@@ -3,6 +3,7 @@ export const runtime = 'edge';
 import { getAuthedUserId, type AuthMessages } from '@/lib/edgeAuth';
 import { getTokenBalance, readBalanceStrict } from '@/lib/tokenBalance';
 import { MoneyPausedError, UPDATING_MESSAGE, isMoneyPaused } from '@/lib/moneyPause';
+import { isAdminUserServer } from '@/lib/adminIds';
 
 // This route's wording for the shared helper's four failure cases.
 const AUTH_MESSAGES: AuthMessages = {
@@ -51,6 +52,8 @@ export async function GET(request: Request) {
   return Response.json({
     success: true,
     balance,
+    // The caller's own admin flag (cost visibility); no id reaches the client.
+    isAdmin: isAdminUserServer(authResult.userId),
     tokenCosts: { fast: 3, plus: 10, pro: 40, animStandard: 15, animExpensive: 50 },
   });
 }

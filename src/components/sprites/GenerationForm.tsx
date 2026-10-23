@@ -13,7 +13,6 @@ import {
   type GenerationStyle,
   type StyleCategory,
 } from '@/lib/styleRegistry';
-import { isAdminUser } from '@/lib/generationLimits';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
@@ -71,6 +70,9 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
 
+  // Cost visibility for admins: the server's answer on the balance fetch below.
+  const [isAdmin, setIsAdmin] = useState(false);
+
   // Fetch token balance from server
   const fetchBalance = useCallback(async () => {
     if (!userId) return;
@@ -83,6 +85,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       const data = await res.json();
       if (data.success) {
         setTokenBalance(data.balance);
+        setIsAdmin(data.isAdmin === true);
         try {
           localStorage.setItem(`spritebrew_tokens_${userId}`, String(data.balance));
         } catch { /* localStorage unavailable */ }
@@ -100,8 +103,6 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       fetchBalance();
     }
   }, [userId, setTokenBalance, fetchBalance]);
-
-  const isAdmin = isAdminUser(userId);
 
   // Queue-and-poll integration. The hook auto-resumes a poll from
   // localStorage on mount if a fresh-enough activeJob entry exists.

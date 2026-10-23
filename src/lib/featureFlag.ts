@@ -1,4 +1,5 @@
-import { isAdminUser, isQueueBetaUser } from './generationLimits';
+import { isAdminUserServer } from './adminIds';
+import { isQueueBetaUser } from './generationLimits';
 
 /**
  * Returns true if the queue-kickoff path should be used for this user.
@@ -11,7 +12,7 @@ import { isAdminUser, isQueueBetaUser } from './generationLimits';
  */
 export function isQueueKickoffEnabled(userId: string, env: Record<string, unknown>): boolean {
   if (env.QUEUE_KICKOFF_ENABLED === 'true') return true;
-  if (isAdminUser(userId)) return true;
+  if (isAdminUserServer(userId)) return true;
   if (isQueueBetaUser(userId)) return true;
   return false;
 }

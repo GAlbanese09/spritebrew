@@ -1,29 +1,12 @@
 /**
- * Auth-side allowlists for the generation pipeline: SpriteBrew admins
- * (queue-path routing + free-tier cap bypass + cost visibility) and
- * queue-path beta cohorts (routing-only opt-in, no admin privileges).
+ * Auth-side allowlist for the generation pipeline: queue-path beta cohorts
+ * (routing-only opt-in, no admin privileges). SpriteBrew admins are read
+ * server-side from the ADMIN_USER_IDS secret (src/lib/adminIds.ts).
  * Also houses the legacy FREE_DAILY_LIMIT constant, used solely by the
  * @deprecated serverRateLimit.ts; safe to retire once that helper is gone.
  */
 
 export const FREE_DAILY_LIMIT = 3;
-
-/**
- * Admin user IDs — grants ALL admin privileges (queue-path routing,
- * free-tier lifetime cap bypass at /api/generate, ~$cost visibility on
- * the GenerationForm). Add users sparingly; non-admin routing-only opt-in
- * lives in QUEUE_BETA_USER_IDS below.
- */
-export const ADMIN_USER_IDS: readonly string[] = [
-  'user_3C34WAUmVRoHvKiyhYSNrMt4dvT', // George (Clerk Production)
-  'user_3BtzTR8gHfGDiNXd1G8WFLQvEf2', // George (Clerk Development — for dev-env queue-kickoff smoke testing)
-];
-
-/** Is this user a SpriteBrew admin? Grants: queue-path routing, free-tier cap bypass, cost visibility. NOT for routing-only beta cohorts — use isQueueBetaUser for those. */
-export function isAdminUser(userId: string | null | undefined): boolean {
-  if (!userId) return false;
-  return ADMIN_USER_IDS.includes(userId);
-}
 
 /**
  * Queue-path beta testers. Users in this list route to the NEW queue-and-poll

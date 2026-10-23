@@ -120,7 +120,7 @@ import {
 import type { TxContext } from '@/lib/tokenTxMeta';
 import { getTokenCost, getResolutionMode, getFreeTierBucket, GENERATION_STYLES } from '@/lib/styleRegistry';
 import { getAccountStatus } from '@/lib/accountLock';
-import { isAdminUser } from '@/lib/generationLimits';
+import { isAdminUserServer } from '@/lib/adminIds';
 import { isQueueKickoffEnabled } from '@/lib/featureFlag';
 import { deriveJobId } from '@/lib/jobIdHelper';
 import { DEBT_TTL_S, putJobState } from '@/lib/jobState';
@@ -191,7 +191,7 @@ export async function POST(request: Request) {
   }
   const tokenCost = getTokenCost(promptStyle);
   const bucket: FreeTierBucket = getFreeTierBucket(promptStyle);
-  const isAdmin = isAdminUser(userId);
+  const isAdmin = isAdminUserServer(userId);
 
   // Generation context recorded on the debit and any refund tx rows (KV
   // metadata) so the admin failure-rate scan can bucket by style/mode/size
@@ -388,7 +388,7 @@ export async function POST(request: Request) {
     // of opening the SSE stream. The consumer Worker (sibling repo) handles
     // the long-running RD call out-of-band; browser polls /api/generation-status.
     //
-    // Day-1+ rollout: env var stays 'false'; admin auto-included via isAdminUser, staged-rollout users via isQueueBetaUser.
+    // Day-1+ rollout: env var stays 'false'; admin auto-included via isAdminUserServer, staged-rollout users via isQueueBetaUser.
     // When flag is OFF, behavior below is byte-identical to pre-refactor.
     // queueKickoff hoisted above the debit; idempotencyKey already validated.
     if (queueKickoff) {

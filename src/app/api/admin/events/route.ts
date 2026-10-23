@@ -16,6 +16,8 @@
 
 export const runtime = 'edge';
 
+import { timingSafeEqualString } from '@/lib/timingSafe';
+
 interface D1Rows<T> {
   results: T[];
 }
@@ -108,7 +110,7 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   const provided = request.headers.get('x-admin-token');
-  if (!provided || provided !== adminToken) {
+  if (!provided || !timingSafeEqualString(provided, adminToken)) {
     return Response.json({ success: false, error: 'forbidden' }, { status: 403 });
   }
 

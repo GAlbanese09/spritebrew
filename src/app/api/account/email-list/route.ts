@@ -20,29 +20,7 @@ import {
 import { EMAIL_LIST_BONUS_TOKENS } from '@/lib/constants';
 import { UPDATING_MESSAGE } from '@/lib/moneyPause';
 import { admitMoney } from '@/lib/moneyAdmission';
-
-interface ClerkUser {
-  primary_email_address_id?: string;
-  email_addresses?: Array<{ id: string; email_address: string }>;
-}
-
-async function fetchClerkPrimaryEmail(userId: string): Promise<string | null> {
-  const secret = process.env.CLERK_SECRET_KEY;
-  if (!secret) return null;
-  try {
-    const res = await fetch(`https://api.clerk.com/v1/users/${userId}`, {
-      headers: { Authorization: `Bearer ${secret}` },
-    });
-    if (!res.ok) return null;
-    const user = (await res.json()) as ClerkUser;
-    const primary = user.email_addresses?.find(
-      (e) => e.id === user.primary_email_address_id
-    );
-    return primary?.email_address ?? user.email_addresses?.[0]?.email_address ?? null;
-  } catch {
-    return null;
-  }
-}
+import { fetchClerkPrimaryEmail } from '@/lib/clerkEmail';
 
 export async function POST(request: Request): Promise<Response> {
   const auth = await getAuthedUserId(request);

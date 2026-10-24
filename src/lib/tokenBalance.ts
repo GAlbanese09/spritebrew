@@ -27,6 +27,8 @@ import {
 import { txMetadata, type TxContext } from '@/lib/tokenTxMeta';
 import { devFault, MoneyPausedError } from '@/lib/moneyPause';
 import { admitMoney } from '@/lib/moneyAdmission';
+import { fetchClerkPrimaryEmail } from '@/lib/clerkEmail';
+import { isDisposableEmail, loadExtraDomains } from '@/lib/disposableEmail';
 
 const TX_TTL = 7_776_000; // 90 days
 const IDEMPOTENCY_TTL = 604_800; // 7 days
@@ -160,10 +162,15 @@ async function isExistingUser(kv: KV, userId: string): Promise<boolean> {
 /**
  * Initialize a new balance record. Checks if the user is an existing user
  * (has gen_count: keys) and grants the appropriate bonus. Disposable-email
- * users (flagged by Clerk webhook handler) get a zero-balance record and no
+ * users (flagged by the Clerk webhook handler, or found by the opening's own
+ * email check) get a zero-balance record and no
  * bonus — they can still buy tokens but can't farm the free tier.
  */
 async function initBalance(kv: KV, userId: string): Promise<number> {
+  // The opening checks the signup email itself (private-config 005), so a
+  // disposable address gets no bonus even when the Clerk webhook's flag is
+  // late. Read before the admission, and only for a first opening.
+  const emailClass = await signupEmailClass(kv, userId);
   // Opening a balance is a money write: refused while paused (n1-ledger 005
   // section 4). S0's admission record replaces the pause read: route
   // 'opening', subject the user, completed in its own finally, so an opening
@@ -181,7 +188,7 @@ async function initBalance(kv: KV, userId: string): Promise<number> {
       outcome = 'paused';
       throw new MoneyPausedError();
     }
-    const opened = await openBalance(kv, userId);
+    const opened = await openBalance(kv, userId, emailClass);
     outcome = opened.already ? 'already_opened' : `opened (${opened.balance})`;
     return opened.balance;
   } finally {
@@ -189,8 +196,31 @@ async function initBalance(kv: KV, userId: string): Promise<number> {
   }
 }
 
-/** The opening's writes, admitted by initBalance (release 1's body, unchanged). */
-async function openBalance(kv: KV, userId: string): Promise<{ balance: number; already: boolean }> {
+/** The signup email's class: 'disposable', 'ok', or 'unknown' (the read failed
+ *  or timed out, or the account was already opened). Never throws. */
+type SignupEmailClass = 'disposable' | 'ok' | 'unknown';
+
+async function signupEmailClass(kv: KV, userId: string): Promise<SignupEmailClass> {
+  try {
+    if (await kv.get(idempotencyKey(`signup:${userId}`))) return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+  const email = await fetchClerkPrimaryEmail(userId);
+  if (!email) {
+    console.log(JSON.stringify({ source: 'opening', event: 'opening_email_check_failed', user_id: userId }));
+    return 'unknown';
+  }
+  return isDisposableEmail(email, await loadExtraDomains(kv)) ? 'disposable' : 'ok';
+}
+
+/** The opening's writes, admitted by initBalance (release 1's body; 005 adds
+ *  the email class: disposable blocks like the webhook's flag). */
+async function openBalance(
+  kv: KV,
+  userId: string,
+  emailClass: SignupEmailClass
+): Promise<{ balance: number; already: boolean }> {
   // Idempotency: prevent double-init
   const idemKey = idempotencyKey(`signup:${userId}`);
   const existing = await kv.get(idemKey);
@@ -207,7 +237,7 @@ async function openBalance(kv: KV, userId: string): Promise<{ balance: number; a
   let bonus: number;
   let reason: string;
   let source: TransactionSource | undefined;
-  if (blocked === 'true') {
+  if (blocked === 'true' || emailClass === 'disposable') {
     bonus = 0;
     reason = 'disposable_email_no_bonus';
     source = undefined;
@@ -239,6 +269,15 @@ async function openBalance(kv: KV, userId: string): Promise<{ balance: number; a
     balance_after: bonus,
     timestamp: now,
   });
+
+  // The webhook may not have flagged this account yet: flag it now, best effort.
+  if (emailClass === 'disposable' && blocked !== 'true') {
+    try {
+      await kv.put(`disposable_blocked:${userId}`, 'true');
+    } catch {
+      // best effort
+    }
+  }
 
   // Persist the granted amount so the celebration modal can read it without
   // scanning the tx log. No TTL — the modal might fire weeks after signup.

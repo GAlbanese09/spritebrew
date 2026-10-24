@@ -11,7 +11,7 @@
 
 export const runtime = 'edge';
 
-import { isDisposableEmail } from '@/lib/disposableEmail';
+import { isDisposableEmail, loadExtraDomains } from '@/lib/disposableEmail';
 import { setDisposableBlocked } from '@/lib/tokenBalance';
 
 interface ClerkUserCreatedPayload {
@@ -139,7 +139,12 @@ export async function POST(request: Request) {
     );
     const email = primary?.email_address ?? payload.data?.email_addresses?.[0]?.email_address;
 
-    if (userId && email && isDisposableEmail(email)) {
+    // The static list plus the private KV extra list (private-config 005).
+    const kv = (process.env as Record<string, unknown>).SPRITEBREW_KV as
+      | { get(key: string): Promise<string | null> }
+      | undefined;
+    const extra = email ? await loadExtraDomains(kv) : undefined;
+    if (userId && email && isDisposableEmail(email, extra)) {
       await setDisposableBlocked(userId);
       console.warn(`[Clerk Webhook] Flagged disposable email signup: ${userId} (${email})`);
     }

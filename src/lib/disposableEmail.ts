@@ -6,7 +6,9 @@
  * cheap first line of defense; bot-protection (Turnstile) and lifetime caps
  * carry the rest of the load.
  *
- * To add a domain: append (lowercase) and ship. No remote fetch, no caching.
+ * To add a domain: append (lowercase) and ship, or add it to the private KV
+ * list below without a deploy (private-config 005). This static set is the
+ * base and is never replaced by the KV list, only extended.
  */
 
 const DISPOSABLE_DOMAINS: ReadonlySet<string> = new Set([
@@ -247,13 +249,77 @@ const DISPOSABLE_DOMAINS: ReadonlySet<string> = new Set([
   'tempemails.io',
 ]);
 
+// ── The private extra list ──
+//
+// KV `config:disposable_domains_extra`: a JSON array of lowercase domains,
+// kept out of the public repo. Read at most once a minute per isolate. Missing,
+// bad JSON or a failed read means no extra domains, and each of those three is
+// logged once per isolate.
+
+export const EXTRA_DOMAINS_KEY = 'config:disposable_domains_extra';
+const EXTRA_CACHE_MS = 60_000;
+
+interface KVGet {
+  get(key: string): Promise<string | null>;
+}
+
+let extraCache: { at: number; domains: ReadonlySet<string> } | null = null;
+const extraLogged = new Set<string>();
+
+function logExtraOnce(kind: 'missing' | 'bad_json' | 'read_failed'): void {
+  if (extraLogged.has(kind)) return;
+  extraLogged.add(kind);
+  console.log(JSON.stringify({ source: 'disposable-email', event: 'extra_domains_none', why: kind }));
+}
+
+/** The KV extra domains, cached for 60 s in this isolate. Never throws. */
+export async function loadExtraDomains(kv: KVGet | null | undefined): Promise<ReadonlySet<string>> {
+  if (!kv) return new Set();
+  const now = Date.now();
+  if (extraCache && now - extraCache.at < EXTRA_CACHE_MS) return extraCache.domains;
+  let domains: ReadonlySet<string> = new Set();
+  try {
+    const raw = await kv.get(EXTRA_DOMAINS_KEY);
+    if (raw === null) {
+      logExtraOnce('missing');
+    } else {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = undefined;
+      }
+      if (!Array.isArray(parsed)) {
+        logExtraOnce('bad_json');
+      } else {
+        domains = new Set(
+          parsed
+            .filter((d): d is string => typeof d === 'string')
+            .map((d) => d.trim().toLowerCase())
+            .filter((d) => d.length > 0)
+        );
+      }
+    }
+  } catch {
+    logExtraOnce('read_failed');
+  }
+  extraCache = { at: now, domains };
+  return domains;
+}
+
+/** Test only: forget the cache and the logged kinds. */
+export function resetExtraDomainsCache(): void {
+  extraCache = null;
+  extraLogged.clear();
+}
+
 /**
- * Returns true if `email` belongs to a known disposable provider.
- * Lowercased domain match against a static set.
+ * Returns true if `email` belongs to a known disposable provider: the static
+ * set, or the extra domains when given. Lowercased domain match.
  */
-export function isDisposableEmail(email: string): boolean {
+export function isDisposableEmail(email: string, extra?: ReadonlySet<string>): boolean {
   const at = email.lastIndexOf('@');
   if (at < 0 || at === email.length - 1) return false;
   const domain = email.slice(at + 1).trim().toLowerCase();
-  return DISPOSABLE_DOMAINS.has(domain);
+  return DISPOSABLE_DOMAINS.has(domain) || (extra?.has(domain) ?? false);
 }

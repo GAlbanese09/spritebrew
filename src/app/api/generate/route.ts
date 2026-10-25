@@ -52,10 +52,6 @@ const FALLBACK_STYLE = 'animation__any_animation';
 // Wrapped in a constant per recon recommendation — if RD ever renames this,
 // change one line instead of hunting through the route.
 const RD_REFERENCE_IMAGES_PARAM = 'reference_images';
-const RD_MAX_REFERENCE_IMAGES = 9;
-// 12MB ceiling on total reference payload, expressed in base64 string length
-// (base64 inflates raw bytes by ~4/3, so 12MB raw ≈ 16MB base64 chars).
-const REF_TOTAL_BASE64_BUDGET = 12 * 1024 * 1024 * 4 / 3;
 
 export interface GenerateBody {
   prompt?: string;
@@ -118,7 +114,8 @@ import {
   type FreeTierBucket,
 } from '@/lib/tokenBalance';
 import type { TxContext } from '@/lib/tokenTxMeta';
-import { getTokenCost, getResolutionMode, getFreeTierBucket, GENERATION_STYLES } from '@/lib/styleRegistry';
+import { getTokenCost, getResolutionMode, getFreeTierBucket } from '@/lib/styleRegistry';
+import { validateCreateBody } from '@/lib/createValidation';
 import { getAccountStatus } from '@/lib/accountLock';
 import { isAdminUserServer } from '@/lib/adminIds';
 import { isQueueKickoffEnabled } from '@/lib/featureFlag';
@@ -618,56 +615,6 @@ export async function POST(request: Request) {
 }
 
 // ── Validation ──
-
-function validateCreateBody(body: GenerateBody): string | null {
-  if (!body.prompt?.trim()) return 'Prompt is required.';
-  const ps = body.promptStyle ?? body.style;
-  if (!ps) return 'Style is required.';
-
-  // If the picked style has explicit resolutionMode metadata (animation styles),
-  // enforce it. Other styles fall back to existing client-side minSize/maxSize clamping.
-  const mode = getResolutionMode(ps);
-  if (mode && body.width !== undefined && body.height !== undefined) {
-    if (mode.kind === 'locked') {
-      if (body.width !== mode.size || body.height !== mode.size) {
-        return `This style is locked at ${mode.size}x${mode.size}. Got ${body.width}x${body.height}.`;
-      }
-    } else {
-      if (body.width < mode.min || body.width > mode.max) {
-        return `Width must be between ${mode.min} and ${mode.max} for this style. Got ${body.width}.`;
-      }
-      if (body.height < mode.min || body.height > mode.max) {
-        return `Height must be between ${mode.min} and ${mode.max} for this style. Got ${body.height}.`;
-      }
-    }
-  }
-
-  // Reference images — only valid for styles flagged supportsReferenceImages.
-  if (body.referenceImages && body.referenceImages.length > 0) {
-    const style = GENERATION_STYLES.find((s) => s.promptStyle === ps);
-    if (!style?.supportsReferenceImages) {
-      return `Style "${ps}" does not support reference images. Use a Pro style.`;
-    }
-    if (body.referenceImages.length > RD_MAX_REFERENCE_IMAGES) {
-      return `Maximum ${RD_MAX_REFERENCE_IMAGES} reference images. Received ${body.referenceImages.length}.`;
-    }
-    for (let i = 0; i < body.referenceImages.length; i++) {
-      const img = body.referenceImages[i];
-      if (typeof img !== 'string' || img.length === 0) {
-        return `Reference image ${i + 1} is not a valid string.`;
-      }
-      if (img.startsWith('data:')) {
-        return `Reference image ${i + 1} includes a data: prefix. Strip it before sending.`;
-      }
-    }
-    const totalSize = body.referenceImages.reduce((sum, img) => sum + img.length, 0);
-    if (totalSize > REF_TOTAL_BASE64_BUDGET) {
-      return 'Total reference image payload too large. Reduce image count or size.';
-    }
-  }
-
-  return null;
-}
 
 function validateAnimateBody(body: GenerateBody): string | null {
   if (!body.inputImage) return 'An input image is required for animation. Please upload a character first.';

@@ -25,7 +25,7 @@ function GithubIcon({ size = 14 }: { size?: number }) {
     </svg>
   );
 }
-import { CURRENT_VERSION } from '@/components/layout/WhatsNew';
+import { CURRENT_VERSION } from '@/lib/changelog';
 
 // ── Data ──
 
@@ -440,7 +440,10 @@ export default function LandingPage() {
             </a>
           </div>
           <p className="text-[10px] text-[#5c5550]">
-            SpriteBrew {CURRENT_VERSION} &middot; Built by George Albanese
+            <a href="/updates" title="See all updates" className="underline underline-offset-2 hover:text-[#9a918a] transition-colors">
+              SpriteBrew {CURRENT_VERSION}
+            </a>{' '}
+            &middot; Built by George Albanese
           </p>
         </div>
       </footer>

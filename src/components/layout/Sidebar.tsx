@@ -22,7 +22,7 @@ import { useSpriteStore } from '@/stores/spriteStore';
 import { FEEDBACK_URL, BETA_TOOLTIP } from '@/lib/externalLinks';
 import EmailListPanel from '@/components/account/EmailListPanel';
 import FlameIcon from '@/components/rewards/FlameIcon';
-import { CURRENT_VERSION } from '@/components/layout/WhatsNew';
+import { CURRENT_VERSION } from '@/lib/changelog';
 import { claimDailyRewardOnce, resetDailyRewardClaim } from '@/lib/dailyRewardClient';
 
 const NAV_ITEMS = [
@@ -178,9 +178,15 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
 
         {/* Footer */}
         <div className="px-5 py-3 border-t border-border-subtle space-y-1.5">
-          <p className="text-[10px] text-text-muted font-mono uppercase tracking-widest">
+          <a
+            href="/updates"
+            onClick={onClose}
+            title="See all updates"
+            aria-label={`SpriteBrew v${CURRENT_VERSION}, see all updates`}
+            className="block text-[10px] text-text-muted font-mono uppercase tracking-widest hover:text-text-secondary transition-colors"
+          >
             SpriteBrew v{CURRENT_VERSION}
-          </p>
+          </a>
           <div className="flex gap-2 text-[9px] font-mono">
             <a href="/privacy" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
               Privacy

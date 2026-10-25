@@ -10,6 +10,7 @@ import {
   PollTransientError,
   type PollTerminalState,
 } from '@/lib/pollClient';
+import { resumeDecision } from '@/lib/pollResume';
 
 export type GenStatus = 'idle' | 'polling' | 'success' | 'error' | 'abandoned';
 export type GenMode = 'create' | 'animate';
@@ -22,7 +23,14 @@ export interface ActiveJobLocalStorage {
 }
 
 const ACTIVE_JOB_KEY = 'spritebrew:activeJob';
-const STALE_THRESHOLD_MS = 10 * 60 * 1_000;
+/** When this module loaded in the browser, which is no later than the first
+ *  visit to /generate in this page session (see resumeDecision). */
+const PAGE_LOADED_AT = Date.now();
+
+/** The mounted hooks, told when a job is saved by a hook whose form has
+ *  unmounted (the user left /generate while the request was in flight), so
+ *  the form on screen picks the job up. */
+const jobSavedListeners = new Set<() => void>();
 
 export interface PollSuccessResult {
   resultBase64: string;
@@ -88,6 +96,15 @@ function readActiveJob(): ActiveJobLocalStorage | null {
   }
 }
 
+/** The mode of the saved job that the next mount will resume (the same rule
+ *  as the mount effect), or null. GeneratePage opens on that job's tab, so
+ *  the form that started a job finishes it. */
+export function savedJobMode(): GenMode | null {
+  const saved = readActiveJob();
+  if (!saved || resumeDecision(saved, Date.now(), PAGE_LOADED_AT) !== 'resume') return null;
+  return saved.mode;
+}
+
 function writeActiveJob(entry: ActiveJobLocalStorage): void {
   if (typeof window === 'undefined') return;
   try {
@@ -106,9 +123,13 @@ function clearActiveJob(): void {
  * Drives the queue-and-poll flow client-side.
  *
  * - `startPolling` writes localStorage + kicks off the poll loop.
- * - On mount, if a fresh-enough localStorage entry exists, resumes polling
- *   automatically (handy if the user reloaded mid-generation).
- * - On unmount, aborts the in-flight poll loop.
+ * - On mount, resumes a saved job (see resumeDecision): after a reload, and
+ *   after the user left /generate and came back while or after it ran.
+ * - On unmount, aborts the poll loop and keeps the saved job, so the next
+ *   mount (the other tab's form, or /generate on return) resumes it. A loop
+ *   left running would finish unseen and clear the saved job, which left the
+ *   page on "Brewing..." on return and polled the job twice after a tab
+ *   switch (paused-message audit, Oct 25).
  * - `reset` clears state + localStorage; call it when the user starts a new generation.
  */
 export function useGenerationPoll(): UseGenerationPollResult {
@@ -125,7 +146,9 @@ export function useGenerationPoll(): UseGenerationPollResult {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [mode, setMode] = useState<GenMode | null>(null);
 
-  const abortRef = useRef<AbortController | null>(null);
+  // The running loop: its controller and job. Null when idle.
+  const activeRef = useRef<{ controller: AbortController; jobId: string } | null>(null);
+  const mountedRef = useRef(false);
 
   // Stable callback so effect deps don't churn.
   const getTokenStable = useCallback(() => getToken(), [getToken]);
@@ -139,9 +162,9 @@ export function useGenerationPoll(): UseGenerationPollResult {
       jobStartedAt: number
     ): void => {
       // Cancel any prior loop before starting a new one.
-      abortRef.current?.abort();
+      activeRef.current?.controller.abort();
       const controller = new AbortController();
-      abortRef.current = controller;
+      activeRef.current = { controller, jobId: jid };
 
       setStatus('polling');
       setResult(undefined);
@@ -155,6 +178,14 @@ export function useGenerationPoll(): UseGenerationPollResult {
       setMode(jobMode);
 
       void (async () => {
+        try {
+          await pollUntilDone();
+        } finally {
+          if (activeRef.current?.controller === controller) activeRef.current = null;
+        }
+      })();
+
+      async function pollUntilDone(): Promise<void> {
         try {
           const terminal: PollTerminalState = await pollJobStatus(jid, getTokenStable, {
             signal: controller.signal,
@@ -243,7 +274,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
           setStatus('error');
           clearActiveJob();
         }
-      })();
+      }
     },
     [getTokenStable]
   );
@@ -257,14 +288,21 @@ export function useGenerationPoll(): UseGenerationPollResult {
         mode,
         startedAt: now,
       });
+      if (!mountedRef.current) {
+        // The form that sent this job has unmounted (the user left /generate
+        // while the request was in flight): keep the job saved, and tell the
+        // form on screen, if any, to pick it up; a later mount resumes it.
+        jobSavedListeners.forEach((pickUp) => pickUp());
+        return;
+      }
       runPoll(jid, idempotencyKey, mode, false, now);
     },
     [runPoll]
   );
 
   const reset = useCallback((): void => {
-    abortRef.current?.abort();
-    abortRef.current = null;
+    activeRef.current?.controller.abort();
+    activeRef.current = null;
     clearActiveJob();
     setStatus('idle');
     setResult(undefined);
@@ -278,22 +316,29 @@ export function useGenerationPoll(): UseGenerationPollResult {
     setMode(null);
   }, []);
 
-  // Resume from localStorage on mount.
+  // Resume a saved job on mount and whenever an unmounted hook saves one
+  // while this one is idle; abort the loop on unmount, keeping the saved job.
   useEffect(() => {
-    const persisted = readActiveJob();
-    if (!persisted) return;
-    if (Date.now() - persisted.startedAt > STALE_THRESHOLD_MS) {
-      clearActiveJob();
-      return;
-    }
-    runPoll(persisted.jobId, persisted.idempotencyKey, persisted.mode, true, persisted.startedAt);
-    // runPoll captures getTokenStable; if Clerk hasn't hydrated yet, the
-    // first getToken() call inside pollJobStatus may return null and throw
-    // PollAuthError → status 'error' → user sees an actionable message.
+    mountedRef.current = true;
+    const pickUp = (): void => {
+      if (activeRef.current) return;
+      const persisted = readActiveJob();
+      const decision = resumeDecision(persisted, Date.now(), PAGE_LOADED_AT);
+      if (decision === 'drop') clearActiveJob();
+      if (decision !== 'resume' || !persisted) return;
+      runPoll(persisted.jobId, persisted.idempotencyKey, persisted.mode, true, persisted.startedAt);
+      // runPoll captures getTokenStable; if Clerk hasn't hydrated yet, the
+      // first getToken() call inside pollJobStatus may return null and throw
+      // PollAuthError, so the status is 'error' and the user sees a message.
+    };
+    pickUp();
+    jobSavedListeners.add(pickUp);
 
     return () => {
-      abortRef.current?.abort();
-      abortRef.current = null;
+      mountedRef.current = false;
+      jobSavedListeners.delete(pickUp);
+      activeRef.current?.controller.abort();
+      activeRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

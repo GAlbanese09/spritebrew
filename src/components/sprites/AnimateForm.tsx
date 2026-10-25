@@ -979,20 +979,23 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       return;
     }
     if (poll.status === 'success' && poll.result) {
-      // Same despill wire as the SSE-success path — see that branch's
+      // Same despill wire as the SSE-success path: see that branch's
       // comment for the RD default-strip context and the two internal
-      // safety gates that make unconditional calls safe. bgColor is now
-      // the DEFAULT_BG_COLOR module constant (post-July-15) but still
-      // travels via inFlightRef so a stale ref (mount-race edge case)
-      // falls through to '#000000' — that neutral fill is classified as
-      // non-chroma inside despillChromaEdges and no-ops the pass, so it's
-      // a safe fallback. Wrapped in an IIFE because useEffect callbacks
-      // can't be async themselves.
+      // safety gates that make unconditional calls safe. bgColor travels
+      // via inFlightRef; a job resumed after the form remounted has none.
+      // Since July 15 every animate request is flattened onto
+      // DEFAULT_BG_COLOR, so a resumed animate job despills with it (the
+      // neutral '#000000' skips the pass and could leave a magenta rim).
+      // A Create job finished here, after a tab switch mid-job, keeps the
+      // neutral fill: the Create form never despills, and the pass would
+      // recolor magenta outlines. Wrapped in an IIFE because useEffect
+      // callbacks can't be async themselves.
       const rawDataUrl = `data:image/png;base64,${poll.result.resultBase64}`;
       const reqCtx = inFlightRef.current;
+      const despillFill = reqCtx?.bgColor ?? (poll.mode === 'animate' ? DEFAULT_BG_COLOR : '#000000');
       const pollResult = poll.result;
       (async () => {
-        const dataUrl = await despillIfTransparent(rawDataUrl, reqCtx?.bgColor ?? '#000000');
+        const dataUrl = await despillIfTransparent(rawDataUrl, despillFill);
         setGeneratedImage(dataUrl, dataUrl);
 
         // Rescue metadata (consumer commit 0d71a88): build a client-side

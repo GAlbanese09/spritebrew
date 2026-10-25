@@ -10,6 +10,7 @@ import GenerationResult from '@/components/sprites/GenerationResult';
 import { addToHistory, type SlicerHints } from '@/lib/generationHistory';
 import { useSpriteStore } from '@/stores/spriteStore';
 import type { AnimateGeneratedContext } from '@/components/sprites/AnimateForm';
+import { savedJobMode } from '@/hooks/useGenerationPoll';
 import {
   PURCHASE_BANNER_COPY,
   clearBaseline,
@@ -209,7 +210,14 @@ export default function GeneratePage() {
   const setAnimateMode = useSpriteStore((s) => s.setAnimateMode);
   const setCurrentSheetMetadata = useSpriteStore((s) => s.setCurrentSheetMetadata);
 
-  const [tab, setTab] = useState<GenerateTab>('create');
+  // A generation that ran while the user was on another page resumes when
+  // /generate mounts. Open on its tab, so the form that started it finishes
+  // it: the Animate form despills an animation and shows its rescue notice,
+  // which the Create form does not (paused-message audit). This first value
+  // reads localStorage, so it must never meet server markup: every use of
+  // `tab` stays inside the signed-in Show below, which renders nothing on
+  // the server.
+  const [tab, setTab] = useState<GenerateTab>(() => (savedJobMode() === 'animate' ? 'animate' : 'create'));
   const [showForm, setShowForm] = useState(true);
   const prevDataUrl = useRef(generatedImageDataUrl);
 
@@ -227,6 +235,11 @@ export default function GeneratePage() {
     },
     [setAnimateMode]
   );
+
+  // The store's mode follows the tab, including a tab opened on a saved job.
+  useEffect(() => {
+    setAnimateMode(tab);
+  }, [tab, setAnimateMode]);
 
   // Send-to-Animator handoff: when GenerationResult sets the flag and pushes
   // /generate, we're already on this route so GeneratePage does NOT remount.
@@ -348,6 +361,8 @@ export default function GeneratePage() {
       </Show>
 
       {/* Two-column layout — signed-in only */}
+      {/* Keep every use of `tab` inside this Show: its first value reads
+          localStorage, and Show renders nothing on the server. */}
       <Show when="signed-in">
       <Suspense fallback={null}>
         <PurchaseStatusContent />

@@ -2,7 +2,9 @@
 //
 // Offline tests for detectCleanGrid in src/lib/gridDetect.ts, its call in
 // detectFrameGrid (src/lib/spriteUtils.ts) and the resizer's grid detection
-// (src/lib/resizerGrid.ts): /upload Auto-detect on sheets with large cells. Run from the repo root:
+// (src/lib/resizerGrid.ts): /upload Auto-detect on sheets with large cells,
+// and the slicer's Auto-detect after the Resize screen (detectSlicerGrid,
+// upload-2). Run from the repo root:
 // `node scripts/grid-detect-test.mjs`.
 //
 // Sheets are synthetic RGBA buffers built in memory: a transparent
@@ -40,7 +42,7 @@ const {
 } = await import(
   pathToFileURL(path.join(OUT, 'gridDetect.mjs')).href
 );
-const { detectFrameGrid, detectFrameGridFromPixels } = await import(
+const { detectFrameGrid, detectFrameGridFromPixels, detectSlicerGrid } = await import(
   pathToFileURL(path.join(OUT, 'spriteUtils.mjs')).href
 );
 const { detectGridSmart } = await import(
@@ -1352,6 +1354,63 @@ const rz = (img) => {
   const t0 = performance.now();
   rz(bars(2048));
   console.log(`time  2048x2048 long bars, resizer ${(performance.now() - t0).toFixed(1)} ms (walked ${w.map((x) => x.n).join(', ')} px, leaking ${f.map((x) => x.n).join(', ')} px, at 512, 1024, 2048)`);
+}
+
+// ── 31: the slicer's Auto-detect after the Resize screen (upload-2 item 2) ──
+
+{
+  // The slicer: its pixel steps first, then the frame size kept from the
+  // Resize screen when it tiles the image, then the shape fallbacks.
+  const g128 = sheet(512, 512, 128);
+  const k = detectSlicerGrid(g128, { width: 64, height: 64 });
+  check('31. slicer: a clean grid still answers from the pixels, ignoring the kept size',
+    same(k, grid(128, 4, 4)) && same(detectFrameGrid(g128), grid(128, 4, 4)) && !k.fromResize);
+  // Every sprite touches its neighbours: no gutters and no clean grid, so
+  // the slicer used to fall back to 16 px (George's spartan sheet).
+  const touching = blank(512, 512);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      rect(touching, c * 128 + 4, r * 128 + 4, c * 128 + 124, r * 128 + 124);
+      if (c < 3) rect(touching, c * 128 + 120, r * 128 + 40, c * 128 + 136, r * 128 + 60);
+      if (r < 3) rect(touching, c * 128 + 40, r * 128 + 120, c * 128 + 60, r * 128 + 136);
+    }
+  }
+  const was = detectFrameGrid(touching);
+  check('31. touching sprites at 512: no pixel answer, and detectFrameGrid still falls back to 16',
+    detectFrameGridFromPixels(touching) === null && same(was, grid(16, 32, 32)));
+  const kept = detectSlicerGrid(touching, { width: 128, height: 128 });
+  check('31. touching sprites at 512: the slicer keeps the Resize screen\'s 128, marked as kept',
+    same(kept, grid(128, 4, 4)) && kept.fromResize === true);
+  check('31. touching sprites at 512: the Resize screen itself reads 4x4', rz(touching) === '4x4');
+  check('31. a kept size that does not tile (120 on 512) falls back to 16 as before',
+    JSON.stringify(detectSlicerGrid(touching, { width: 120, height: 120 })) === JSON.stringify(was));
+  check('31. no kept size, a zero or a non-integer one: detectFrameGrid\'s answer',
+    [undefined, null, { width: 0, height: 128 }, { width: 128, height: Number.NaN }, { width: 127.5, height: 128 }]
+      .every((s) => JSON.stringify(detectSlicerGrid(touching, s)) === JSON.stringify(was)));
+  // A size that tiles only when fractions are allowed (48.5 on 194): ignored.
+  const opaque = blank(194, 194);
+  rect(opaque, 0, 0, 194, 194);
+  check('31. a fractional kept size that would tile (48.5 on 194) is ignored',
+    JSON.stringify(detectSlicerGrid(opaque, { width: 48.5, height: 48.5 })) === JSON.stringify(detectFrameGrid(opaque)));
+  // At a size in the known layouts table the slicer answers from the size
+  // alone, so the Resize screen's size wins when it differs (audit P2-1).
+  const two128 = sheet(256, 256, 128);
+  const t256 = detectSlicerGrid(two128, { width: 128, height: 128 });
+  check('31. four 256 px characters resized to 128 px frames (256x256, the table\'s 64): the kept 128 wins',
+    same(detectFrameGrid(two128), grid(64, 4, 4)) && same(t256, grid(128, 2, 2)) && t256.fromResize === true);
+  const axe48x32 = blank(192, 128);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) rect(axe48x32, c * 48 + 6, r * 32 + 6, c * 48 + 42, r * 32 + 26);
+  }
+  const k48 = detectSlicerGrid(axe48x32, { width: 48, height: 32 });
+  check('31. 192x128 kept as 48x32 frames (the Resize screen\'s "Try 4x4"): 48x32, not the table\'s 32',
+    k48.width === 48 && k48.height === 32 && k48.columns === 4 && k48.rows === 4 && k48.fromResize === true);
+  const tall32 = detectSlicerGrid(sheet(192, 128, 32), { width: 32, height: 64 });
+  check('31. a kept size that differs from the table in height only (32x64 at 192x128): kept',
+    tall32.width === 32 && tall32.height === 64 && tall32.columns === 6 && tall32.rows === 2 && tall32.fromResize === true);
+  const table32 = detectSlicerGrid(sheet(192, 128, 32), { width: 32, height: 32 });
+  check('31. a table sheet kept at the table\'s own size: the table answer, not marked as kept',
+    table32.width === 32 && table32.height === 32 && !table32.fromResize);
 }
 
 // ── timing ──

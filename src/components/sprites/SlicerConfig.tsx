@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Grid3X3, Scan, Scissors, AlertTriangle, X } from 'lucide-react';
 import { SLICER_FRAME_PRESETS } from '@/lib/constants';
-import { detectFrameGrid, loadImage, imageToCanvas } from '@/lib/spriteUtils';
+import { detectSlicerGrid, loadImage, imageToCanvas } from '@/lib/spriteUtils';
 import { sheetGeometry, galleryFrameSizeGuess, type SheetGeometry } from '@/lib/animationGeometry';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { useCanvasFitScale } from '@/lib/useCanvasFitScale';
@@ -19,7 +19,9 @@ interface SlicerConfigProps {
   imageWidth: number;
   imageHeight: number;
   onSlice: (config: SliceConfig) => void;
-  /** Pre-populate frame dimensions (from FrameSizeResizer). Skips auto-detect. */
+  /** Pre-populate frame dimensions (from FrameSizeResizer). Skips auto-detect
+   *  on mount, and is Auto-detect's answer when the pixels give none
+   *  (detectSlicerGrid). */
   initialFrameWidth?: number;
   initialFrameHeight?: number;
 }
@@ -144,7 +146,8 @@ export default function SlicerConfig({
       const canvas = imageToCanvas(img);
       const ctx = canvas.getContext('2d')!;
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const result = detectFrameGrid(imgData);
+      const kept = initialFrameWidth && initialFrameHeight ? { width: initialFrameWidth, height: initialFrameHeight } : null;
+      const result = detectSlicerGrid(imgData, kept);
       if (!result) {
         setSanityWarning({
           message: 'Auto-detect could not determine frame size.',
@@ -159,6 +162,17 @@ export default function SlicerConfig({
       setPadding(0);
       setOffsetX(0);
       setOffsetY(0);
+
+      // DRAFT COPY (upload-2 item 2): the size came from the Resize screen,
+      // not from the pixels, so say so. It is the size accepted there, so
+      // the unusual-count check below does not judge it as a detection.
+      if (result.fromResize) {
+        setSanityWarning({
+          message: `Auto-detect used the ${result.width}×${result.height} frame size from the Resize screen.`,
+          suggestion: 'If frames look cut, set Width and Height yourself.',
+        });
+        return;
+      }
 
       // Sanity-check the result. Don't block the user — apply and warn so they
       // can sanity-check what was picked.
@@ -186,7 +200,7 @@ export default function SlicerConfig({
     } finally {
       setDetecting(false);
     }
-  }, [imageUrl, isAnimateSheet, hintedFrameSize, currentSheetMetadata, applyGeometry, imageWidth, imageHeight]);
+  }, [imageUrl, isAnimateSheet, hintedFrameSize, currentSheetMetadata, applyGeometry, imageWidth, imageHeight, initialFrameWidth, initialFrameHeight]);
 
   // Draw preview with grid overlay
   useEffect(() => {

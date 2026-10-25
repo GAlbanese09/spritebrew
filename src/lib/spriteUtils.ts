@@ -57,6 +57,46 @@ export function detectFrameGrid(imageData: ImageData): FrameGrid | null {
 }
 
 /**
+ * The slicer's Auto-detect (upload-2 item 2). `kept` is the frame size the
+ * Resize screen handed over (the size the slicer opened with). It is used
+ * when it tiles the image and either the pixel steps find no grid, or the
+ * image size is in the known layouts table with another frame size: that
+ * answer comes from the size alone, while the Resize screen read the pixels
+ * or the user chose there. Four 256 px characters resized to 128 px frames
+ * make a 256x256 sheet, which the table reads as 64 px frames (audit P2-1);
+ * a big-frame sheet whose sprites touch (George's 512 px spartan sheet) no
+ * longer turns into 16 px frames. Otherwise the shape fallbacks, whose
+ * smallest dividing preset is 16. A sheet that skipped the Resize screen
+ * (128 px or less, or a generated sheet) is detected as before.
+ */
+export function detectSlicerGrid(
+  imageData: ImageData,
+  kept?: { width: number; height: number } | null
+): (FrameGrid & { fromResize?: true }) | null {
+  const { width, height } = imageData;
+  const keptGrid =
+    kept &&
+    Number.isInteger(kept.width) && Number.isInteger(kept.height) &&
+    kept.width > 0 && kept.height > 0 &&
+    width % kept.width === 0 && height % kept.height === 0
+      ? {
+          width: kept.width,
+          height: kept.height,
+          columns: width / kept.width,
+          rows: height / kept.height,
+          fromResize: true as const,
+        }
+      : null;
+  const table = knownLayoutGrid(width, height);
+  if (keptGrid && table && (table.width !== keptGrid.width || table.height !== keptGrid.height)) {
+    return keptGrid;
+  }
+  const fromPixels = detectFrameGridFromPixels(imageData);
+  if (fromPixels) return fromPixels;
+  return keptGrid ?? detectFrameGridFromShape(imageData);
+}
+
+/**
  * The KNOWN_LAYOUTS entry for an image of this size, as a frame grid, or
  * null. It answers from the size alone, without reading a pixel, so a
  * caller that can check the pixels should (src/lib/resizerGrid.ts).

@@ -1,347 +1,40 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+import { CURRENT_VERSION, releaseLabel, releasesSince, type Release } from '@/lib/changelog';
 
 /**
  * "What's New" modal.
  *
- * Shows once per version whenever the user returns after a new release.
- * First-ever visitors don't see the changelog (they're already on the
- * latest version — there's nothing to announce to them).
+ * Shows when a visitor returns after a new release, with only the releases
+ * newer than the version stored at their last visit, and a link to the full
+ * list on /updates. First-ever visitors don't see it (they are already on the
+ * latest version, so there is nothing to announce to them).
  */
-
-export const CURRENT_VERSION = '0.6.2';
 
 const STORAGE_KEY = 'spritebrew_seen_version';
 
-interface ChangelogEntry {
-  emoji: string;
-  title: string;
-  description: string;
-  releaseLabel?: string;  // shown as a section header above this entry
-}
-
-const CHANGELOG: ChangelogEntry[] = [
-  // ── 0.6.2: Easier animations (Oct 21, 2026) ──
-  {
-    releaseLabel: 'OCT 21, 2026: EASIER ANIMATIONS',
-    emoji: '🧩',
-    title: 'Drag frames to make animations',
-    description:
-      'In Sheet Tools, drag a frame onto the Animations panel to start a new animation, and drop more frames to add them. "Use all frames" makes one from the whole sheet in a click, and you can rename an animation and set its type right on its card.',
-  },
-  {
-    emoji: '🎯',
-    title: 'Your prepared character stays put',
-    description:
-      'On the Animate tab, changing the resolution no longer throws away a character you prepared or touched up by hand. Switch back and it is still there, or click "Prepare at" to make a fresh version at the new size. Pixel edits also survive padding changes now.',
-  },
-  // ── 0.6.1: Privacy policy updated (Oct 4, 2026) ──
-  {
-    releaseLabel: 'OCT 4, 2026: PRIVACY POLICY UPDATED',
-    emoji: '🔒',
-    title: 'Privacy policy updated',
-    description:
-      'We rewrote our privacy policy to match how SpriteBrew handles your data today, including payments, your saved generations and what you can delete. You can read it on the Privacy page.',
-  },
-  // ── 0.6.0 — Mobile Editing & Edit Recovery (Jun 18, 2026) ──
-  {
-    releaseLabel: 'JUN 18, 2026 — MOBILE EDITING AND EDIT RECOVERY',
-    emoji: '📱',
-    title: 'Edit on your phone',
-    description:
-      'The pixel editor now works with touch. Draw with your finger, pinch to zoom and pan, and the layout adapts to phone screens, so you no longer need a desktop to edit sprites.',
-  },
-  {
-    emoji: '🔄',
-    title: 'Edit recovery',
-    description:
-      'Close or refresh the editor by accident? We will now offer to bring your last in-progress sprite back, so you can pick up where you left off.',
-  },
-  // ── 0.5.13 — Animate & Preview Polish (Jun 2, 2026) ──
-  {
-    releaseLabel: 'JUN 2, 2026 — ANIMATE & PREVIEW POLISH',
-    emoji: '🎨',
-    title: 'Smarter defaults and a cleaner result preview',
-    description:
-      'Two improvements: new animations now default to a magenta background fill, which keeps your character cleaner when the background is removed. And the result preview now picks the right zoom automatically based on the image size, so your sprite fits the view and stays centered instead of getting cut off or shrunk.',
-  },
-  // ── 0.5.12 — Save Your Animation Presets (May 31, 2026) ──
-  {
-    releaseLabel: 'MAY 31, 2026 — SAVE YOUR ANIMATION PRESETS',
-    emoji: '⭐',
-    title: 'Save and reuse your animation settings',
-    description:
-      'You can now save your animation settings as named templates and load them with one click. Set up your favorite frame count, action, background, and resolution once, save it as a preset, and reuse it on any character. Find it in the Animate tab above the action picker.',
-  },
-  // ── 0.5.11 — Animate Settings Remembered (May 31, 2026) ──
-  {
-    releaseLabel: 'MAY 31, 2026 — ANIMATE SETTINGS REMEMBERED',
-    emoji: '💾',
-    title: 'Your animation settings now stick around',
-    description:
-      'The Animate form now remembers your settings. Frame count, animation action, background color, resolution, and the rest stay put if you refresh the page or switch tabs, so you no longer lose your setup partway through. Your last-used settings are waiting for you next time too.',
-  },
-  // ── 0.5.10 — Smoother Pixel Editor (May 30, 2026) ──
-  {
-    releaseLabel: 'MAY 30, 2026 — SMOOTHER PIXEL EDITOR',
-    emoji: '🖌️',
-    title: 'Faster, smoother brush on large canvases',
-    description:
-      'The pixel editor brush is now much smoother on larger canvases. Strokes keep up with fast movements without gaps, and the canvas no longer stutters while you draw at higher zoom levels. Editing at 128x128 and above feels the way it should.',
-  },
-  // ── 0.5.9 — Editor Round-Trip Complete (May 30, 2026) ──
-  {
-    releaseLabel: 'MAY 30, 2026 — EDITOR ROUND-TRIP COMPLETE',
-    emoji: '🔄',
-    title: 'Send your edited sprite straight to the Animator',
-    description:
-      'Added a "Send to Animator" button inside the Pixel Editor. Now you can take a fresh generation, clean it up in the editor (removing unwanted details or fixing pixels), then send it straight into the Animate flow without downloading and re-uploading. Closes the full round-trip: generate, edit, animate. Your edited sprite is preserved exactly as you made it — background removal is skipped by default since you just spent time editing.',
-  },
-  // ── 0.5.8 — Send to Animator + BG Control (May 28, 2026) ──
-  {
-    releaseLabel: 'MAY 28, 2026 — SEND TO ANIMATOR + BG CONTROL',
-    emoji: '🎬',
-    title: 'Send your generated sprites straight to the Animator',
-    description:
-      'Added a "Send to Animator" button on every Create-mode generation result. Click it to drop your sprite straight into the Animate flow with no download-and-reupload step. Now you can also choose whether to keep your sprite\'s background — your "Remove background" choice from the result carries through to AutoPrep, and there is a new "Skip background removal" toggle for when you want to keep the original background completely intact.',
-  },
-  // ── 0.5.7 — Send to Editor (May 27, 2026) ──
-  {
-    releaseLabel: 'MAY 27, 2026 — SEND TO EDITOR',
-    emoji: '🖌️',
-    title: 'Send your generated sprites straight to the Pixel Editor',
-    description:
-      "Added a new 'Send to Editor' button on every generation result. Click it to open your sprite in the Pixel Editor for pixel-level refinements — perfect for cleaning up small details the AI got slightly wrong. Honors the 'Remove background' toggle so you get the variant you saw on the result.",
-  },
-  // ── 0.5.6 — Gallery Goes Server-Side (May 22, 2026) ──
-  {
-    releaseLabel: 'MAY 22, 2026 — GALLERY GOES SERVER-SIDE',
-    emoji: '🌐',
-    title: 'Your gallery now syncs across devices',
-    description:
-      'Sign in on any browser or device and your generations are there. No more losing work when you clear your browser cache.',
-  },
-  // ── 0.5.5 — Editor Has a Home (May 21, 2026) ──
-  {
-    releaseLabel: 'MAY 21, 2026 — EDITOR HAS A HOME',
-    emoji: '🎨',
-    title: 'Pixel Editor now has its own tab',
-    description:
-      'Find it as "Edit" in the sidebar. Start a blank canvas at any size or upload an image to edit pixel by pixel. No more digging through Generate → Animate → upload to find the editor.',
-  },
-  {
-    emoji: '🧩',
-    title: 'Editor toolbar layout fixed',
-    description:
-      'The color palette no longer clips at the right edge. Cleaner editor surface across the board.',
-  },
-  // ── 0.5.4 — Slicer Quick Export (May 20, 2026) ──
-  {
-    releaseLabel: 'MAY 20, 2026 — SLICER QUICK EXPORT',
-    emoji: '📦',
-    title: 'Quick download all sliced frames',
-    description:
-      'After slicing your sprite sheet on the Upload & Slice page, you can now download every frame as a separate transparent PNG with a single click. Look for "Download all frames (PNG ZIP)" right next to "Continue to Preview."',
-  },
-  // ── 0.5.3 — Editor Foundation (May 19, 2026) ──
-  {
-    releaseLabel: 'MAY 19, 2026 — EDITOR FOUNDATION',
-    emoji: '💾',
-    title: 'Your edits are safe now',
-    description:
-      'Clicking outside the editor or pressing Esc with unsaved work now asks before discarding. Auto-save coming next.',
-  },
-  {
-    emoji: '🖌️',
-    title: 'Brush sizes',
-    description:
-      'Pencil and eraser now support sizes 1, 2, 4, 8, and 16 pixels. Use [ and ] keys to cycle.',
-  },
-  {
-    emoji: '⚡',
-    title: 'Editor under the hood',
-    description:
-      'Big architectural upgrade — the editor is now built on a foundation that will support animation preview, palette swap, and onion skinning in upcoming releases.',
-  },
-  // ── 0.5.2 — Style Preview Upgrade (May 12, 2026) ──
-  {
-    releaseLabel: 'MAY 12, 2026 — STYLE PREVIEW UPGRADE',
-    emoji: '🎨',
-    title: 'See examples for every style',
-    description:
-      'Tap the ⤢ icon on any style card to open a carousel showing what each style actually produces. 15 of 21 styles now have curated examples — animation previews coming in a future release.',
-  },
-  {
-    emoji: '🌅',
-    title: 'Background toggle on the generate bar',
-    description:
-      "The 'Remove background' control is now always visible on the sticky generate bar — no more hunting through the form. Default is on for character styles, off for tiles. Toggle off to keep environmental detail in your generation.",
-  },
-  {
-    emoji: '📐',
-    title: 'Larger downloads coming soon',
-    description:
-      "All generations output at 256×256 native pixel grid — the right size for sprite sheets and pixel-perfect game engines. Some example images may display at larger sizes; a 'Download at 2× / 4×' option for upscaled PNG output is coming in a future release.",
-  },
-  // ── 0.5.1 — UX Polish (May 10, 2026) ──
-  {
-    releaseLabel: 'MAY 10, 2026 — UX POLISH',
-    emoji: '🎯',
-    title: 'Always-visible Generate button',
-    description:
-      'The Generate button now stays pinned at the bottom of the screen while you scroll through styles or settings. No more scrolling back up after picking your style.',
-  },
-  {
-    emoji: '📁',
-    title: 'Collapsible style picker',
-    description:
-      'Each style category (Characters, Items, Tiles, UI, Animations) now collapses with a single click. Focus on the kind of sprite you want without wading through every option.',
-  },
-  {
-    emoji: '📱',
-    title: 'Mobile polish',
-    description:
-      'Better layouts, bigger tap targets, and a cleaner Generate bar that stacks gracefully on phones and tablets.',
-  },
-  // ── 0.5.0 — Reliability (May 2026) ──
-  {
-    releaseLabel: 'May 10, 2026 — Reliability',
-    emoji: '🛡️',
-    title: 'More reliable generations',
-    description:
-      "We've made big improvements behind the scenes so generations finish smoothly even when they take a while. If anything ever goes wrong, your tokens are refunded automatically.",
-  },
-  // ── 0.4.0 — Daily Brew & Pixel Polish (May 2026) ──
-  {
-    releaseLabel: 'May 2026 — Daily Brew & Pixel Polish',
-    emoji: '🔥',
-    title: 'Daily Login Rewards',
-    description:
-      'Earn +3 tokens every day you generate. Streak builds with each consecutive day.',
-  },
-  {
-    emoji: '⭐',
-    title: '7-Day Streak Bonus',
-    description:
-      'Hit a 7-day streak and earn +6 tokens instead of +3. Miss a day and the streak resets.',
-  },
-  {
-    emoji: '📬',
-    title: 'Newsletter Signup Bonus',
-    description:
-      'Subscribe to product updates from inside the app and earn +5 tokens. One-time, your account email only.',
-  },
-  {
-    emoji: '🖼️',
-    title: 'Reference Images on Pro Styles',
-    description:
-      'Attach up to 9 images to guide the style, palette, and design feel of your generation. Pro tier only.',
-  },
-  {
-    emoji: '↔️',
-    title: 'Sprite-Flip Toggle',
-    description:
-      'Demo Area now lets you flip your sprite’s natural facing — fixes moonwalk on left-facing sheets.',
-  },
-  {
-    emoji: '🔍',
-    title: 'Pixel-Perfect Demo Area',
-    description:
-      'Integer-scale rendering (1×/2×/4×/8×) with drop shadows. Crisp pixels at every zoom level.',
-  },
-  {
-    emoji: '🎬',
-    title: 'Showcase Mode',
-    description:
-      'Press F in the Demo Area for distraction-free fullscreen preview. Esc or F to exit.',
-  },
-  // ── 0.3.0 — Token Economy ──
-  {
-    releaseLabel: 'Earlier — Token Economy & Foundations',
-    emoji: '🪙',
-    title: 'Token Economy',
-    description:
-      'Replaced daily limits with tokens. Signup bonus, token packs from $4.99, and tokens that never expire.',
-  },
-  {
-    emoji: '💳',
-    title: 'Buy Token Packs',
-    description:
-      'Purchase tokens via Stripe. Four packs available — Starter, Creator, Studio, and Pro.',
-  },
-  {
-    emoji: '📜',
-    title: 'Refund Policy',
-    description:
-      'Refund policy now live. 14-day refund on unused token packs. See /refund-policy for full terms.',
-  },
-  {
-    emoji: '✨',
-    title: 'Animate My Character',
-    description:
-      'Upload your pixel art and generate walk, idle, and attack animations from it.',
-  },
-  {
-    emoji: '🔍',
-    title: 'Auto-Detect Sprites',
-    description:
-      'Find individual sprites in any layout — no grid required. Uses contour detection.',
-  },
-  {
-    emoji: '🪄',
-    title: 'Auto-Prep Character',
-    description:
-      'Drop any image — SpriteBrew finds, crops, removes background, and resizes your character automatically.',
-  },
-  {
-    emoji: '🔐',
-    title: 'Sign In to Generate',
-    description:
-      'Free account required for AI features. Upload, slice, preview, and export stay free.',
-  },
-  {
-    emoji: '🖼️',
-    title: 'Generation Gallery',
-    description: 'Browse past generations. Filter, download, or send to slicer.',
-  },
-  {
-    emoji: '📐',
-    title: 'Smart Image Resizer',
-    description:
-      'Choose target frame size — SpriteBrew calculates sheet dimensions automatically.',
-  },
-  {
-    emoji: '🖌️',
-    title: 'Pixel Editor',
-    description: 'Click any frame to edit. Pencil, eraser, eyedropper, undo/redo.',
-  },
-  {
-    emoji: '🎯',
-    title: 'Background Removal',
-    description: 'Remove solid backgrounds from generated animations automatically.',
-  },
-];
-
 export default function WhatsNew() {
-  const [open, setOpen] = useState(false);
+  const [releases, setReleases] = useState<Release[]>([]);
+  const open = releases.length > 0;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      // Only show if there's a stored version AND it's different from current.
-      // First-ever visitors (no stored value) get silently marked as up-to-date.
+      // First-ever visitors (no stored value) get silently marked as up to date.
       if (stored === null) {
         localStorage.setItem(STORAGE_KEY, CURRENT_VERSION);
         return;
       }
-      if (stored !== CURRENT_VERSION) {
-        setOpen(true);
-      }
+      if (stored === CURRENT_VERSION) return;
+      // A stored version past this one (after a rollback) is left as it is,
+      // so rolling forward again does not show the same notes twice.
+      const unseen = releasesSince(stored);
+      if (unseen.length > 0) setReleases(unseen);
     } catch {
-      // localStorage unavailable — don't show the modal
+      // localStorage unavailable: don't show the modal
     }
   }, []);
 
@@ -351,7 +44,7 @@ export default function WhatsNew() {
     } catch {
       // ignore
     }
-    setOpen(false);
+    setReleases([]);
   }, []);
 
   if (!open) return null;
@@ -386,33 +79,33 @@ export default function WhatsNew() {
           </button>
         </div>
 
-        {/* Changelog list — scrollable */}
+        {/* What changed since the last visit, scrollable */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
-          {CHANGELOG.map((entry, i) => (
-            <Fragment key={i}>
-              {entry.releaseLabel && (
-                <div className="flex items-center gap-2 pt-3 pb-1 first:pt-0">
-                  <div className="h-px flex-1" style={{ backgroundColor: '#3a3430' }} />
-                  <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider whitespace-nowrap">
-                    {entry.releaseLabel}
-                  </span>
-                  <div className="h-px flex-1" style={{ backgroundColor: '#3a3430' }} />
-                </div>
-              )}
-              <div className="flex items-start gap-3">
-                <div className="flex-shrink-0 text-xl leading-none pt-0.5">
-                  {entry.emoji}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-xs font-mono font-semibold text-text-primary">
-                    {entry.title}
-                  </h3>
-                  <p className="text-[11px] font-mono text-text-muted leading-relaxed mt-0.5">
-                    {entry.description}
-                  </p>
-                </div>
+          {releases.map((release, index) => (
+            <section key={release.version} className="space-y-3">
+              <div className={`flex items-center gap-2 pb-1 ${index === 0 ? 'pt-0' : 'pt-3'}`}>
+                <div className="h-px flex-1" style={{ backgroundColor: '#3a3430' }} />
+                <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider whitespace-nowrap">
+                  {releaseLabel(release)}
+                </span>
+                <div className="h-px flex-1" style={{ backgroundColor: '#3a3430' }} />
               </div>
-            </Fragment>
+              {release.entries.map((entry, i) => (
+                <div key={`${release.version}-${i}`} className="flex items-start gap-3">
+                  <div className="flex-shrink-0 text-xl leading-none pt-0.5">
+                    {entry.emoji}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-xs font-mono font-semibold text-text-primary">
+                      {entry.title}
+                    </h3>
+                    <p className="text-[11px] font-mono text-text-muted leading-relaxed mt-0.5">
+                      {entry.description}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </section>
           ))}
         </div>
 
@@ -428,6 +121,13 @@ export default function WhatsNew() {
           >
             Got it!
           </button>
+          <a
+            href="/updates"
+            onClick={handleDismiss}
+            className="block mt-3 text-center text-[11px] font-mono text-text-muted underline underline-offset-2 hover:text-accent-amber transition-colors"
+          >
+            See all updates
+          </a>
         </div>
       </div>
     </div>

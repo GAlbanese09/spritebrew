@@ -348,6 +348,9 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   useEffect(() => {
     setGenerationProgress(poll.startedAt, poll.serverStatus, poll.mode, poll.pausedMessage);
   }, [poll.startedAt, poll.serverStatus, poll.mode, poll.pausedMessage, setGenerationProgress]);
+  // Cleared when the form goes (a sign-out, a tab switch), so no message
+  // outlives the form whose poll set it; the other tab's form resumes the job.
+  useEffect(() => () => setGenerationProgress(null, null, null, null), [setGenerationProgress]);
 
   return (
     <>

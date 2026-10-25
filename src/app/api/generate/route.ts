@@ -168,7 +168,14 @@ export async function POST(request: Request) {
     return Response.json({ success: false, error: 'Invalid request body.' }, { status: 400 });
   }
 
-  const mode = body.mode ?? 'create';
+  // size-limits 006 (Second 076): an omitted or null mode is Create, as before.
+  // After that default only 'create' and 'animate' pass, so the validator, the
+  // price and the RD body all see the same mode.
+  const requestedMode: unknown = body.mode ?? 'create';
+  if (requestedMode !== 'create' && requestedMode !== 'animate') {
+    return Response.json({ success: false, error: 'Unknown mode.' }, { status: 400 });
+  }
+  const mode: 'create' | 'animate' = requestedMode;
 
   // Validate before streaming (fast errors as plain JSON)
   if (mode === 'create') {

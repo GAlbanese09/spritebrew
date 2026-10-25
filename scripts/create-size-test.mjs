@@ -212,5 +212,38 @@ const ok = await R.POST(req({ promptStyle: FAST, width: 64, height: 64 }));
 check('route, a valid Create still admits, debits the style price and sends (the harness reaches the money path)',
   ok.status === 202 && admissions() === 1 && calls.includes('queue.send') && JSON.parse(kvMap.get(balanceKey)).balance === 95);
 
+// ── 3. Unknown modes (size-limits 006, Second 076) ──
+// Second's three bypass bodies, each carrying valid Animate fields: with any mode
+// but 'create' or 'animate' the route must refuse before choosing a validator.
+const ANIM = { inputImage: 'aGVsbG8=', action: 'walking' };
+const BYPASS = [
+  ['an unregistered style', { promptStyle: 'rd_fast__default', width: 64, height: 64, ...ANIM }],
+  ['animation__vfx at 256x256', { promptStyle: 'animation__vfx', width: 256, height: 256, ...ANIM }],
+  ['no width or height', { promptStyle: FAST, ...ANIM }],
+];
+const BAD_MODES = [['bogus', 'bogus'], ["'Create'", 'Create'], ["''", ''], ['1', 1], ['true', true], ['{}', {}], ['[]', []]];
+for (const [label, body] of BYPASS) {
+  for (const [mlabel, mode] of BAD_MODES) {
+    reset(); kvMap.set(balanceKey, JSON.stringify({ balance: 100, created_at: 'x', last_updated: 'x' }));
+    const res = await R.POST(req({ ...body, mode }));
+    const j = await res.json().catch(() => null);
+    check(`route, mode ${mlabel} with ${label}: 400 "Unknown mode.", no admission, no debit, no KV write, no send`,
+      res.status === 400 && j?.error === 'Unknown mode.' && admissions() === 0 && !calls.includes('queue.send')
+      && !calls.some((c) => c.startsWith('kv.put')) && JSON.parse(kvMap.get(balanceKey)).balance === 100);
+  }
+}
+const VFX_MSG = 'Width must be between 24 and 96 for this style. Got 256.';
+for (const [mlabel, extra] of [['omitted', {}], ['null', { mode: null }], ["'create'", { mode: 'create' }]]) {
+  reset(); kvMap.set(balanceKey, JSON.stringify({ balance: 100, created_at: 'x', last_updated: 'x' }));
+  const res = await R.POST(req({ ...BYPASS[1][1], ...extra }));
+  const j = await res.json().catch(() => null);
+  check(`route, mode ${mlabel}: goes to Create validation (the VFX body gets the size refusal), no admission`,
+    res.status === 400 && j?.error === VFX_MSG && admissions() === 0 && !calls.includes('queue.send'));
+}
+reset(); kvMap.set(balanceKey, JSON.stringify({ balance: 100, created_at: 'x', last_updated: 'x' }));
+const an = await R.POST(req({ mode: 'animate', width: 64, height: 64, ...ANIM }));
+check("route, a valid mode 'animate' still admits, debits its price (walking 25) and sends",
+  an.status === 202 && admissions() === 1 && calls.includes('queue.send') && JSON.parse(kvMap.get(balanceKey)).balance === 75);
+
 say(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

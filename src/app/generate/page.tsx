@@ -10,7 +10,7 @@ import GenerationResult from '@/components/sprites/GenerationResult';
 import { addToHistory, type SlicerHints } from '@/lib/generationHistory';
 import { useSpriteStore } from '@/stores/spriteStore';
 import type { AnimateGeneratedContext } from '@/components/sprites/AnimateForm';
-import { savedJobMode } from '@/hooks/useGenerationPoll';
+import { onLateJob, savedJobMode } from '@/hooks/useGenerationPoll';
 import {
   PURCHASE_BANNER_COPY,
   clearBaseline,
@@ -228,8 +228,14 @@ export default function GeneratePage() {
     prevDataUrl.current = generatedImageDataUrl;
   }, [generatedImageDataUrl]);
 
+  // The tab as last committed, and whether the user has picked one since this
+  // page mounted (a tab click or Send to Animator), for the late-job taker.
+  const tabRef = useRef(tab);
+  const userPickedTabRef = useRef(false);
+
   const handleTabChange = useCallback(
     (newTab: GenerateTab) => {
+      userPickedTabRef.current = true;
       setTab(newTab);
       setAnimateMode(newTab);
     },
@@ -238,8 +244,24 @@ export default function GeneratePage() {
 
   // The store's mode follows the tab, including a tab opened on a saved job.
   useEffect(() => {
+    tabRef.current = tab;
     setAnimateMode(tab);
   }, [tab, setAnimateMode]);
+
+  // A job can be accepted after the user left /generate and came back (its
+  // Generate request was still in flight), so the saved job did not exist
+  // when the tab was chosen. Unless the user has picked a tab since, open the
+  // job's tab, and its form resumes the job on mount; the other form is not
+  // told, so it never finishes the job without its processing (Second 073).
+  useEffect(
+    () =>
+      onLateJob((mode) => {
+        if (userPickedTabRef.current || mode === tabRef.current) return false;
+        setTab(mode);
+        return true;
+      }),
+    []
+  );
 
   // Send-to-Animator handoff: when GenerationResult sets the flag and pushes
   // /generate, we're already on this route so GeneratePage does NOT remount.

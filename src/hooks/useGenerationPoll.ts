@@ -32,6 +32,20 @@ const PAGE_LOADED_AT = Date.now();
  *  the form on screen picks the job up. */
 const jobSavedListeners = new Set<() => void>();
 
+/** Asked first about such a late job. One that returns true takes it (the
+ *  page switches to the job's tab, whose form resumes it on mount), and the
+ *  mounted hooks are not told, so the other tab's form never finishes it. */
+const lateJobTakers = new Set<(mode: GenMode) => boolean>();
+
+/** Registers a taker for jobs saved after their form unmounted; returns the
+ *  unregister function. GeneratePage uses it to open the job's tab. */
+export function onLateJob(take: (mode: GenMode) => boolean): () => void {
+  lateJobTakers.add(take);
+  return () => {
+    lateJobTakers.delete(take);
+  };
+}
+
 export interface PollSuccessResult {
   resultBase64: string;
   completedAt: number;
@@ -226,6 +240,13 @@ export function useGenerationPoll(): UseGenerationPollResult {
           }
           clearActiveJob();
         } catch (err) {
+          // A loop that was stopped (unmount, reset or a newer loop) must not
+          // touch state or the saved job, whatever it throws: an abort while
+          // the body is read surfaces as pollClient's non-JSON error, and a
+          // token that resolves after the abort can surface as an auth error.
+          // Clearing the saved job here would take it from the form that
+          // resumed it (Second 073 P2-A). Only the live loop reports errors.
+          if (controller.signal.aborted) return;
           if (err instanceof DOMException && err.name === 'AbortError') return;
           setServerStatus(null);
           setServerStartedAt(null);
@@ -290,8 +311,12 @@ export function useGenerationPoll(): UseGenerationPollResult {
       });
       if (!mountedRef.current) {
         // The form that sent this job has unmounted (the user left /generate
-        // while the request was in flight): keep the job saved, and tell the
-        // form on screen, if any, to pick it up; a later mount resumes it.
+        // while the request was in flight): keep the job saved. The page may
+        // take it by opening the job's tab; otherwise the form on screen, if
+        // any, picks it up, and a later mount resumes it.
+        for (const take of lateJobTakers) {
+          if (take(mode)) return;
+        }
         jobSavedListeners.forEach((pickUp) => pickUp());
         return;
       }

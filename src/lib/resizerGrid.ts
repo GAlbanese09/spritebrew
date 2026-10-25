@@ -30,6 +30,13 @@ export interface DetectionResult {
   cols: number;
   rows: number;
   confidence: DetectionConfidence;
+  /** The other grid that could be right, offered on the Resize screen as a
+   *  one-click choice (upload-2 item 1): the shape steps' grid, or the pixel
+   *  answer (the table's grid, or that grid with twice the columns and rows
+   *  when its cells hold two frames each). Set only at a known layout's
+   *  size, where the size-only table and the shape steps can both be right,
+   *  and only on a 'medium' answer. */
+  alternative?: { cols: number; rows: number };
 }
 
 /** Preferred grid layouts in order of commonality for sprite sheets. */
@@ -56,6 +63,11 @@ const STANDARD_FRAME_SIZES: readonly number[] = SLICER_FRAME_PRESETS
   .filter((p) => p.width === p.height)
   .map((p) => p.width)
   .sort((a, b) => b - a);
+
+/** Every width and height in the canonical presets, descending. */
+const PRESET_DIMENSIONS: readonly number[] = [
+  ...new Set(SLICER_FRAME_PRESETS.flatMap((p) => [p.width, p.height])),
+].sort((a, b) => b - a);
 
 /** Validate a (cols, rows) candidate produces a sensible sprite sheet. */
 function isValidGrid(imgW: number, imgH: number, cols: number, rows: number): boolean {
@@ -246,6 +258,34 @@ function detectByPixels(imgData: ImageData): DetectionResult | null {
   return { cols: columns, rows: rows, confidence: 'high' };
 }
 
+/**
+ * The Resize screen's default target frame size for frames of frameW x
+ * frameH. A square frame gets what it always got: its own size when that is
+ * a standard square, else the largest standard square that fits, else 16x16.
+ * A frame that is not square keeps its shape when a standard pair of that
+ * shape is at least as long as that square (48x32 stays, 72x48 gets 48x32,
+ * 128x64 stays), so its frames are not squashed into squares (upload-2 audit
+ * P2-2: after "Try 4x4" at 192x128 the default was 32x32). When the largest
+ * pair of that shape is shorter (384x256 has only 48x32), the square stands
+ * as before rather than shrinking the frames further (re-audit P2-A).
+ */
+export function defaultTargetFrame(frameW: number, frameH: number): { w: number; h: number } {
+  const squares = STANDARD_FRAME_SIZES; // descending
+  if (frameW === frameH && squares.includes(frameW)) return { w: frameW, h: frameH };
+  const smaller = squares.find((s) => s <= frameW && s <= frameH);
+  const square = smaller ? { w: smaller, h: smaller } : { w: 16, h: 16 };
+  if (frameW !== frameH) {
+    for (const w of PRESET_DIMENSIONS) {
+      if (w > frameW || (w * frameH) % frameW !== 0) continue;
+      const h = (w * frameH) / frameW;
+      if (h <= frameH && PRESET_DIMENSIONS.includes(h)) {
+        return Math.max(w, h) >= square.w ? { w, h } : square;
+      }
+    }
+  }
+  return square;
+}
+
 /** Main detection entry point. Runs all priorities and returns the first match. */
 export function detectGridSmart(imgData: ImageData): DetectionResult {
   const { width: W, height: H } = imgData;
@@ -291,21 +331,47 @@ export function detectGridSmart(imgData: ImageData): DetectionResult {
   //    059); a 384x64 strip of six 64 px frames with an effect between two
   //    of them is not three frames of 128x64. A grid measured from the
   //    pixels is not unseated this way.
+  //    At a known layout's size the Resize screen offers the other grid as a
+  //    one-click alternative (upload-2 item 1). Beside the shape grid, when
+  //    it wins, it offers the pixel answer: the table's grid, or that grid
+  //    with twice the columns and rows, as above. Beside the table's grid,
+  //    when that grid cuts something while the shape grid fits, it offers
+  //    the shape grid, and the table's grid becomes a best guess too. The
+  //    same pixels can be one sprite with an axe head, a fist or a prop
+  //    past its cell's middle, or two frames, and the pixels cannot tell
+  //    them apart (#19 limit b, Second 060 to 063). A table grid that cuts
+  //    nothing stays 'high' with no alternative, so a clean 6x1 strip of
+  //    64 px frames is not offered 3x1.
   const shape = detectByShape(imgData);
   const fromPixels = detectByPixels(imgData);
   if (!fromPixels) return shape;
   if (shape.cols === fromPixels.cols && shape.rows === fromPixels.rows) return fromPixels;
+  const table = knownLayoutGrid(W, H) !== null;
+  const tableCuts = table && gridCuts(imgData, fromPixels) > 0;
+  let shapeFits: boolean | undefined;
+  const fits = () => (shapeFits ??= pixelsAllow(imgData, shape));
   const tableCut =
-    knownLayoutGrid(W, H) !== null &&
-    gridCuts(imgData, fromPixels) > 0 &&
+    tableCuts &&
     Number.isInteger(W / shape.cols) &&
     Number.isInteger(H / shape.rows) &&
     !cellHoldsTwoHalves(imgData, W / shape.cols, H / shape.rows);
-  if (
-    (shape.cols * shape.rows > fromPixels.cols * fromPixels.rows || tableCut) &&
-    pixelsAllow(imgData, shape)
-  ) {
-    return { cols: shape.cols, rows: shape.rows, confidence: 'medium' };
+  if ((shape.cols * shape.rows > fromPixels.cols * fromPixels.rows || tableCut) && fits()) {
+    return {
+      cols: shape.cols,
+      rows: shape.rows,
+      confidence: 'medium',
+      ...(table
+        ? { alternative: { cols: fromPixels.cols, rows: fromPixels.rows } }
+        : {}),
+    };
+  }
+  if (tableCuts && fits()) {
+    return {
+      cols: fromPixels.cols,
+      rows: fromPixels.rows,
+      confidence: 'medium',
+      alternative: { cols: shape.cols, rows: shape.rows },
+    };
   }
   return fromPixels;
 }

@@ -45,7 +45,7 @@ const {
 const { detectFrameGrid, detectFrameGridFromPixels, detectSlicerGrid } = await import(
   pathToFileURL(path.join(OUT, 'spriteUtils.mjs')).href
 );
-const { detectGridSmart } = await import(
+const { defaultTargetFrame, detectGridSmart } = await import(
   pathToFileURL(path.join(OUT, 'resizerGrid.mjs')).href
 );
 
@@ -1354,6 +1354,129 @@ const rz = (img) => {
   const t0 = performance.now();
   rz(bars(2048));
   console.log(`time  2048x2048 long bars, resizer ${(performance.now() - t0).toFixed(1)} ms (walked ${w.map((x) => x.n).join(', ')} px, leaking ${f.map((x) => x.n).join(', ')} px, at 512, 1024, 2048)`);
+}
+
+// ── 30: the other grid one click away at the table's sizes (upload-2 item 1) ──
+
+{
+  const alt = (g) => (g.alternative ? `${g.alternative.cols}x${g.alternative.rows}` : 'none');
+  const cellsSheet = (w, h, cols, rows) => {
+    const img = blank(w, h);
+    const cw = w / cols;
+    const ch = h / rows;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) rect(img, c * cw + 4, r * ch + 4, (c + 1) * cw - 4, (r + 1) * ch - 4);
+    }
+    return img;
+  };
+  // A body with an axe head past its cell's middle on a 2 px handle, every
+  // cell (#19 limit b): the table's 6x4 stands, and 4x4 is offered.
+  const axe = (fw, fh, head) => {
+    const img = blank(4 * fw, 4 * fh);
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) {
+        const x0 = c * fw;
+        const y0 = r * fh;
+        const bodyEnd = x0 + Math.round(fw * 0.42);
+        rect(img, x0 + Math.round(fw * 0.12), y0 + Math.round(fh * 0.18), bodyEnd, y0 + Math.round(fh * 0.82));
+        const hy = y0 + Math.round(fh * 0.3);
+        const hx = x0 + Math.min(fw - 3 - head, Math.round(fw * 0.75));
+        rect(img, bodyEnd - 1, hy, hx, hy + 2);
+        rect(img, hx, hy - (head >> 1), hx + head, hy - (head >> 1) + head);
+      }
+    }
+    return img;
+  };
+  for (const [fw, fh] of [[48, 32], [72, 48]]) {
+    const g = detectGridSmart(axe(fw, fh, 8));
+    check(`30. ${4 * fw}x${4 * fh}, 4x4 of ${fw}x${fh} with axe heads: 6x4 as a best guess, 4x4 one click away`,
+      `${g.cols}x${g.rows}` === '6x4' && g.confidence === 'medium' && alt(g) === '4x4');
+  }
+  const g72 = detectGridSmart(axe(72, 48, 6));
+  check('30. 288x192 with 6 px axe heads: 4x4 as a best guess, the table\'s 6x4 one click away',
+    `${g72.cols}x${g72.rows}` === '4x4' && g72.confidence === 'medium' && alt(g72) === '6x4');
+  const g48x32 = detectGridSmart(cellsSheet(192, 128, 4, 4));
+  check('30. 192x128 of 48x32 frames: 4x4, the table\'s 6x4 one click away', `${g48x32.cols}x${g48x32.rows}` === '4x4' && alt(g48x32) === '6x4');
+  for (const [w, h, c, r] of [[192, 128, 6, 4], [288, 192, 6, 4], [192, 288, 4, 6]]) {
+    const g = detectGridSmart(cellsSheet(w, h, c, r));
+    check(`30. control: ${w}x${h} of the table's frames, nothing cut: ${c}x${r} detected, no alternative`,
+      `${g.cols}x${g.rows}` === `${c}x${r}` && g.confidence === 'high' && alt(g) === 'none');
+  }
+  const strip = (extra) => {
+    const img = blank(384, 64);
+    for (let c = 0; c < 6; c++) rect(img, c * 64 + 6, 6, c * 64 + 58, 58);
+    extra(img);
+    return img;
+  };
+  const clean = detectGridSmart(strip(() => {}));
+  check('30. control: a clean 6x1 strip of 64 is detected, and 3x1 is not offered',
+    `${clean.cols}x${clean.rows}` === '6x1' && clean.confidence === 'high' && alt(clean) === 'none');
+  const fx = detectGridSmart(strip((img) => { for (const x of [58, 186, 314]) rect(img, x, 30, x + 14, 33); }));
+  check('30. a 6x1 strip with effects across three frame lines: 6x1 as a best guess, 3x1 one click away',
+    `${fx.cols}x${fx.rows}` === '6x1' && fx.confidence === 'medium' && alt(fx) === '3x1');
+  // Off the table, including sheets where the shape grid wins over the
+  // pixels (section 26's 4x4 of 48x64 and of 128x64): no alternative.
+  const tall = blank(192, 256);
+  const wide = blank(512, 256);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const x = c * 48 + 14 + [[0, 0, 0, 3], [-2, -2, -2, -3], [0, 0, 0, 3], [-2, -2, -2, -3]][r][c];
+      rect(tall, x, (r + 1) * 64 - 50, x + 19, (r + 1) * 64);
+      if (r < 3) rect(tall, x + 4, (r + 1) * 64, x + 12, (r + 1) * 64 + 1);
+      const xw = c * 128 + 19 + [[-3, -3, -3, 0], [-1, -1, -1, 2], [-1, -1, -1, -2], [-2, -2, -2, 1]][r][c];
+      rect(wide, xw, (r + 1) * 64 - 48, xw + 90, (r + 1) * 64);
+      if (r < 3) rect(wide, xw + 20, (r + 1) * 64, xw + 40, (r + 1) * 64 + 2);
+    }
+  }
+  const gTall = detectGridSmart(tall);
+  const gWide = detectGridSmart(wide);
+  check('30. off the table, the shape grid winning (4x4 of 48x64 and of 128x64): medium, no alternative',
+    gTall.confidence === 'medium' && gWide.confidence === 'medium' && alt(gTall) === 'none' && alt(gWide) === 'none');
+  const off = [sheet(512, 512, 256, { margin: 8 }), sheet(512, 512, 128), cellsSheet(512, 384, 4, 3), cellsSheet(320, 192, 5, 3)];
+  check('30. sizes outside the table never get an alternative', off.every((img) => alt(detectGridSmart(img)) === 'none'));
+  // The shape grid finer than the table's and clean: it wins, the table's grid offered.
+  const g192x96 = detectGridSmart(cellsSheet(192, 96, 4, 4));
+  check('30. 192x96 of 48x24 frames: 4x4, the table\'s 4x2 one click away',
+    `${g192x96.cols}x${g192x96.rows}` === '4x4' && g192x96.confidence === 'medium' && alt(g192x96) === '4x2');
+  // The table's grid cuts one effect, but the shape grid cuts sprites: the
+  // table's 6x4 is detected and nothing is offered.
+  const wide32 = blank(192, 128);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 6; c++) rect(wide32, c * 32 + 2, r * 32 + 4, c * 32 + 30, r * 32 + 28);
+  }
+  rect(wide32, 30, 14, 36, 16);
+  const gWide32 = detectGridSmart(wide32);
+  check('30. control: 6x4 of 32 with 28 px sprites and one effect across a line: 6x4 detected, no alternative',
+    `${gWide32.cols}x${gWide32.rows}` === '6x4' && gWide32.confidence === 'high' && alt(gWide32) === 'none');
+
+  // The Resize screen's default target frame size.
+  const tf = (w, h) => { const t = defaultTargetFrame(w, h); return `${t.w}x${t.h}`; };
+  check('30. target: a frame that is not square keeps its shape (48x32 stays, 72x48 to 48x32, 24x32 and 128x64 stay)',
+    tf(48, 32) === '48x32' && tf(72, 48) === '48x32' && tf(24, 32) === '24x32' && tf(128, 64) === '128x64');
+  check('30. target: with no standard pair of that shape, the largest square that fits (130x128 to 128x128)', tf(130, 128) === '128x128');
+  check('30. target: big frames whose only pairs are small keep the old square (384x256, 256x768, 512x384 to 256x256)',
+    tf(384, 256) === '256x256' && tf(256, 768) === '256x256' && tf(512, 384) === '256x256');
+  check('30. target: a pair needs both sides standard (64x40 to 32x32, not 64x40)', tf(64, 40) === '32x32');
+  // The old rule for square frames: a square preset stays, else the largest
+  // square preset that fits, else 16.
+  const squares = [256, 128, 64, 48, 32, 16];
+  const old = (n) => (squares.includes(n) ? `${n}x${n}` : (() => { const s = squares.find((q) => q <= n); return s ? `${s}x${s}` : '16x16'; })());
+  let sameForSquares = true;
+  for (let n = 1; n <= 300; n++) if (tf(n, n) !== old(n)) sameForSquares = false;
+  check('30. target: square frames from 1 to 300 px get what they got before', sameForSquares);
+  // Every other frame up to 300 px a side gets the old square, or a smaller
+  // target of the frame's own shape whose longer side is at least as long.
+  let boundedForOthers = true;
+  for (let w = 1; w <= 300; w++) {
+    for (let h = 1; h <= 300; h++) {
+      if (w === h) continue;
+      const t = defaultTargetFrame(w, h);
+      const o = old(Math.min(w, h)).split('x').map(Number)[0];
+      const sameShape = t.w * h === t.h * w && t.w <= w && t.h <= h;
+      if (!((t.w === o && t.h === o) || (sameShape && Math.max(t.w, t.h) >= o))) boundedForOthers = false;
+    }
+  }
+  check('30. target: frames that are not square get the old square or their own shape, never shorter than the old square', boundedForOthers);
 }
 
 // ── 31: the slicer's Auto-detect after the Resize screen (upload-2 item 2) ──

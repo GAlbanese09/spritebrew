@@ -196,18 +196,19 @@ export const GENERATION_STYLES: GenerationStyle[] = [
     fixedSize: false, costPerGeneration: 0.07, tokenCost: 25, isAnimation: true, supportsRemoveBg: true,
     resolutionMode: { kind: 'variable_special', min: 24, max: 96, default: 64, presets: [24, 48, 64, 96] },
   },
+  // RD bills these $0.25 a job (unit-economics 006; HQ 2026-10-25-016): 50 tokens, as Custom Action and Subtle Motion.
   {
     id: 'anim-any', label: 'Custom Animation', description: 'Open-ended animation — AI decides the layout',
     promptStyle: 'animation__any_animation', tier: 'animation', category: 'animations',
     defaultWidth: 64, defaultHeight: 64, minSize: 64, maxSize: 64,
-    fixedSize: true, costPerGeneration: 0.07, tokenCost: 25, isAnimation: true, supportsRemoveBg: true,
+    fixedSize: true, costPerGeneration: 0.25, tokenCost: 50, isAnimation: true, supportsRemoveBg: true,
     resolutionMode: { kind: 'locked', size: 64 },
   },
   {
     id: 'anim-8dir', label: '8-Direction Rotation', description: 'Character from 8 rotational angles',
     promptStyle: 'animation__8_dir_rotation', tier: 'animation', category: 'animations',
     defaultWidth: 80, defaultHeight: 80, minSize: 80, maxSize: 80,
-    fixedSize: true, costPerGeneration: 0.07, tokenCost: 25, isAnimation: true, supportsRemoveBg: true,
+    fixedSize: true, costPerGeneration: 0.25, tokenCost: 50, isAnimation: true, supportsRemoveBg: true,
     resolutionMode: { kind: 'locked', size: 80 },
   },
 ];

@@ -217,7 +217,7 @@ const puts = () => calls.filter((c) => c.startsWith('kv.put'));
 const moneyPuts = () => calls.filter((c) => /^kv\.put (token_balance|token_tx|token_idempotency|bonus_|daily_|streak)/.test(c));
 const genReq = (t, over = {}) => new Request('https://dev.spritebrew.pages.dev/api/generate', {
   method: 'POST', headers: { Authorization: `Bearer ${t}`, 'content-type': 'application/json' },
-  body: JSON.stringify({ prompt: 'a knight', style: 'rd_fast__default', width: 64, height: 64, idempotencyKey: `idem-${Math.random().toString(36).slice(2)}`, ...over }),
+  body: JSON.stringify({ prompt: 'a knight', style: 'rd_fast__no_style', width: 64, height: 64, idempotencyKey: `idem-${Math.random().toString(36).slice(2)}`, ...over }),
 });
 const authReq = (url, t, method = 'GET') => new Request(`https://dev.spritebrew.pages.dev${url}`, {
   method, headers: { Authorization: `Bearer ${t}`, 'content-type': 'application/json' },

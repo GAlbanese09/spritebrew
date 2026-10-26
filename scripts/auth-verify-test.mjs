@@ -143,7 +143,7 @@ let pass = 0, fail = 0;
 const check = (name, ok) => { if (ok) pass++; else { fail++; say('FAIL', name); } };
 const req = (token, method = 'GET') => new Request('https://example.test/api/x', {
   method, headers: token === undefined ? {} : { Authorization: `Bearer ${token}` },
-  body: method === 'GET' ? undefined : JSON.stringify({ packId: 'starter', prompt: 'x', style: 'rd_fast__default', idempotencyKey: 'abcdefgh1234', consent: true }),
+  body: method === 'GET' ? undefined : JSON.stringify({ packId: 'starter', prompt: 'x', style: 'rd_fast__no_style', width: 64, height: 64, idempotencyKey: 'abcdefgh1234', consent: true }),
 });
 
 const prod = await makeKey();

@@ -190,6 +190,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         promptStyle: selectedStyle.promptStyle,
         width: effectiveWidth,
         height: effectiveHeight,
+        expectedTokenCost: selectedStyle.tokenCost,
       };
 
       if (removeBg && selectedStyle.supportsRemoveBg) {

@@ -69,7 +69,7 @@ async function tokenFor(sub) {
 
 // ── D1 over node:sqlite, KV and queue stubs ──
 
-let calls = [], sent = [];
+let calls = [], sent = [], queueThrows = false;
 function d1(db) {
   return {
     prepare(sql) {
@@ -90,14 +90,14 @@ function reset() {
   for (const f of MIGRATIONS) ledger.exec(readFileSync(f, 'utf8'));
   events = new DatabaseSync(':memory:');
   events.exec(readFileSync(EVENTS_MIGRATION, 'utf8'));
-  kvMap = new Map(); calls = []; sent = [];
+  kvMap = new Map(); calls = []; sent = []; queueThrows = false;
   process.env = { ...process.env };
   Object.assign(process.env, {
     APP_ENV: 'dev', CLERK_JWT_KEY: PEM, CLERK_JWT_KID: 'test_kid',
     STRIPE_SECRET_KEY: 'sk_test_placeholder_not_a_secret', QUEUE_KICKOFF_ENABLED: 'true',
     CLERK_SECRET_KEY: 'placeholder',
     GALLERY_BUCKET: { get: async () => null, head: async () => null, put: async () => ({}) },
-    RD_QUEUE: { send: async (m) => { calls.push('queue.send'); sent.push(m); } },
+    RD_QUEUE: { send: async (m) => { calls.push('queue.send'); if (queueThrows) throw new Error('stub: send failed'); sent.push(m); } },
     EVENTS_DB: d1(events),
     LEDGER_DB: d1(ledger),
     SPRITEBREW_KV: {
@@ -180,20 +180,20 @@ const admissions = () => ledger.prepare('SELECT COUNT(*) AS n, MAX(meta_json) AS
 const sentCost = () => { const m = JSON.stringify(sent[0] ?? {}); const x = /"tokenCost":(\d+)/.exec(m); return x ? Number(x[1]) : null; };
 
 reset(); seed(100);
-let res = await R.POST(req({ promptStyle: 'animation__any_animation', width: 64, height: 64 }));
+let res = await R.POST(req({ promptStyle: 'animation__any_animation', width: 64, height: 64, expectedTokenCost: 50 }));
 let a = admissions();
 check('Create animation__any_animation 64x64 with 100 tokens: 202, debits 50, enqueues tokenCost 50, admission meta tokenCost 50',
   res.status === 202 && balance() === 50 && calls.includes('queue.send') && sentCost() === 50 && a.n === 1 && JSON.parse(a.meta).tokenCost === 50);
 
 reset(); seed(49);
-res = await R.POST(req({ promptStyle: 'animation__any_animation', width: 64, height: 64 }));
+res = await R.POST(req({ promptStyle: 'animation__any_animation', width: 64, height: 64, expectedTokenCost: 50 }));
 let j = await res.json().catch(() => null);
 check('Create animation__any_animation with 49 tokens: 402 "Insufficient tokens", required 50, no debit, no send',
   res.status === 402 && j?.error === 'Insufficient tokens' && j?.required === 50 && balance() === 49
   && !calls.includes('queue.send') && ![...kvMap.keys()].some((k) => k.startsWith('token_tx:') || k.startsWith('token_idempotency:')));
 
 reset(); seed(100);
-res = await R.POST(req({ promptStyle: 'animation__8_dir_rotation', width: 80, height: 80 }));
+res = await R.POST(req({ promptStyle: 'animation__8_dir_rotation', width: 80, height: 80, expectedTokenCost: 50 }));
 check('Create animation__8_dir_rotation 80x80: 202, debits 50, enqueues tokenCost 50',
   res.status === 202 && balance() === 50 && sentCost() === 50);
 
@@ -205,6 +205,63 @@ reset(); seed(100);
 res = await R.POST(req({ mode: 'animate', action: 'walking', inputImage: 'aGVsbG8=', width: 64, height: 64 }));
 check('Animate walking (rd_advanced_animation__walking): still debits 25 and enqueues tokenCost 25',
   res.status === 202 && balance() === 75 && sentCost() === 25);
+
+// ── 3. The price quote (price-50 006, Second 077) ──
+
+const PRICE_MSG = 'Prices have changed since this page loaded. Refresh the page to see the current price.';
+const untouched = (n) => admissions().n === 0 && !calls.includes('queue.send') && !calls.some((c) => c.startsWith('kv.put')) && balance() === n;
+const is409 = async (res) => { const b = await res.json().catch(() => null); return res.status === 409 && b?.success === false && b?.error === 'price_changed' && b?.message === PRICE_MSG; };
+const CHANGED_BODIES = [
+  ['animation__any_animation', { promptStyle: 'animation__any_animation', width: 64, height: 64 }],
+  ['animation__8_dir_rotation', { promptStyle: 'animation__8_dir_rotation', width: 80, height: 80 }],
+];
+for (const [name, body] of CHANGED_BODIES) {
+  reset(); seed(100);
+  check(`${name}, a page from before this release (no price), balance 100: 409 price_changed with the message, no admission, debit, KV write or send`,
+    await is409(await R.POST(req(body))) && untouched(100));
+  reset(); seed(100);
+  res = await R.POST(req({ ...body, expectedTokenCost: 50 }));
+  check(`${name}, a current page (price 50), balance 100: 202, debits 50`, res.status === 202 && balance() === 50 && sentCost() === 50);
+  reset(); seed(100);
+  check(`${name}, a stale price (25) on a current server: 409, no side effects`,
+    await is409(await R.POST(req({ ...body, expectedTokenCost: 25 }))) && untouched(100));
+}
+reset(); seed(49);
+res = await R.POST(req({ ...CHANGED_BODIES[0][1], expectedTokenCost: 50 }));
+j = await res.json().catch(() => null);
+const adm = ledger.prepare('SELECT COUNT(*) AS n, MAX(completed_at_ms) AS done FROM money_admissions').get();
+check('price 50, balance 49: 402 required 50, no debit, no send, the admission taken and completed as today',
+  res.status === 402 && j?.required === 50 && balance() === 49 && !calls.includes('queue.send') && adm.n === 1 && adm.done !== null
+  && ![...kvMap.keys()].some((k) => k.startsWith('token_tx:')));
+reset(); seed(100); queueThrows = true;
+res = await R.POST(req({ ...CHANGED_BODIES[0][1], expectedTokenCost: 50 }));
+j = await res.json().catch(() => null);
+const refundRows = [...kvMap.entries()].filter(([k, v]) => k.startsWith('token_tx:') && /"reason":"generation_failed_refund"/.test(v) && /"amount":50\b/.test(v));
+check('price 50, a forced enqueue failure: the compensating refund returns all 50 (503 submission_failed, balance 100)',
+  res.status === 503 && j?.error === 'submission_failed' && balance() === 100 && refundRows.length === 1);
+const FAST_BODY = { promptStyle: 'rd_fast__no_style', width: 64, height: 64 };
+reset(); seed(100);
+res = await R.POST(req(FAST_BODY));
+check('an unchanged style from an old page: Fast with no price is accepted, debits 5', res.status === 202 && balance() === 95);
+reset(); seed(100);
+res = await R.POST(req({ ...FAST_BODY, expectedTokenCost: 5 }));
+check('Fast with price 5 is accepted, debits 5', res.status === 202 && balance() === 95);
+reset(); seed(100);
+check('Fast with price 16 is a 409, no side effects', await is409(await R.POST(req({ ...FAST_BODY, expectedTokenCost: 16 }))) && untouched(100));
+const WALK = { mode: 'animate', action: 'walking', inputImage: 'aGVsbG8=', width: 64, height: 64 };
+reset(); seed(100);
+res = await R.POST(req(WALK));
+check('Animate walking with no price is accepted, debits 25', res.status === 202 && balance() === 75);
+reset(); seed(100);
+res = await R.POST(req({ ...WALK, expectedTokenCost: 25 }));
+check('Animate walking with price 25 is accepted, debits 25', res.status === 202 && balance() === 75);
+reset(); seed(100);
+check('Animate walking with price 50 is a 409, no side effects', await is409(await R.POST(req({ ...WALK, expectedTokenCost: 50 }))) && untouched(100));
+reset(); seed(100);
+check("the price as the string '50' is a 409 (only a matching number passes)",
+  await is409(await R.POST(req({ ...CHANGED_BODIES[0][1], expectedTokenCost: '50' }))) && untouched(100));
+reset(); seed(100);
+check('the price null is a 409', await is409(await R.POST(req({ ...CHANGED_BODIES[0][1], expectedTokenCost: null }))) && untouched(100));
 
 say(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

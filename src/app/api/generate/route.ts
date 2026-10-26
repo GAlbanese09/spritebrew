@@ -82,6 +82,8 @@ export interface GenerateBody {
    * push the message past the queue budget.
    */
   fallbackInputImage?: string;
+  /** The price the page showed (price-50 006). Checked against the charge, never charged. */
+  expectedTokenCost?: unknown;
 }
 
 // ── SSE helpers ──
@@ -116,6 +118,7 @@ import {
 import type { TxContext } from '@/lib/tokenTxMeta';
 import { getTokenCost, getResolutionMode, getFreeTierBucket } from '@/lib/styleRegistry';
 import { validateCreateBody } from '@/lib/createValidation';
+import { refusesPriceQuote, PRICE_CHANGED_MESSAGE } from '@/lib/priceQuote';
 import { getAccountStatus } from '@/lib/accountLock';
 import { isAdminUserServer } from '@/lib/adminIds';
 import { isQueueKickoffEnabled } from '@/lib/featureFlag';
@@ -194,6 +197,14 @@ export async function POST(request: Request) {
     promptStyle = body.promptStyle ?? body.style ?? '';
   }
   const tokenCost = getTokenCost(promptStyle);
+  // price-50 006 (Second 077): refuse a price the page did not show, before
+  // anything reads or writes money.
+  if (refusesPriceQuote(body, promptStyle, tokenCost)) {
+    return Response.json(
+      { success: false, error: 'price_changed', message: PRICE_CHANGED_MESSAGE },
+      { status: 409 }
+    );
+  }
   const bucket: FreeTierBucket = getFreeTierBucket(promptStyle);
   const isAdmin = isAdminUserServer(userId);
 

@@ -6,9 +6,11 @@
 export const PRICE_CHANGED_MESSAGE =
   'Prices have changed since this page loaded. Refresh the page to see the current price.';
 
-// A page loaded before this release sends no price, so a request for a style whose
-// price changed in this release and that carries no price is refused. The set can
-// go at the next release that touches this file.
+// A page loaded before a price change sends no price, so a request with no price
+// for a style whose price has changed is refused. Never remove a style from this
+// set: an old tab can stay open across any number of releases. The set may be
+// retired only by a rule that refuses every request with no price. Each later
+// price change adds its styles here, and the page that sells them must send its price.
 export const QUOTE_REQUIRED_STYLES: ReadonlySet<string> = new Set([
   'animation__any_animation',
   'animation__8_dir_rotation',

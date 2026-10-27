@@ -328,19 +328,19 @@ export default function LandingPage() {
             <ul className="space-y-2 text-xs text-[#9a918a]">
               <li className="flex items-start gap-2">
                 <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
-                Starter — 500 tokens for $4.99
+                Starter: 500 tokens for $4.99
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
-                Creator — 1,650 for $14.99 <span className="text-green-400">(+10%)</span>
+                Creator: 1,650 for $14.99 <span className="text-green-400">(+10%)</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
-                Studio — 3,600 for $29.99 <span className="text-green-400">(+20%)</span>
+                Studio: 3,600 for $29.99 <span className="text-green-400">(+20%)</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />
-                Pro — 9,750 for $79.99 <span className="text-green-400">(+30%)</span>
+                Pro: 9,750 for $79.99 <span className="text-green-400">(+22%)</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-1 h-1 rounded-full bg-[#d4871c] mt-1.5 flex-shrink-0" />

@@ -97,9 +97,15 @@ fs.writeFileSync(path.join(DIR, 'entry.mjs'), ENTRY);
 
 // localStorage and window, before the hook module loads.
 const store = new Map();
+// The saved job's value may be refused above jobLimit characters, a stand-in
+// for nearly full storage (Second 094).
+let jobLimit = Infinity;
 const fakeStorage = {
   getItem: (k) => (store.has(k) ? store.get(k) : null),
-  setItem: (k, v) => { store.set(k, String(v)); },
+  setItem: (k, v) => {
+    if (k === 'spritebrew:activeJob' && String(v).length > jobLimit) throw new Error('QuotaExceededError');
+    store.set(k, String(v));
+  },
   removeItem: (k) => { store.delete(k); },
 };
 Object.defineProperty(globalThis, 'localStorage', { value: fakeStorage, configurable: true, writable: true });
@@ -167,7 +173,7 @@ function check(name, ok, detail) {
   if (!ok) failed++;
 }
 function fresh() {
-  store.clear(); tokenQueue.length = 0; fetchQueue.length = 0; fetchCalls = [];
+  store.clear(); tokenQueue.length = 0; fetchQueue.length = 0; fetchCalls = []; jobLimit = Infinity;
 }
 
 // 1. Leave while the body of a status response is being read, then come back
@@ -393,6 +399,112 @@ if (typeof useGenerateTab === 'function') {
     { tab: page.value.tab, create: createForm.value.status, saved: saved() });
   createForm.unmount();
   page.unmount();
+}
+
+// 5. The click-time context travels with the saved job (history gap, HQ
+// 2026-10-27-017): the poll that sent the job exposes it, a resumed poll
+// reads it back, and a job saved without one, or with a malformed one,
+// still resumes, without it.
+{
+  const CTX = { prompt: 'knight with sword', styleId: 'plus-classic' };
+  fresh();
+  const a = mount(useGenerationPoll);
+  a.value.startPolling('job-14', 'key-14', 'create', CTX);
+  await settle();
+  const stored = JSON.parse(store.get(KEY)).context;
+  check('context: saved with the job, and exposed by the poll that sent it',
+    JSON.stringify(stored) === JSON.stringify(CTX) && JSON.stringify(a.value.context) === JSON.stringify(CTX),
+    { stored, exposed: a.value.context });
+  a.unmount();
+  fetchQueue.push(answer(SUCCESS));
+  const b = mount(useGenerationPoll);
+  await settle();
+  check('context: after a leave and a return, the resumed poll has it at success',
+    b.value.status === 'success' && b.value.isResume === true && JSON.stringify(b.value.context) === JSON.stringify(CTX),
+    { status: b.value.status, isResume: b.value.isResume, context: b.value.context });
+  b.value.reset();
+  await settle();
+  check('context: reset clears it', b.value.context === null, { context: b.value.context });
+  b.unmount();
+}
+{
+  const ANIM = { action: 'attack', motionPrompt: '', bgColor: '#FF00FF', frameCount: 6, frameSize: 128 };
+  fresh();
+  const send = sendFromAFormThatLeft();
+  const form = mount(useGenerationPoll);
+  send('job-15', 'key-15', 'animate', ANIM);
+  await settle();
+  check('context: a job landing after its form left keeps it for the form on screen',
+    form.value.status === 'polling' && JSON.stringify(form.value.context) === JSON.stringify(ANIM),
+    { status: form.value.status, context: form.value.context });
+  form.unmount();
+
+  fresh();
+  store.set(KEY, JSON.stringify({ jobId: 'job-16', idempotencyKey: 'key-16', mode: 'create', startedAt: Date.now() }));
+  const old = mount(useGenerationPoll);
+  await settle();
+  check('context: a job saved without one (by the version before) resumes, with none',
+    old.value.status === 'polling' && old.value.context === null, { status: old.value.status, context: old.value.context });
+  old.unmount();
+
+  fresh();
+  const { frameSize: _dropped, ...noSize } = ANIM;
+  void _dropped;
+  store.set(KEY, JSON.stringify({ jobId: 'job-17', idempotencyKey: 'key-17', mode: 'animate', startedAt: Date.now(), context: noSize }));
+  const bad = mount(useGenerationPoll);
+  await settle();
+  check('context: a malformed one is dropped, and the job still resumes',
+    bad.value.status === 'polling' && bad.value.context === null, { status: bad.value.status, context: bad.value.context });
+  bad.unmount();
+}
+
+// 6. Nearly full storage (Second 094): when the record with its context does
+// not fit but the lean record does, the lean one is saved, so a later mount
+// still resumes the job (without a Recent entry). The sending hook keeps the
+// full context for its own finish.
+{
+  const LONG = { prompt: 'k'.repeat(300), styleId: 'plus-classic' };
+  const now = Date.now();
+  const leanFits = (id) => JSON.stringify({ jobId: id, idempotencyKey: id.replace('job', 'key'), mode: 'create', startedAt: now }).length + 20;
+
+  fresh();
+  jobLimit = leanFits('job-18');
+  const a = mount(useGenerationPoll);
+  a.value.startPolling('job-18', 'key-18', 'create', LONG);
+  await settle();
+  const stored = store.get(KEY) ? JSON.parse(store.get(KEY)) : null;
+  check('nearly full: the lean record is saved, and the sending hook keeps the full context',
+    stored !== null && stored.jobId === 'job-18' && stored.context === undefined && JSON.stringify(a.value.context) === JSON.stringify(LONG),
+    { stored: stored && Object.keys(stored), context: a.value.context && a.value.context.styleId });
+  a.unmount();
+  fetchQueue.push(answer(SUCCESS));
+  const b = mount(useGenerationPoll);
+  await settle();
+  check('nearly full: after a leave and a return the job resumes and finishes, without a context',
+    b.value.status === 'success' && b.value.isResume === true && b.value.context === null && saved() === null,
+    { status: b.value.status, context: b.value.context, saved: saved() });
+  b.unmount();
+
+  fresh();
+  jobLimit = leanFits('job-19');
+  const send = sendFromAFormThatLeft();
+  const form = mount(useGenerationPoll);
+  send('job-19', 'key-19', 'create', LONG);
+  await settle();
+  check('nearly full: a job landing after its form left is still picked up by the form on screen',
+    form.value.status === 'polling' && saved() === 'job-19' && fetchCalls.length === 1,
+    { status: form.value.status, saved: saved(), fetchCalls: fetchCalls.length });
+  form.unmount();
+
+  fresh();
+  jobLimit = JSON.stringify({ jobId: 'job-20', idempotencyKey: 'key-20', mode: 'create', startedAt: now, context: LONG }).length + 20;
+  const c = mount(useGenerationPoll);
+  c.value.startPolling('job-20', 'key-20', 'create', LONG);
+  await settle();
+  const kept = store.get(KEY) ? JSON.parse(store.get(KEY)) : null;
+  check('control: with room, the saved record keeps its context', kept !== null && kept.context !== undefined && kept.context.prompt === LONG.prompt,
+    { kept: kept && Object.keys(kept) });
+  c.unmount();
 }
 
 if (failed > 0) {

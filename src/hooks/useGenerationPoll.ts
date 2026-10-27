@@ -32,17 +32,18 @@ const PAGE_LOADED_AT = Date.now();
  *  the form on screen picks the job up. */
 const jobSavedListeners = new Set<() => void>();
 
-/** Asked first about such a late job. One that returns true takes it (the
- *  page switches to the job's tab, whose form resumes it on mount), and the
- *  mounted hooks are not told, so the other tab's form never finishes it. */
-const lateJobTakers = new Set<(mode: GenMode) => boolean>();
+/** Asked before any hook resumes a saved job, with the job's mode. One that
+ *  returns true takes the job: the page opens the job's tab, whose form
+ *  resumes it on mount, and the hook that asked leaves it alone, so the
+ *  other tab's form never finishes it. */
+const resumeChecks = new Set<(mode: GenMode) => boolean>();
 
-/** Registers a taker for jobs saved after their form unmounted; returns the
- *  unregister function. GeneratePage uses it to open the job's tab. */
-export function onLateJob(take: (mode: GenMode) => boolean): () => void {
-  lateJobTakers.add(take);
+/** Registers a check asked before any hook resumes a saved job; returns the
+ *  unregister function. The generate page's tab (useGenerateTab) uses it. */
+export function onBeforeResume(check: (mode: GenMode) => boolean): () => void {
+  resumeChecks.add(check);
   return () => {
-    lateJobTakers.delete(take);
+    resumeChecks.delete(check);
   };
 }
 
@@ -311,12 +312,8 @@ export function useGenerationPoll(): UseGenerationPollResult {
       });
       if (!mountedRef.current) {
         // The form that sent this job has unmounted (the user left /generate
-        // while the request was in flight): keep the job saved. The page may
-        // take it by opening the job's tab; otherwise the form on screen, if
-        // any, picks it up, and a later mount resumes it.
-        for (const take of lateJobTakers) {
-          if (take(mode)) return;
-        }
+        // while the request was in flight): keep the job saved, and tell the
+        // form on screen, if any, to pick it up; a later mount resumes it.
         jobSavedListeners.forEach((pickUp) => pickUp());
         return;
       }
@@ -351,6 +348,11 @@ export function useGenerationPoll(): UseGenerationPollResult {
       const decision = resumeDecision(persisted, Date.now(), PAGE_LOADED_AT);
       if (decision === 'drop') clearActiveJob();
       if (decision !== 'resume' || !persisted) return;
+      // The page decides which form finishes a job, whenever the job was
+      // saved: if a check takes it, the form on the job's tab resumes it.
+      for (const check of resumeChecks) {
+        if (check(persisted.mode)) return;
+      }
       runPoll(persisted.jobId, persisted.idempotencyKey, persisted.mode, true, persisted.startedAt);
       // runPoll captures getTokenStable; if Clerk hasn't hydrated yet, the
       // first getToken() call inside pollJobStatus may return null and throw

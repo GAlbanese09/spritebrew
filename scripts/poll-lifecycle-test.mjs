@@ -35,7 +35,7 @@ export function useState(init) {
       slot.v = typeof next === 'function' ? next(slot.v) : next;
       if (!c.scheduled) {
         c.scheduled = true;
-        queueMicrotask(() => { c.scheduled = false; if (!c.unmounted) c.render(); });
+        queueMicrotask(() => { c.scheduled = false; if (!c.unmounted) c.update(); });
       }
     };
   }
@@ -53,35 +53,42 @@ export function useCallback(fn, deps) {
   c.slots[i] = { fn, deps };
   return fn;
 }
-export function useEffect(fn, deps) {
-  const c = current; const i = c.i++;
-  const prev = c.slots[i];
-  if (prev && same(prev.deps, deps)) return;
-  const slot = { deps, cleanup: prev && prev.cleanup, effect: true };
-  c.slots[i] = slot;
-  c.effects.push(() => {
-    if (slot.cleanup) slot.cleanup();
-    const cleanup = fn();
-    slot.cleanup = typeof cleanup === 'function' ? cleanup : undefined;
-  });
-}
-export function mount(hook) {
-  const c = { slots: {}, effects: [], unmounted: false, scheduled: false, lateSets: 0, value: undefined, i: 0 };
-  c.render = () => {
-    current = c; c.i = 0; c.value = hook(); current = null;
-    c.effects.splice(0).forEach((run) => run());
+function effectHook(queue) {
+  return function (fn, deps) {
+    const c = current; const i = c.i++;
+    const prev = c.slots[i];
+    if (prev && same(prev.deps, deps)) return;
+    const slot = { deps, cleanup: prev && prev.cleanup, effect: true };
+    c.slots[i] = slot;
+    c[queue].push(() => {
+      if (slot.cleanup) slot.cleanup();
+      const cleanup = fn();
+      slot.cleanup = typeof cleanup === 'function' ? cleanup : undefined;
+    });
   };
+}
+export const useLayoutEffect = effectHook('layout');
+export const useEffect = effectHook('passive');
+export function mount(hook, opts = {}) {
+  const c = { slots: {}, layout: [], passive: [], unmounted: false, scheduled: false, lateSets: 0, value: undefined, i: 0 };
+  c.render = () => { current = c; c.i = 0; c.value = hook(); current = null; };
+  c.commitLayout = () => c.layout.splice(0).forEach((run) => run());
+  c.commitPassive = () => c.passive.splice(0).forEach((run) => run());
+  c.update = () => { c.render(); c.commitLayout(); c.commitPassive(); };
   c.unmount = () => {
     c.unmounted = true;
     Object.values(c.slots).forEach((s) => { if (s && s.effect && s.cleanup) s.cleanup(); });
   };
   c.render();
+  if (!opts.defer) { c.commitLayout(); c.commitPassive(); }
   return c;
 }
 `;
 const CLERK_STUB = 'export function useAuth() { return { getToken: globalThis.__getToken }; }';
+const TAB_HOOK = path.join(ROOT, 'src/hooks/useGenerateTab.ts');
 const ENTRY = `
 export * from ${JSON.stringify(path.join(ROOT, 'src/hooks/useGenerationPoll.ts'))};
+${fs.existsSync(TAB_HOOK) ? `export * from ${JSON.stringify(TAB_HOOK)};` : ''}
 export { mount } from ${JSON.stringify(path.join(DIR, 'fake-react.mjs'))};
 `;
 fs.writeFileSync(path.join(DIR, 'fake-react.mjs'), FAKE_REACT);
@@ -147,7 +154,7 @@ await build({
   alias: { react: path.join(DIR, 'fake-react.mjs'), '@clerk/react': path.join(DIR, 'clerk-stub.mjs') },
 });
 const mod = await import(pathToFileURL(OUT).href);
-const { useGenerationPoll, onLateJob, mount } = mod;
+const { useGenerationPoll, onBeforeResume, useGenerateTab, mount } = mod;
 
 const KEY = 'spritebrew:activeJob';
 const saved = () => { const raw = store.get(KEY); return raw ? JSON.parse(raw).jobId : null; };
@@ -233,60 +240,159 @@ function fresh() {
   a.unmount();
 }
 
-// 4. A job saved after its form unmounted (the Generate request was in flight
-// when the user left): the page's taker is asked before any mounted hook
-// (Second 073 P2-B).
-check('onLateJob is exported', typeof onLateJob === 'function');
-if (typeof onLateJob === 'function') {
+// 4. Which form finishes a saved job (Second 073 P2-B and 090). Before any
+// hook resumes a saved job, it asks the checks registered with
+// onBeforeResume. The page here is the real useGenerateTab. A form is a mount
+// of the hook, and only the form for the page's tab is mounted, as on
+// /generate. A job "lands late" when the form that sent its Generate request
+// has unmounted (the user left) before the 202 arrives.
+const RESCUED = { status: 'success', resultBase64: 'AAAA', completedAt: 1, rescued: true, deliveredCellSize: 64, deliveredFrames: 4 };
+function sendFromAFormThatLeft() {
+  const sender = mount(useGenerationPoll);
+  const send = sender.value.startPolling;
+  sender.unmount();
+  return send;
+}
+
+check('onBeforeResume is exported', typeof onBeforeResume === 'function');
+if (typeof onBeforeResume === 'function') {
   fresh();
   const asked = [];
-  const off = onLateJob((mode) => { asked.push(mode); return true; });
-  const a = mount(useGenerationPoll); // the Animate form that sent the request
-  const send = a.value.startPolling;
-  a.unmount(); // the user leaves before the 202 arrives
-  const b = mount(useGenerationPoll); // the Create form on return
+  const off = onBeforeResume((mode) => { asked.push(mode); return true; });
+  const send = sendFromAFormThatLeft();
+  const form = mount(useGenerationPoll);
+  send('job-5', 'key-5', 'animate');
   await settle();
-  send('job-5', 'key-5', 'animate'); // the 202 lands
-  await settle();
-  check('late job: the taker is asked with its mode and the other form is not told',
-    asked.join() === 'animate' && b.value.status === 'idle' && fetchCalls.length === 0 && saved() === 'job-5',
-    { asked, b: b.value.status, fetchCalls: fetchCalls.length, saved: saved() });
-  b.unmount(); // the page opens the Animate tab
-  fetchQueue.push(answer(SUCCESS));
-  const c = mount(useGenerationPoll);
-  await settle();
-  check('late job: the form on the job tab resumes it on mount', c.value.status === 'success' && saved() === null,
-    { c: c.value.status, saved: saved() });
-  c.unmount();
+  check('a check that takes the job leaves the asking form idle, with no request and the job saved',
+    asked.join() === 'animate' && form.value.status === 'idle' && fetchCalls.length === 0 && saved() === 'job-5',
+    { asked, form: form.value.status, fetchCalls: fetchCalls.length, saved: saved() });
+  form.unmount();
   off();
 
   fresh();
-  const offNo = onLateJob(() => false); // the user picked a tab, or the job's tab is open
-  const a2 = mount(useGenerationPoll);
-  const send2 = a2.value.startPolling;
-  a2.unmount();
-  const b2 = mount(useGenerationPoll);
-  await settle();
+  const offNo = onBeforeResume(() => false);
+  const send2 = sendFromAFormThatLeft();
+  const form2 = mount(useGenerationPoll);
   send2('job-6', 'key-6', 'create');
   await settle();
-  check('late job: when the taker declines, the form on screen picks the job up',
-    b2.value.status === 'polling' && saved() === 'job-6', { b: b2.value.status, saved: saved() });
-  b2.unmount();
+  check('a check that declines lets the form on screen resume the job', form2.value.status === 'polling' && saved() === 'job-6',
+    { form: form2.value.status, saved: saved() });
+  form2.unmount();
   offNo();
 
   fresh();
   let calls = 0;
-  const offGone = onLateJob(() => { calls++; return true; });
+  const offGone = onBeforeResume(() => { calls++; return true; });
   offGone();
-  const a3 = mount(useGenerationPoll);
-  const send3 = a3.value.startPolling;
-  a3.unmount();
-  const b3 = mount(useGenerationPoll);
-  await settle();
+  const send3 = sendFromAFormThatLeft();
+  const form3 = mount(useGenerationPoll);
   send3('job-7', 'key-7', 'create');
   await settle();
-  check('late job: an unregistered taker is not asked', calls === 0 && b3.value.status === 'polling', { calls, b: b3.value.status });
-  b3.unmount();
+  check('an unregistered check is not asked', calls === 0 && form3.value.status === 'polling', { calls, form: form3.value.status });
+  form3.unmount();
+}
+
+check('useGenerateTab is exported', typeof useGenerateTab === 'function');
+if (typeof useGenerateTab === 'function') {
+  // The Animate form finishes what the page hands it; a rescued result keeps
+  // its rescue fields for the form's notice.
+  async function animateFormFinishes(page, jobId) {
+    fetchQueue.push(answer(RESCUED));
+    const animateForm = mount(useGenerationPoll);
+    await settle();
+    const ok = page.value.tab === 'animate' && animateForm.value.status === 'success' && animateForm.value.result?.rescued === true && saved() === null;
+    const detail = { tab: page.value.tab, status: animateForm.value.status, rescued: animateForm.value.result?.rescued, saved: saved(), jobId };
+    animateForm.unmount();
+    page.unmount();
+    return [ok, detail];
+  }
+
+  // a. Second 090: the 202 lands after the page's first render chose a tab,
+  // before the page commits and registers its check.
+  fresh();
+  let send = sendFromAFormThatLeft();
+  let page = mount(useGenerateTab, { defer: true });
+  const chosen = page.value.tab;
+  send('job-8', 'key-8', 'animate');
+  page.commitLayout();
+  page.commitPassive();
+  let createForm = mount(useGenerationPoll);
+  await settle();
+  check(`Animate job landing between the page's render and its commit: the page opens Animate, and the Create form makes no request`,
+    chosen === 'create' && page.value.tab === 'animate' && createForm.value.status === 'idle' && fetchCalls.length === 0 && saved() === 'job-8',
+    { chosen, tab: page.value.tab, create: createForm.value.status, fetchCalls: fetchCalls.length });
+  createForm.unmount();
+  let [ok, detail] = await animateFormFinishes(page, 'job-8');
+  check('... and the Animate form finishes it, rescue fields kept', ok, detail);
+
+  // b. It lands after the page committed, before the Create form's mount
+  // effect runs.
+  fresh();
+  send = sendFromAFormThatLeft();
+  page = mount(useGenerateTab);
+  createForm = mount(useGenerationPoll, { defer: true });
+  send('job-9', 'key-9', 'animate');
+  createForm.commitLayout();
+  createForm.commitPassive();
+  await settle();
+  check(`Animate job landing between the page's commit and the Create form's mount effect: the page opens Animate, and the Create form makes no request`,
+    page.value.tab === 'animate' && createForm.value.status === 'idle' && fetchCalls.length === 0,
+    { tab: page.value.tab, create: createForm.value.status, fetchCalls: fetchCalls.length });
+  createForm.unmount();
+  [ok, detail] = await animateFormFinishes(page, 'job-9');
+  check('... and the Animate form finishes it', ok, detail);
+
+  // c. Control: it lands before the page renders; the page opens on Animate.
+  fresh();
+  send = sendFromAFormThatLeft();
+  send('job-10', 'key-10', 'animate');
+  page = mount(useGenerateTab);
+  check('control: Animate job saved before the page renders: the page opens on Animate', page.value.tab === 'animate', { tab: page.value.tab });
+  [ok, detail] = await animateFormFinishes(page, 'job-10');
+  check('... and the Animate form finishes it', ok, detail);
+
+  // d. Control: it lands after the page and the Create form are both set up.
+  fresh();
+  send = sendFromAFormThatLeft();
+  page = mount(useGenerateTab);
+  createForm = mount(useGenerationPoll);
+  send('job-11', 'key-11', 'animate');
+  await settle();
+  check('control: Animate job landing after everything is set up: the page opens Animate, and the Create form makes no request',
+    page.value.tab === 'animate' && createForm.value.status === 'idle' && fetchCalls.length === 0,
+    { tab: page.value.tab, create: createForm.value.status, fetchCalls: fetchCalls.length });
+  createForm.unmount();
+  [ok, detail] = await animateFormFinishes(page, 'job-11');
+  check('... and the Animate form finishes it', ok, detail);
+
+  // e. Control: a tab the user picked is kept (the known limitation: the
+  // Create form finishes the Animate job).
+  fresh();
+  send = sendFromAFormThatLeft();
+  page = mount(useGenerateTab);
+  page.value.pickTab('create');
+  await settle();
+  createForm = mount(useGenerationPoll);
+  send('job-12', 'key-12', 'animate');
+  await settle();
+  check('control: after the user picks a tab, the page keeps it and the form on screen resumes the job',
+    page.value.tab === 'create' && createForm.value.status === 'polling', { tab: page.value.tab, create: createForm.value.status });
+  createForm.unmount();
+  page.unmount();
+
+  // f. Control: a Create job landing on the Create tab: no switch.
+  fresh();
+  send = sendFromAFormThatLeft();
+  page = mount(useGenerateTab);
+  createForm = mount(useGenerationPoll);
+  fetchQueue.push(answer(SUCCESS));
+  send('job-13', 'key-13', 'create');
+  await settle();
+  check('control: a Create job on the Create tab stays there, and the Create form finishes it',
+    page.value.tab === 'create' && createForm.value.status === 'success' && saved() === null,
+    { tab: page.value.tab, create: createForm.value.status, saved: saved() });
+  createForm.unmount();
+  page.unmount();
 }
 
 if (failed > 0) {

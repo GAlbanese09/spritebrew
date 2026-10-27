@@ -10,7 +10,7 @@ import GenerationResult from '@/components/sprites/GenerationResult';
 import { addToHistory, type SlicerHints } from '@/lib/generationHistory';
 import { useSpriteStore } from '@/stores/spriteStore';
 import type { AnimateGeneratedContext } from '@/components/sprites/AnimateForm';
-import { onLateJob, savedJobMode } from '@/hooks/useGenerationPoll';
+import { useGenerateTab } from '@/hooks/useGenerateTab';
 import {
   PURCHASE_BANNER_COPY,
   clearBaseline,
@@ -210,14 +210,13 @@ export default function GeneratePage() {
   const setAnimateMode = useSpriteStore((s) => s.setAnimateMode);
   const setCurrentSheetMetadata = useSpriteStore((s) => s.setCurrentSheetMetadata);
 
-  // A generation that ran while the user was on another page resumes when
-  // /generate mounts. Open on its tab, so the form that started it finishes
-  // it: the Animate form despills an animation and shows its rescue notice,
-  // which the Create form does not (paused-message audit). This first value
-  // reads localStorage, so it must never meet server markup: every use of
-  // `tab` stays inside the signed-in Show below, which renders nothing on
-  // the server.
-  const [tab, setTab] = useState<GenerateTab>(() => (savedJobMode() === 'animate' ? 'animate' : 'create'));
+  // The tab, and which form finishes a saved generation: the Animate form
+  // despills an animation and shows its rescue notice, which the Create form
+  // does not (paused-message audit; Second 073, 090). See useGenerateTab. Its
+  // first value reads localStorage, so it must never meet server markup:
+  // every use of `tab` stays inside the signed-in Show below, which renders
+  // nothing on the server.
+  const { tab, pickTab } = useGenerateTab();
   const [showForm, setShowForm] = useState(true);
   const prevDataUrl = useRef(generatedImageDataUrl);
 
@@ -228,40 +227,19 @@ export default function GeneratePage() {
     prevDataUrl.current = generatedImageDataUrl;
   }, [generatedImageDataUrl]);
 
-  // The tab as last committed, and whether the user has picked one since this
-  // page mounted (a tab click or Send to Animator), for the late-job taker.
-  const tabRef = useRef(tab);
-  const userPickedTabRef = useRef(false);
-
+  // A tab click or Send to Animator: the user's pick.
   const handleTabChange = useCallback(
     (newTab: GenerateTab) => {
-      userPickedTabRef.current = true;
-      setTab(newTab);
+      pickTab(newTab);
       setAnimateMode(newTab);
     },
-    [setAnimateMode]
+    [pickTab, setAnimateMode]
   );
 
   // The store's mode follows the tab, including a tab opened on a saved job.
   useEffect(() => {
-    tabRef.current = tab;
     setAnimateMode(tab);
   }, [tab, setAnimateMode]);
-
-  // A job can be accepted after the user left /generate and came back (its
-  // Generate request was still in flight), so the saved job did not exist
-  // when the tab was chosen. Unless the user has picked a tab since, open the
-  // job's tab, and its form resumes the job on mount; the other form is not
-  // told, so it never finishes the job without its processing (Second 073).
-  useEffect(
-    () =>
-      onLateJob((mode) => {
-        if (userPickedTabRef.current || mode === tabRef.current) return false;
-        setTab(mode);
-        return true;
-      }),
-    []
-  );
 
   // Send-to-Animator handoff: when GenerationResult sets the flag and pushes
   // /generate, we're already on this route so GeneratePage does NOT remount.

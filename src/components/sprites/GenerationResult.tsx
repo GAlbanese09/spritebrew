@@ -775,7 +775,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           Always rendered, so a screen reader announces the note when its
           text arrives. */}
       <p className={historyNote ? 'text-[10px] font-mono text-text-muted' : 'sr-only'} role="status">
-        {historyNote ? 'Not added to Recent on this browser. It is in your Gallery.' : null}
+        {historyNote ? "Couldn't add this to Recent on this browser. It's saved in your Gallery." : null}
       </p>
 
       {/* History */}

@@ -2,10 +2,9 @@ import { getAuthedUserId } from '@/lib/edgeAuth';
 import { getJobStateBucket, jobStateR2Key } from '@/lib/jobState';
 import { isMoneyPaused } from '@/lib/moneyPause';
 
-// S0's paused loader copy (n1-release-2-spec.md 5.5, O2). UNAPPROVED COPY
-// (HQ-1, `2026-10-03-008`): HQ's text, used on dev only until HQ approves it
-// for production (HQ-4).
-const PAUSED_STATUS_COPY = "SpriteBrew is finishing some maintenance. Your generation will start when it's done, or its tokens will be returned.";
+// S0's paused loader copy (n1-release-2-spec.md 5.5, O2). Approved by George for
+// production on Oct 27, 2026 (status-paused 006).
+const PAUSED_STATUS_COPY = "SpriteBrew is finishing some maintenance, so this may take longer than usual. If your generation can't finish, its tokens will be returned.";
 
 /** A pending or running job older than this, while money is paused, shows the copy. */
 const PAUSED_COPY_AFTER_MS = 60_000;
@@ -158,9 +157,14 @@ export async function GET(
       refunded: state.refunded ?? false,
     }, 200, source);
   }
-  // S0 (O2): a job waiting more than 60 s while money is paused shows the
-  // paused copy. A fresh job does no pause read; a failed read counts as
-  // paused (fail closed), so the copy shows then too.
+  // S0 (O2): every pending or running job waiting more than 60 s while money
+  // is paused shows the paused copy. The consumer holds running records with
+  // no taskId while paused (a released retry, an orphaned submit, a dead
+  // invocation's record), writes nothing then, and the R2 mirror can lag KV,
+  // so the route cannot tell which running job is held. The copy is written to
+  // be true for all of them (status-paused 006, Second 087). A fresh job does
+  // no pause read; a failed read counts as paused (fail closed), so the copy
+  // shows then too.
   const since = typeof state.enqueuedAt === 'number' ? state.enqueuedAt
     : typeof state.startedAt === 'number' ? state.startedAt : null;
   const waiting = (state.status === 'pending' || state.status === 'running')

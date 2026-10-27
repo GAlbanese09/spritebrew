@@ -32,7 +32,7 @@ export const TOKEN_PACKS = [
     tokens: 9750,
     priceInCents: 7999,
     priceDisplay: '$79.99',
-    bonus: '+30%' as string | null,
+    bonus: '+22%' as string | null,
     popular: false,
   },
 ] as const;

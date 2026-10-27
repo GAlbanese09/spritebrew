@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Grid3X3, Check, Scan, AlertCircle } from 'lucide-react';
 import { loadImage, imageToCanvas, resizePixelArt } from '@/lib/spriteUtils';
 import { SLICER_FRAME_PRESETS } from '@/lib/constants';
-import { detectGridSmart, type DetectionConfidence } from '@/lib/resizerGrid';
+import { defaultTargetFrame, detectGridSmart, type DetectionConfidence } from '@/lib/resizerGrid';
 import { useCanvasFitScale } from '@/lib/useCanvasFitScale';
 import Button from '@/components/ui/Button';
 
@@ -70,6 +70,11 @@ export default function FrameSizeResizer({
   const [detecting, setDetecting] = useState(false);
   const [detectionRan, setDetectionRan] = useState(false);
   const [detectionConfidence, setDetectionConfidence] = useState<DetectionConfidence | null>(null);
+  // The other grid the detector found plausible (upload-2 item 1), one click
+  // away beside "Best guess", and the detector's own answer: the label and
+  // the button follow from the grid on screen. A manual change clears both.
+  const [alternative, setAlternative] = useState<{ cols: number; rows: number } | null>(null);
+  const [detected, setDetected] = useState<{ cols: number; rows: number } | null>(null);
 
   const [targetFrameW, setTargetFrameW] = useState(64);
   const [targetFrameH, setTargetFrameH] = useState(64);
@@ -113,6 +118,8 @@ export default function FrameSizeResizer({
       setCols(result.cols);
       setRows(result.rows);
       setDetectionConfidence(result.confidence);
+      setAlternative(result.alternative ?? null);
+      setDetected(result.alternative ? { cols: result.cols, rows: result.rows } : null);
     } catch {
       // ignore
     } finally {
@@ -126,27 +133,13 @@ export default function FrameSizeResizer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Default target frame size to the first standard size ≤ current (scale down)
-  // or match if already standard
+  // Default target frame size for the grid on screen (defaultTargetFrame).
   useEffect(() => {
     if (!detectionRan) return;
-    if (matchingPreset) {
-      setTargetFrameW(matchingPreset.w);
-      setTargetFrameH(matchingPreset.h);
-      return;
-    }
-    // Largest preset smaller than current frame
-    const sorted = [...FRAME_SIZE_PRESETS].sort((a, b) => b.w - a.w);
-    const smaller = sorted.find((p) => p.w <= currentFrameW && p.h <= currentFrameH);
-    if (smaller) {
-      setTargetFrameW(smaller.w);
-      setTargetFrameH(smaller.h);
-    } else {
-      // Source frames are tiny — use smallest preset
-      setTargetFrameW(16);
-      setTargetFrameH(16);
-    }
-  }, [detectionRan, matchingPreset, currentFrameW, currentFrameH]);
+    const target = defaultTargetFrame(currentFrameW, currentFrameH);
+    setTargetFrameW(target.w);
+    setTargetFrameH(target.h);
+  }, [detectionRan, currentFrameW, currentFrameH]);
 
   // ── Draw grid overlay preview ──
   useEffect(() => {
@@ -192,7 +185,19 @@ export default function FrameSizeResizer({
     setCols(c);
     setRows(r);
     setDetectionConfidence(null); // manual override clears the detection label
+    setAlternative(null);
+    setDetected(null);
   }, []);
+
+  // On the detector's second choice, the button offers its first one back.
+  const onAlternative = alternative !== null && cols === alternative.cols && rows === alternative.rows;
+  const offered = alternative && detected ? (onAlternative ? detected : alternative) : null;
+
+  const handleTryOther = useCallback(() => {
+    if (!offered) return;
+    setCols(offered.cols);
+    setRows(offered.rows);
+  }, [offered]);
 
   const handleFrameSizePreset = useCallback((w: number, h: number) => {
     setTargetFrameW(w);
@@ -214,6 +219,13 @@ export default function FrameSizeResizer({
   }, [onKeepOriginal, currentFrameW, currentFrameH]);
 
   const totalFrames = cols * rows;
+  // DRAFT COPY (upload-2 item 1): "Other guess" names the detector's second choice.
+  const detectionLabel =
+    detectionConfidence === 'high' ? 'Detected' : onAlternative ? 'Other guess' : 'Best guess';
+  const detectionStatus = detectionConfidence
+    ? `${detectionLabel}: ${cols}x${rows} (${cols * rows} frames)` +
+      (detectionConfidence !== 'high' ? ', adjust if needed' : '')
+    : '';
 
   return (
     <div className="rounded-lg border border-accent-amber/30 bg-bg-surface p-5 space-y-5">
@@ -244,20 +256,42 @@ export default function FrameSizeResizer({
           </Button>
         </div>
 
-        {/* Detection result label */}
+        {/* Detection result label. Screen readers hear it from the status
+            line, which stays mounted while only its text changes, so the
+            first result is announced too; the visible line is hidden from
+            them, and the button beside it stays reachable. */}
+        <span role="status" className="sr-only">
+          {detectionStatus}
+        </span>
         {detectionConfidence && (
-          <p
-            className={`text-[10px] font-mono mb-2 ${
-              detectionConfidence === 'high' ? 'text-green-400' : 'text-amber-400'
-            }`}
-          >
-            {detectionConfidence === 'high' ? 'Detected' : 'Best guess'}:{' '}
-            <span className="font-semibold">
-              {cols}x{rows}
-            </span>{' '}
-            ({cols * rows} frames)
-            {detectionConfidence !== 'high' && ' — adjust if needed'}
-          </p>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-2">
+            <p
+              aria-hidden="true"
+              className={`text-[10px] font-mono ${
+                detectionConfidence === 'high' ? 'text-green-400' : 'text-amber-400'
+              }`}
+            >
+              {detectionLabel}:{' '}
+              <span className="font-semibold">
+                {cols}x{rows}
+              </span>{' '}
+              ({cols * rows} frames)
+              {detectionConfidence !== 'high' && ', adjust if needed'}
+            </p>
+            {/* DRAFT COPY (upload-2 item 1): "Try 4x4" */}
+            {offered && (
+              <button
+                type="button"
+                onClick={handleTryOther}
+                disabled={detecting}
+                className="px-2.5 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
+                  bg-bg-elevated text-accent-amber hover:bg-bg-hover border border-accent-amber/40
+                  disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Try {offered.cols}x{offered.rows}
+              </button>
+            )}
+          </div>
         )}
 
         {/* Grid presets */}
@@ -293,6 +327,8 @@ export default function FrameSizeResizer({
               onChange={(e) => {
                 setCols(Math.max(1, Math.min(32, Number(e.target.value))));
                 setDetectionConfidence(null);
+                setAlternative(null);
+                setDetected(null);
               }}
               className="w-20 rounded bg-bg-elevated border border-border-default px-2 py-1
                 text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
@@ -308,6 +344,8 @@ export default function FrameSizeResizer({
               onChange={(e) => {
                 setRows(Math.max(1, Math.min(32, Number(e.target.value))));
                 setDetectionConfidence(null);
+                setAlternative(null);
+                setDetected(null);
               }}
               className="w-20 rounded bg-bg-elevated border border-border-default px-2 py-1
                 text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"

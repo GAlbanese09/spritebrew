@@ -264,7 +264,8 @@ export default function GeneratePage() {
     dataUrl: string,
     prompt: string,
     style: string,
-    animateContext?: AnimateGeneratedContext
+    animateContext?: AnimateGeneratedContext,
+    jobId?: string
   ) => {
     // Determine mode + action from the style key
     const isAnimate = style.startsWith('any_animation_');
@@ -305,6 +306,8 @@ export default function GeneratePage() {
     // Create results clear any hints left from an earlier animation.
     setCurrentSheetMetadata(slicerHints ?? null);
 
+    // The job's id keeps it to one Recent entry when two tabs of this
+    // browser finish the same job.
     await addToHistory({
       userId,
       prompt,
@@ -313,6 +316,7 @@ export default function GeneratePage() {
       action,
       fullImageDataUrl: dataUrl,
       slicerHints,
+      jobId,
     });
   }, [userId, setCurrentSheetMetadata]);
 

@@ -395,6 +395,63 @@ if (typeof useGenerateTab === 'function') {
   page.unmount();
 }
 
+// 5. The click-time context travels with the saved job (history gap, HQ
+// 2026-10-27-017): the poll that sent the job exposes it, a resumed poll
+// reads it back, and a job saved without one, or with a malformed one,
+// still resumes, without it.
+{
+  const CTX = { prompt: 'knight with sword', styleId: 'plus-classic' };
+  fresh();
+  const a = mount(useGenerationPoll);
+  a.value.startPolling('job-14', 'key-14', 'create', CTX);
+  await settle();
+  const stored = JSON.parse(store.get(KEY)).context;
+  check('context: saved with the job, and exposed by the poll that sent it',
+    JSON.stringify(stored) === JSON.stringify(CTX) && JSON.stringify(a.value.context) === JSON.stringify(CTX),
+    { stored, exposed: a.value.context });
+  a.unmount();
+  fetchQueue.push(answer(SUCCESS));
+  const b = mount(useGenerationPoll);
+  await settle();
+  check('context: after a leave and a return, the resumed poll has it at success',
+    b.value.status === 'success' && b.value.isResume === true && JSON.stringify(b.value.context) === JSON.stringify(CTX),
+    { status: b.value.status, isResume: b.value.isResume, context: b.value.context });
+  b.value.reset();
+  await settle();
+  check('context: reset clears it', b.value.context === null, { context: b.value.context });
+  b.unmount();
+}
+{
+  const ANIM = { action: 'attack', motionPrompt: '', bgColor: '#FF00FF', frameCount: 6, frameSize: 128 };
+  fresh();
+  const send = sendFromAFormThatLeft();
+  const form = mount(useGenerationPoll);
+  send('job-15', 'key-15', 'animate', ANIM);
+  await settle();
+  check('context: a job landing after its form left keeps it for the form on screen',
+    form.value.status === 'polling' && JSON.stringify(form.value.context) === JSON.stringify(ANIM),
+    { status: form.value.status, context: form.value.context });
+  form.unmount();
+
+  fresh();
+  store.set(KEY, JSON.stringify({ jobId: 'job-16', idempotencyKey: 'key-16', mode: 'create', startedAt: Date.now() }));
+  const old = mount(useGenerationPoll);
+  await settle();
+  check('context: a job saved without one (by the version before) resumes, with none',
+    old.value.status === 'polling' && old.value.context === null, { status: old.value.status, context: old.value.context });
+  old.unmount();
+
+  fresh();
+  const { frameSize: _dropped, ...noSize } = ANIM;
+  void _dropped;
+  store.set(KEY, JSON.stringify({ jobId: 'job-17', idempotencyKey: 'key-17', mode: 'animate', startedAt: Date.now(), context: noSize }));
+  const bad = mount(useGenerationPoll);
+  await settle();
+  check('context: a malformed one is dropped, and the job still resumes',
+    bad.value.status === 'polling' && bad.value.context === null, { status: bad.value.status, context: bad.value.context });
+  bad.unmount();
+}
+
 if (failed > 0) {
   console.log(`${failed} FAIL`);
   process.exit(1);

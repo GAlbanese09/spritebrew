@@ -19,6 +19,7 @@ import { downloadFile } from '@/lib/downloadUtils';
 import {
   loadHistory,
   clearHistory,
+  onHistoryChange,
   type GenerationHistoryEntry,
 } from '@/lib/generationHistory';
 
@@ -119,6 +120,17 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   useEffect(() => {
     setHistory(loadHistory(userId));
   }, [generatedImageDataUrl, userId]);
+
+  // A new generation's entry is saved after its thumbnail is drawn, after the
+  // load above, so Recent reads the history again when the save is done (it
+  // used to miss the newest sheet). A failed save names its image, kept with
+  // the user, for the note under the result.
+  const [historySaveFailed, setHistorySaveFailed] = useState<{ userId: string | null | undefined; image: string } | null>(null);
+  useEffect(() => onHistoryChange(({ failedFor }) => {
+    setHistory(loadHistory(userId));
+    setHistorySaveFailed(failedFor ? { userId, image: failedFor } : null);
+  }), [userId]);
+  const historyNote = historySaveFailed !== null && historySaveFailed.userId === userId && historySaveFailed.image === generatedImageDataUrl;
 
   // Reset background removal when a new generation arrives. Also reset
   // naturalDims so the new image isn't briefly rendered at the previous
@@ -757,6 +769,14 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
       {gifError && gifError.src === generatedImageDataUrl && (
         <p className="text-[10px] font-mono text-red-400" role="alert">{gifError.message}</p>
       )}
+
+      {/* A Recent entry that could not be saved (localStorage full); the
+          Gallery has the sheet either way, since the server writes it.
+          Always rendered, so a screen reader announces the note when its
+          text arrives. */}
+      <p className={historyNote ? 'text-[10px] font-mono text-text-muted' : 'sr-only'} role="status">
+        {historyNote ? 'Not added to Recent on this browser. It is in your Gallery.' : null}
+      </p>
 
       {/* History */}
       {history.length > 0 && (

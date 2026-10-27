@@ -16,6 +16,7 @@ import {
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
+import { finishedJob, type FinishedJob } from '@/lib/pollResume';
 import { StyleExamplesLightbox } from './StyleExamplesLightbox';
 
 const EXAMPLE_PROMPTS = [
@@ -53,7 +54,7 @@ const TIER_COLORS: Record<string, string> = {
 };
 
 interface GenerationFormProps {
-  onGenerated: (imageUrl: string, prompt: string, style: string) => void;
+  onGenerated: (imageUrl: string, prompt: string, style: string, animateContext?: FinishedJob['animate'], jobId?: string) => void;
 }
 
 export default function GenerationForm({ onGenerated }: GenerationFormProps) {
@@ -107,11 +108,6 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   // Queue-and-poll integration. The hook auto-resumes a poll from
   // localStorage on mount if a fresh-enough activeJob entry exists.
   const poll = useGenerationPoll();
-
-  // Captures click-time prompt/style so the poll-success effect can write
-  // history with the right context (handleGenerated needs prompt + style).
-  // Null on resume — we never have click context for a resumed job.
-  const inFlightRef = useRef<{ prompt: string; styleId: string } | null>(null);
 
   // 1s click-debounce — guards against rapid double-clicks beyond the
   // existing isGenerating boolean (which has a one-render race window).
@@ -214,8 +210,9 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         // Queue path. The poll effect drives the rest of the lifecycle —
         // do NOT reset isGenerating here; it stays true through polling.
         tookPollPath = true;
-        inFlightRef.current = { prompt: capturedPrompt, styleId: capturedStyleId };
-        poll.startPolling(result.jobId, idempotencyKey, 'create');
+        // The click-time context travels with the saved job, so whichever
+        // form finishes it writes its Recent entry and style.
+        poll.startPolling(result.jobId, idempotencyKey, 'create', { prompt: capturedPrompt, styleId: capturedStyleId });
         return;
       }
 
@@ -282,9 +279,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     setGenerationStyle, setTokenBalance, fetchBalance, onGenerated, poll,
   ]);
 
-  // Poll-effect: react to terminal states from the queue path. On resume
-  // (poll.isResume === true), inFlightRef is null so we hydrate the result
-  // image but skip handleGenerated/addToHistory (no click-time context).
+  // Poll-effect: react to terminal states from the queue path. A job resumed
+  // here (after a reload, a return to /generate or a tab switch) carries the
+  // context saved with it, so it writes its Recent entry, hints and style
+  // like one that never left this form.
   useEffect(() => {
     if (poll.status === 'polling') {
       // Resume case — the hook fired startPolling on mount; mirror to the
@@ -295,16 +293,21 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     if (poll.status === 'success' && poll.result) {
       const dataUrl = `data:image/png;base64,${poll.result.resultBase64}`;
       setGeneratedImage(dataUrl, dataUrl);
-      const ctx = inFlightRef.current;
-      if (ctx) {
-        setGenerationStyle(ctx.styleId);
+      // The job's own entry, hints and style, from the context saved with
+      // it, whether this form sent it or resumed it. An Animate job finished
+      // here (the user picked this tab mid-job) takes the rescue fields as
+      // the status route reported them.
+      const { rescued, requestedWidth, requestedHeight, deliveredCellSize, deliveredFrames } = poll.result;
+      const rescueInfo = rescued ? { rescued, requestedWidth, requestedHeight, deliveredCellSize, deliveredFrames } : null;
+      const finished = finishedJob(poll.context, rescueInfo);
+      if (finished) {
+        setGenerationStyle(finished.style);
         void fetchBalance();
-        onGenerated(dataUrl, ctx.prompt, ctx.styleId);
-        inFlightRef.current = null;
+        onGenerated(dataUrl, finished.prompt, finished.style, finished.animate, poll.jobId);
       } else {
-        // Resumed job (form remounted mid-poll): onGenerated does not run,
-        // so drop the previous generation's style and hints rather than
-        // let /upload apply them to this image.
+        // A job saved without its context, by the version before this one:
+        // onGenerated does not run, so drop the previous generation's style
+        // and hints rather than let /upload apply them to this image.
         setGenerationStyle(null);
         setCurrentSheetMetadata(null);
       }
@@ -337,7 +340,6 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
       setGenerating(false);
       setGeneratingAction(null);
-      inFlightRef.current = null;
       poll.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

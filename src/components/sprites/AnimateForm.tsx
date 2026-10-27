@@ -38,8 +38,8 @@ import {
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
+import { finishedJob, isAnimateContext } from '@/lib/pollResume';
 import { ANIMATE_INPUT_B64_CLIENT_MAX } from '@/lib/constants';
-import { generatedFrameSize } from '@/lib/animationGeometry';
 import {
   loadLatestConfig,
   saveLatestConfig,
@@ -157,7 +157,8 @@ interface AnimateFormProps {
     dataUrl: string,
     prompt: string,
     style: string,
-    animateContext?: AnimateGeneratedContext
+    animateContext?: AnimateGeneratedContext,
+    jobId?: string
   ) => void;
 }
 
@@ -222,25 +223,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
   const clearPendingAnimatorHandoff = useSpriteStore((s) => s.clearPendingAnimatorHandoff);
   const clearPendingAnimatorSkipBgRemoval = useSpriteStore((s) => s.clearPendingAnimatorSkipBgRemoval);
-
-  // Captures click-time action/motion so the poll-success effect can write
-  // history with the right context. Null on resume.
-  // bgColor is now the fixed DEFAULT_BG_COLOR module constant (the toggle
-  // went away July 15) but still travels through this ref so the despill
-  // in the poll-success handler sees a stable request-time fill regardless
-  // of any future changes to the flatten default.
-  // frameCount is snapshotted at click-time so the poll-success handler
-  // can pass the requested count into onGenerated for accurate slicer
-  // hints (rescued deliveries prefer deliveredFrames, but non-rescued
-  // ones need the actual request-time value, not whatever the form state
-  // is at poll-completion time).
-  const inFlightRef = useRef<{
-    action: string;
-    motionPrompt: string;
-    bgColor: string;
-    frameCount: number;
-    frameSize: number;
-  } | null>(null);
 
   // 1s click-debounce (one-render race window beyond isGenerating).
   const lastGenerateAtRef = useRef<number>(0);
@@ -837,6 +819,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     // away July 15) but still travels through reqCtx so the despill
     // step in both SSE-success and poll-success paths sees a stable
     // fill regardless of any future changes to the flatten default.
+    // frameCount is the requested count, for the slicer hints (a rescue
+    // prefers deliveredFrames). On the poll path it is saved with the job,
+    // so whichever form finishes the job writes its Recent entry and hints.
     const reqCtx = {
       action: selectedAction,
       motionPrompt: motionPrompt.trim(),
@@ -887,8 +872,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
       if (result.mode === 'poll') {
         tookPollPath = true;
-        inFlightRef.current = reqCtx;
-        poll.startPolling(result.jobId, idempotencyKey, 'animate');
+        poll.startPolling(result.jobId, idempotencyKey, 'animate', reqCtx);
         return;
       }
 
@@ -982,18 +966,21 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       // Same despill wire as the SSE-success path: see that branch's
       // comment for the RD default-strip context and the two internal
       // safety gates that make unconditional calls safe. bgColor travels
-      // via inFlightRef; a job resumed after the form remounted has none.
-      // Since July 15 every animate request is flattened onto
-      // DEFAULT_BG_COLOR, so a resumed animate job despills with it (the
+      // with the job (poll.context, saved with it, so a resumed job has it
+      // too); a job saved without its context, by the version before this
+      // one, has none. Since July 15 every animate request is flattened
+      // onto DEFAULT_BG_COLOR, so such a job despills with it (the
       // neutral '#000000' skips the pass and could leave a magenta rim).
       // A Create job finished here, after a tab switch mid-job, keeps the
       // neutral fill: the Create form never despills, and the pass would
       // recolor magenta outlines. Wrapped in an IIFE because useEffect
       // callbacks can't be async themselves.
       const rawDataUrl = `data:image/png;base64,${poll.result.resultBase64}`;
-      const reqCtx = inFlightRef.current;
+      const ctx = poll.context;
+      const reqCtx = isAnimateContext(ctx) ? ctx : null;
       const despillFill = reqCtx?.bgColor ?? (poll.mode === 'animate' ? DEFAULT_BG_COLOR : '#000000');
       const pollResult = poll.result;
+      const jobId = poll.jobId;
       (async () => {
         const dataUrl = await despillIfTransparent(rawDataUrl, despillFill);
         setGeneratedImage(dataUrl, dataUrl);
@@ -1032,24 +1019,18 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         }
         setRescueInfo(rescueInfo);
 
-        if (reqCtx) {
-          setGenerationStyle(`any_animation_${reqCtx.action}`);
+        // The job's own entry, hints and style, from the context saved with
+        // it, whether this form sent it or resumed it; also a Create job
+        // finished here (the user picked this tab mid-job).
+        const finished = finishedJob(ctx, rescueInfo);
+        if (finished) {
+          setGenerationStyle(finished.style);
           void fetchBalance();
-          onGenerated(
-            dataUrl,
-            reqCtx.motionPrompt || reqCtx.action,
-            `any_animation_${reqCtx.action}`,
-            {
-              frameCount: reqCtx.frameCount,
-              frameSize: generatedFrameSize(reqCtx.frameSize, rescueInfo),
-              ...(rescueInfo ? { rescueInfo } : {}),
-            }
-          );
-          inFlightRef.current = null;
+          onGenerated(dataUrl, finished.prompt, finished.style, finished.animate, jobId);
         } else {
-          // Resumed job (form remounted mid-poll): onGenerated does not run,
-          // so drop the previous generation's style and hints rather than
-          // let /upload apply them to this sheet.
+          // A job saved without its context, by the version before this one:
+          // onGenerated does not run, so drop the previous generation's style
+          // and hints rather than let /upload apply them to this sheet.
           setGenerationStyle(null);
           setCurrentSheetMetadata(null);
         }
@@ -1083,7 +1064,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
       setGenerating(false);
       setGeneratingAction(null);
-      inFlightRef.current = null;
       poll.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

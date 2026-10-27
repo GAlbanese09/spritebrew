@@ -3,6 +3,9 @@
  *
  * Thumbnails are always kept (small, ~2-5 KB each). Full images are only
  * kept for the most recent N entries because localStorage is capped at ~5 MB.
+ *
+ * It is per browser and feeds Recent on /generate. The Gallery lists the
+ * server's copy of every finished job instead.
  */
 
 export type GenerationMode = 'create' | 'animate';
@@ -31,6 +34,9 @@ export interface SlicerHints {
 
 export interface GenerationHistoryEntry {
   id: string;
+  /** The generation job it came from, so a job has one entry; absent on
+   *  older entries and on the legacy stream path. */
+  jobId?: string;
   prompt: string;
   style: string;
   mode: GenerationMode;
@@ -62,6 +68,7 @@ export function loadHistory(userId: string | null | undefined): GenerationHistor
     return parsed.map(
       (e: Record<string, unknown>, idx: number): GenerationHistoryEntry => ({
         id: (e.id as string) ?? `legacy-${e.timestamp ?? idx}`,
+        ...(typeof e.jobId === 'string' ? { jobId: e.jobId } : {}),
         prompt: (e.prompt as string) ?? '',
         style: (e.style as string) ?? 'unknown',
         mode: ((e.mode as GenerationMode) ??
@@ -80,9 +87,28 @@ export function loadHistory(userId: string | null | undefined): GenerationHistor
   }
 }
 
-/** Save entries to localStorage, pruning full images from older entries first. */
-function saveHistory(userId: string | null | undefined, entries: GenerationHistoryEntry[]) {
-  if (typeof window === 'undefined') return;
+/** What addToHistory tells listeners: a new entry was saved, or, with
+ *  failedFor (the entry's full image), it could not be. */
+export interface HistoryChange {
+  failedFor?: string;
+}
+
+const historyListeners = new Set<(change: HistoryChange) => void>();
+
+/** Listens for addToHistory's outcome; returns the unsubscribe function.
+ *  Recent on /generate reads the history again when told: an entry is saved
+ *  after its thumbnail is drawn, which is after its result shows. */
+export function onHistoryChange(listener: (change: HistoryChange) => void): () => void {
+  historyListeners.add(listener);
+  return () => {
+    historyListeners.delete(listener);
+  };
+}
+
+/** Save entries to localStorage, pruning full images from older entries
+ *  first. False when nothing could be saved. */
+function saveHistory(userId: string | null | undefined, entries: GenerationHistoryEntry[]): boolean {
+  if (typeof window === 'undefined') return false;
   const key = historyKey(userId);
 
   // Cap total count
@@ -99,6 +125,7 @@ function saveHistory(userId: string | null | undefined, entries: GenerationHisto
 
   try {
     localStorage.setItem(key, JSON.stringify(trimmed));
+    return true;
   } catch {
     // Quota exceeded — try again with fewer full images
     try {
@@ -109,6 +136,7 @@ function saveHistory(userId: string | null | undefined, entries: GenerationHisto
         return rest;
       });
       localStorage.setItem(key, JSON.stringify(stripped));
+      return true;
     } catch {
       // Still failed — drop full images entirely
       try {
@@ -117,8 +145,11 @@ function saveHistory(userId: string | null | undefined, entries: GenerationHisto
           return rest;
         });
         localStorage.setItem(key, JSON.stringify(noFull));
+        return true;
       } catch {
-        // Give up — localStorage unavailable
+        // Give up: localStorage is full or unavailable. Recent misses this
+        // entry; the Gallery, which the server writes, still has the sheet.
+        return false;
       }
     }
   }
@@ -153,14 +184,19 @@ interface AddHistoryInput {
   action?: string;
   fullImageDataUrl: string;
   slicerHints?: SlicerHints;
+  jobId?: string;
 }
 
-/** Add a new entry to history for the given user. */
-export async function addToHistory(input: AddHistoryInput): Promise<void> {
+/** Add a new entry to history for the given user, unless its job already
+ *  has one (another tab of this browser finished the same job). Resolves
+ *  false when it could not be saved; the listeners hear the outcome either
+ *  way. */
+export async function addToHistory(input: AddHistoryInput): Promise<boolean> {
   const thumbnail = await createThumbnail(input.fullImageDataUrl, 128);
 
   const entry: GenerationHistoryEntry = {
     id: `gen-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    ...(input.jobId ? { jobId: input.jobId } : {}),
     prompt: input.prompt,
     style: input.style,
     mode: input.mode,
@@ -172,8 +208,15 @@ export async function addToHistory(input: AddHistoryInput): Promise<void> {
   };
 
   const entries = loadHistory(input.userId);
+  if (input.jobId && entries.some((e) => e.jobId === input.jobId)) {
+    historyListeners.forEach((listener) => listener({}));
+    return true;
+  }
   entries.unshift(entry);
-  saveHistory(input.userId, entries);
+  const saved = saveHistory(input.userId, entries);
+  const change: HistoryChange = saved ? {} : { failedFor: input.fullImageDataUrl };
+  historyListeners.forEach((listener) => listener(change));
+  return saved;
 }
 
 /** Delete a single entry by id for the given user. */

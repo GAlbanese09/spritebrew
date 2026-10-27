@@ -10,7 +10,7 @@ import {
   PollTransientError,
   type PollTerminalState,
 } from '@/lib/pollClient';
-import { resumeDecision } from '@/lib/pollResume';
+import { parseJobContext, resumeDecision, type JobContext } from '@/lib/pollResume';
 
 export type GenStatus = 'idle' | 'polling' | 'success' | 'error' | 'abandoned';
 export type GenMode = 'create' | 'animate';
@@ -20,6 +20,9 @@ export interface ActiveJobLocalStorage {
   idempotencyKey: string;
   mode: GenMode;
   startedAt: number;
+  /** The click that sent the job (see JobContext). Absent on a job saved
+   *  before contexts were. */
+  context?: JobContext;
 }
 
 const ACTIVE_JOB_KEY = 'spritebrew:activeJob';
@@ -68,10 +71,13 @@ export interface UseGenerationPollResult {
   result?: PollSuccessResult;
   error?: { message: string; errorCode?: string; refunded: boolean };
   jobId?: string;
-  /** True when the active poll was resumed from localStorage on mount,
-   *  rather than freshly initiated this session. Lets callers skip
-   *  history-write side effects that need click-time context (prompt/style). */
+  /** True when the active poll was resumed from a saved job, rather than
+   *  started by this hook's form. */
   isResume: boolean;
+  /** The click-time context saved with the active job, fresh or resumed:
+   *  the form that finishes the job writes its Recent entry, hints and style
+   *  from it. Null when idle, and on a job saved without one. */
+  context: JobContext | null;
   /** Latest in-flight stage from the status poll; null before the first
    *  intermediate response and once a terminal state lands. */
   serverStatus: 'pending' | 'running' | null;
@@ -87,7 +93,7 @@ export interface UseGenerationPollResult {
   startedAt: number | null;
   /** Mode of the active job, fresh or resumed. Null when idle. */
   mode: GenMode | null;
-  startPolling: (jobId: string, idempotencyKey: string, mode: GenMode) => void;
+  startPolling: (jobId: string, idempotencyKey: string, mode: GenMode, context?: JobContext) => void;
   reset: () => void;
 }
 
@@ -105,7 +111,10 @@ function readActiveJob(): ActiveJobLocalStorage | null {
     ) {
       return null;
     }
-    return parsed;
+    // A missing or malformed context leaves the job without one; it still resumes.
+    const { context: rawContext, ...job } = parsed;
+    const context = parseJobContext(job.mode, rawContext);
+    return context ? { ...job, context } : job;
   } catch {
     return null;
   }
@@ -137,7 +146,8 @@ function clearActiveJob(): void {
 /**
  * Drives the queue-and-poll flow client-side.
  *
- * - `startPolling` writes localStorage + kicks off the poll loop.
+ * - `startPolling` saves the job, with its click-time context, to
+ *   localStorage and kicks off the poll loop.
  * - On mount, resumes a saved job (see resumeDecision): after a reload, and
  *   after the user left /generate and came back while or after it ran.
  * - On unmount, aborts the poll loop and keeps the saved job, so the next
@@ -160,6 +170,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
   const [pausedMessage, setPausedMessage] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [mode, setMode] = useState<GenMode | null>(null);
+  const [context, setContext] = useState<JobContext | null>(null);
 
   // The running loop: its controller and job. Null when idle.
   const activeRef = useRef<{ controller: AbortController; jobId: string } | null>(null);
@@ -174,7 +185,8 @@ export function useGenerationPoll(): UseGenerationPollResult {
       _idempotencyKey: string,
       jobMode: GenMode,
       resumed: boolean,
-      jobStartedAt: number
+      jobStartedAt: number,
+      jobContext: JobContext | undefined
     ): void => {
       // Cancel any prior loop before starting a new one.
       activeRef.current?.controller.abort();
@@ -191,6 +203,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
       setPausedMessage(null);
       setStartedAt(jobStartedAt);
       setMode(jobMode);
+      setContext(jobContext ?? null);
 
       void (async () => {
         try {
@@ -302,13 +315,14 @@ export function useGenerationPoll(): UseGenerationPollResult {
   );
 
   const startPolling = useCallback(
-    (jid: string, idempotencyKey: string, mode: GenMode): void => {
+    (jid: string, idempotencyKey: string, mode: GenMode, jobContext?: JobContext): void => {
       const now = Date.now();
       writeActiveJob({
         jobId: jid,
         idempotencyKey,
         mode,
         startedAt: now,
+        ...(jobContext ? { context: jobContext } : {}),
       });
       if (!mountedRef.current) {
         // The form that sent this job has unmounted (the user left /generate
@@ -317,7 +331,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
         jobSavedListeners.forEach((pickUp) => pickUp());
         return;
       }
-      runPoll(jid, idempotencyKey, mode, false, now);
+      runPoll(jid, idempotencyKey, mode, false, now, jobContext);
     },
     [runPoll]
   );
@@ -336,6 +350,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
     setPausedMessage(null);
     setStartedAt(null);
     setMode(null);
+    setContext(null);
   }, []);
 
   // Resume a saved job on mount and whenever an unmounted hook saves one
@@ -353,7 +368,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
       for (const check of resumeChecks) {
         if (check(persisted.mode)) return;
       }
-      runPoll(persisted.jobId, persisted.idempotencyKey, persisted.mode, true, persisted.startedAt);
+      runPoll(persisted.jobId, persisted.idempotencyKey, persisted.mode, true, persisted.startedAt, persisted.context);
       // runPoll captures getTokenStable; if Clerk hasn't hydrated yet, the
       // first getToken() call inside pollJobStatus may return null and throw
       // PollAuthError, so the status is 'error' and the user sees a message.
@@ -376,6 +391,7 @@ export function useGenerationPoll(): UseGenerationPollResult {
     error,
     jobId,
     isResume,
+    context,
     serverStatus,
     serverStartedAt,
     pausedMessage,

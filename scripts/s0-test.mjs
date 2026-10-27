@@ -480,10 +480,10 @@ reset(); setPause('1');
 res = await R['token-balance'].GET(authReq('/api/token-balance', tokNew));
 check('an opening while paused -> 503 as today, no admission row, nothing written', res.status === 503 && admissionRows().length === 0 && balanceOf(NEWUSER) === null);
 
-// ── 7. The status route's paused copy (O2, HQ-1's unapproved copy) ──
+// ── 7. The status route's paused copy (O2) ──
 
 const JOB = 'job_s0_status_test';
-const COPY = "SpriteBrew is finishing some maintenance. Your generation will start when it's done, or its tokens will be returned.";
+const COPY = "SpriteBrew is finishing some maintenance, so this may take longer than usual. If your generation can't finish, its tokens will be returned.";
 for (const [label, ageMs, setup, expectCopy] of [
   ['a fresh job, paused', 5_000, () => setPause('1'), false],
   ['a held job older than 60 s, paused', 120_000, () => setPause('1'), true],

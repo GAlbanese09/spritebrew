@@ -87,10 +87,29 @@ export function loadHistory(userId: string | null | undefined): GenerationHistor
   }
 }
 
-/** What addToHistory tells listeners: a new entry was saved, or, with
- *  failedFor (the entry's full image), it could not be. */
+/** What addToHistory tells listeners, on every outcome: whose history, which
+ *  image (the entry's full image), and whether it was saved. A save skipped
+ *  because its job already has an entry counts as saved. */
 export interface HistoryChange {
-  failedFor?: string;
+  userId: string | null;
+  image: string;
+  saved: boolean;
+}
+
+/** A failed save that a result card notes. */
+export interface FailedSave {
+  userId: string | null;
+  image: string;
+}
+
+/** The failed save a result card notes after an outcome. Only outcomes for
+ *  the card's user count: a failure becomes the noted one, and a save clears
+ *  the note only for the same image, so a slower save of an older sheet
+ *  leaves a newer sheet's note alone (Second 094). */
+export function failedSaveAfter(noted: FailedSave | null, change: HistoryChange, userId: string | null | undefined): FailedSave | null {
+  if (change.userId !== (userId ?? null)) return noted;
+  if (!change.saved) return { userId: change.userId, image: change.image };
+  return noted && noted.image === change.image ? null : noted;
 }
 
 const historyListeners = new Set<(change: HistoryChange) => void>();
@@ -207,16 +226,15 @@ export async function addToHistory(input: AddHistoryInput): Promise<boolean> {
     slicerHints: input.slicerHints,
   };
 
+  const tell = (saved: boolean): boolean => {
+    const change: HistoryChange = { userId: input.userId ?? null, image: input.fullImageDataUrl, saved };
+    historyListeners.forEach((listener) => listener(change));
+    return saved;
+  };
   const entries = loadHistory(input.userId);
-  if (input.jobId && entries.some((e) => e.jobId === input.jobId)) {
-    historyListeners.forEach((listener) => listener({}));
-    return true;
-  }
+  if (input.jobId && entries.some((e) => e.jobId === input.jobId)) return tell(true);
   entries.unshift(entry);
-  const saved = saveHistory(input.userId, entries);
-  const change: HistoryChange = saved ? {} : { failedFor: input.fullImageDataUrl };
-  historyListeners.forEach((listener) => listener(change));
-  return saved;
+  return tell(saveHistory(input.userId, entries));
 }
 
 /** Delete a single entry by id for the given user. */

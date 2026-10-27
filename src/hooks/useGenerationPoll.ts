@@ -133,6 +133,16 @@ function writeActiveJob(entry: ActiveJobLocalStorage): void {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(entry));
+    return;
+  } catch { /* the record with its context did not fit, or storage is unavailable */ }
+  if (!entry.context) return;
+  // Nearly full storage: save the lean record, which a later mount can still
+  // resume (without a Recent entry), rather than nothing (Second 094). The
+  // hook that sent the job keeps the full context for its own finish.
+  const { context: _dropped, ...lean } = entry;
+  void _dropped;
+  try {
+    window.localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(lean));
   } catch { /* localStorage unavailable; ignore */ }
 }
 

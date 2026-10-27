@@ -23,6 +23,19 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: '0.6.4',
+    date: 'OCT 27, 2026',
+    title: 'ANIMATION PRICES',
+    entries: [
+      {
+        emoji: '🪙',
+        title: 'Two animation styles now cost 50 tokens',
+        description:
+          'Custom Animation and 8-Direction Rotation on the Create tab now cost 50 tokens, the same as Custom Action and Subtle Motion on the Animate tab, because they cost us more to make than their old price of 25. Every other price is the same. If a page you opened before the change still shows 25, Generate asks you to refresh first and takes no tokens.',
+      },
+    ],
+  },
+  {
     version: '0.6.3',
     date: 'OCT 24, 2026',
     title: 'SMARTER UPLOADS',

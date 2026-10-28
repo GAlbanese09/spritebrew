@@ -306,6 +306,24 @@ export async function POST(request: Request) {
   const idempotencyKey = body.idempotencyKey as string;
   const jobId = await deriveJobId(userId, idempotencyKey);
 
+  // replay-first 001: a repeated request (the same idempotency key, so the same
+  // job id) is answered here, before the admission, the free-tier count and the
+  // debit, so it is never charged. A failed read carries on as before; the late
+  // check below still guards, and refunds this request's own debit.
+  try {
+    const kv = (process.env as Record<string, unknown>).SPRITEBREW_KV as
+      { get: (k: string) => Promise<string | null> } | undefined;
+    if (kv && typeof kv.get === 'function' && (await kv.get(`job:${jobId}`))) {
+      // No admission records this request, so this line is its trace; the job
+      // id finds the first request's admission.
+      console.log(JSON.stringify({ source: 'generate', event: 'replay_before_admission', jobId }));
+      return new Response(
+        JSON.stringify({ jobId, replayed: true }),
+        { status: 202, headers: { 'content-type': 'application/json' } }
+      );
+    }
+  } catch { /* carry on: the late check guards */ }
+
   // Money paused (n1-ledger 005 section 4): no fresh generation starts, so
   // nothing is debited. S0's admission record replaces the pause read: zero
   // rows is the paused answer, and the record is completed in the finally,
@@ -422,10 +440,67 @@ export async function POST(request: Request) {
           put: (k: string, v: string, opts?: unknown) => Promise<void>;
         };
 
-        // Request-side idempotency: same jobId already exists → return it without re-enqueue.
+        // Request-side idempotency. After replay-first's early check this fires
+        // whenever the early read missed or failed and this read sees the job:
+        // an identical request running at the same time, or a stale or failed
+        // early read of an older job. It never writes job:<jobId>, which belongs
+        // to the request that got there first. The alarm never throws, so this
+        // branch cannot reach the catch below, which writes it.
+        //
+        // It acts on what the debit did, not on its `success`, which the
+        // fail-open paths answer with nothing debited (replay-first 007, Second
+        // 101), and it never credits (replay-first 012, Second 104). `debited`
+        // 'yes' means this request's balance write resolved, not that it took
+        // tokens of its own: the debit reads and writes the balance with no
+        // compare-and-set, so two overlapping identical requests can both
+        // answer 'yes' for one net charge, and crediting one would make the job
+        // free. So a debit held ('yes') or possibly held ('unknown') becomes
+        // this request's own obligation: an alarm, settled by hand from its
+        // evidence. Each alarm is keyed on this request's refund key, so two
+        // requests' debts for one job, or a consumer alarm for the first
+        // request's job, keep a row each.
         const existing = await kv.get(`job:${jobId}`);
         if (existing) {
-          outcome = 'replay (202, no new job)';
+          const refundKey = `refund:${requestId}`;
+          let alarm: { reason: string; balanceWritten?: boolean; detail?: string } | undefined;
+          if (debitResult.debited === 'yes') {
+            alarm = {
+              reason: 'replay_debit_unsettled',
+              detail: 'debit acknowledged; not credited automatically: an overlapping debit cannot be excluded',
+            };
+            outcome = 'replay after debit (202, held for settlement)';
+          } else if (debitResult.debited === 'unknown') {
+            alarm = { reason: 'debit_uncertain', detail: 'debit balance write threw; it may have landed' };
+            outcome = 'replay after debit (202, debit uncertain)';
+          } else {
+            outcome = 'replay (202, nothing debited)';
+          }
+          if (alarm) {
+            const alarmed = await recordUnrefundedAlarm({
+              userId,
+              jobId,
+              tokenCost,
+              reason: alarm.reason,
+              requestId,
+              idempotencyKey: refundKey,
+              obligationKey: refundKey,
+              balanceWritten: alarm.balanceWritten,
+              detail: alarm.detail,
+            });
+            if (!alarmed) {
+              // The record of last resort. No email, no token.
+              console.error(JSON.stringify({
+                source: 'generate',
+                event: 'unrefunded_alarm_not_written',
+                reason: alarm.reason,
+                jobId,
+                userId,
+                tokenCost,
+                requestId,
+                balanceWritten: alarm.balanceWritten,
+              }));
+            }
+          }
           return new Response(
             JSON.stringify({ jobId, replayed: true }),
             { status: 202, headers: { 'content-type': 'application/json' } }

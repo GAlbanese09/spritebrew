@@ -60,6 +60,13 @@ export async function recordUnrefundedAlarm(args: {
   idempotencyKey?: string;
   balanceWritten?: boolean;
   detail?: string;
+  /** One debt among several for the same job, such as one replaying request's
+   *  own refund (`refund:{requestId}`). Set, the dedupe key is
+   *  `<jobId>:<obligationKey>:generation.unrefunded`, so each debt keeps its
+   *  own row and readback (replay-first 007, Second 101 P2-B). Unset, the key
+   *  stays `<jobId>:generation.unrefunded`, the job-level identity the route's
+   *  catch and the consumer's dead-letter alarm share. */
+  obligationKey?: string;
 }): Promise<boolean> {
   try {
     const env = process.env as Record<string, unknown>;
@@ -71,7 +78,10 @@ export async function recordUnrefundedAlarm(args: {
     const eventId = crypto.randomUUID();
     const occurredAtMs = Date.now();
     const environment = typeof env.APP_ENV === 'string' && env.APP_ENV ? env.APP_ENV : 'unknown';
-    const dedupeKey = `${args.jobId ?? `pages:${eventId}`}:generation.unrefunded`;
+    const subject = args.jobId ?? `pages:${eventId}`;
+    const dedupeKey = args.obligationKey
+      ? `${subject}:${args.obligationKey}:generation.unrefunded`
+      : `${subject}:generation.unrefunded`;
     const canonical = {
       schemaVersion: 1,
       eventId,

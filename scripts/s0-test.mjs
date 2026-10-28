@@ -257,8 +257,8 @@ check('generate paused -> admission and end lines with outcome paused', only(lin
 reset(); seedBalance(USER, 100); kvMap.set(`job:${expectJob}`, JSON.stringify({ status: 'pending', userId: USER }));
 res = await R.generate.POST(genReq(tok));
 row = only(admissionRows());
-check('generate replay branch -> 202 replayed, admission completed, end outcome replay', res.status === 202 && (await json(res))?.replayed === true
-  && row?.completed_at_ms !== null && only(lines('end'))?.outcome === 'replay (202, no new job)');
+check('generate replay branch -> 202 replayed before any admission: no admission row, no end line, nothing debited', res.status === 202 && (await json(res))?.replayed === true
+  && admissionRows().length === 0 && lines('end').length === 0 && balanceOf(USER) === 100);
 
 reset(); seedBalance(USER, 0);
 res = await R.generate.POST(genReq(tok));

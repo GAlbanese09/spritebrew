@@ -300,6 +300,12 @@ export interface DebitResult {
   success: boolean;
   balance: number;
   required?: number;
+  /** What this call did to the balance. 'yes': the balance write resolved, or
+   *  this key's debit was already recorded. 'no': no balance write was tried.
+   *  'unknown': the balance write itself threw, so it may have landed.
+   *  `success` is not evidence: the fail-open paths answer success too
+   *  (replay-first 007, Second 101 P2-A). */
+  debited: 'yes' | 'no' | 'unknown';
 }
 
 /**
@@ -314,15 +320,18 @@ export async function debitTokens(
   ctx?: TxContext
 ): Promise<DebitResult> {
   const kv = getKV();
-  if (!kv) return { success: true, balance: 0 }; // Fail open
+  if (!kv) return { success: true, balance: 0, debited: 'no' }; // Fail open
 
+  // How far the balance write got, for the catch's `debited`.
+  let stage: 'before' | 'writing' | 'written' = 'before';
   try {
     // Idempotency check
     const idemKey = idempotencyKey(idempotencyKeyValue);
     const existing = await kv.get(idemKey);
     if (existing) {
+      stage = 'written';
       const balance = await getTokenBalance(userId);
-      return { success: true, balance };
+      return { success: true, balance, debited: 'yes' };
     }
 
     // Ensure balance exists (lazy init)
@@ -336,7 +345,7 @@ export async function debitTokens(
     }
 
     if (record.balance < amount) {
-      return { success: false, balance: record.balance, required: amount };
+      return { success: false, balance: record.balance, required: amount, debited: 'no' };
     }
 
     const newBalance = record.balance - amount;
@@ -344,7 +353,9 @@ export async function debitTokens(
     record.balance = newBalance;
     record.last_updated = now;
 
+    stage = 'writing';
     await kv.put(`token_balance:${userId}`, JSON.stringify(record));
+    stage = 'written';
     await kv.put(idemKey, '1', { expirationTtl: IDEMPOTENCY_TTL });
     await writeTx(
       kv,
@@ -359,10 +370,11 @@ export async function debitTokens(
       ctx
     );
 
-    return { success: true, balance: newBalance };
+    return { success: true, balance: newBalance, debited: 'yes' };
   } catch (err) {
     if (err instanceof MoneyPausedError) throw err;
-    return { success: true, balance: 0 }; // Fail open
+    const debited = stage === 'before' ? 'no' : stage === 'writing' ? 'unknown' : 'yes';
+    return { success: true, balance: 0, debited }; // Fail open
   }
 }
 

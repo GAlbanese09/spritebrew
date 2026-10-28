@@ -442,38 +442,59 @@ export async function POST(request: Request) {
 
         // Request-side idempotency. After replay-first's early check this fires
         // only when the same job was written after that check, by an identical
-        // request running at the same time. This request was debited, so it
-        // credits its own debit back, and it never writes job:<jobId>, which
+        // request running at the same time. It never writes job:<jobId>, which
         // belongs to the request that got there first. Neither credit nor alarm
         // throws, so this branch cannot reach the catch below, which writes it.
+        //
+        // replay-first 007 (Second 101): it acts on what the debit did, not on
+        // its `success`, which the fail-open paths answer with nothing debited.
+        // A debit that landed is credited back. One that may have landed is not
+        // credited, since that could pay out tokens never taken; it goes to an
+        // alarm, and George settles it from the balance and rows. Each alarm is
+        // keyed on this request's refund key, so two requests' debts for one
+        // job, or a consumer alarm for the first request's job, keep a row each.
         const existing = await kv.get(`job:${jobId}`);
         if (existing) {
           const refundKey = `refund:${requestId}`;
-          const refund = await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey, txCtx);
-          if (!refund.success) {
+          let alarm: { reason: string; balanceWritten?: boolean; detail?: string } | undefined;
+          if (debitResult.debited === 'yes') {
+            const refund = await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey, txCtx);
+            if (!refund.success) {
+              alarm = { reason: 'refund_credit_failed', balanceWritten: refund.balanceWritten === true };
+            }
+            outcome = refund.success ? 'replay after debit (202, refunded)' : 'replay after debit (202, refund owed)';
+          } else if (debitResult.debited === 'unknown') {
+            alarm = { reason: 'debit_uncertain', detail: 'debit balance write threw; it may have landed' };
+            outcome = 'replay after debit (202, debit uncertain)';
+          } else {
+            outcome = 'replay (202, nothing debited)';
+          }
+          if (alarm) {
             const alarmed = await recordUnrefundedAlarm({
               userId,
               jobId,
               tokenCost,
-              reason: 'refund_credit_failed',
+              reason: alarm.reason,
               requestId,
               idempotencyKey: refundKey,
-              balanceWritten: refund.balanceWritten === true,
+              obligationKey: refundKey,
+              balanceWritten: alarm.balanceWritten,
+              detail: alarm.detail,
             });
             if (!alarmed) {
               // The record of last resort. No email, no token.
               console.error(JSON.stringify({
                 source: 'generate',
                 event: 'unrefunded_alarm_not_written',
+                reason: alarm.reason,
                 jobId,
                 userId,
                 tokenCost,
                 requestId,
-                balanceWritten: refund.balanceWritten === true,
+                balanceWritten: alarm.balanceWritten,
               }));
             }
           }
-          outcome = refund.success ? 'replay after debit (202, refunded)' : 'replay after debit (202, refund owed)';
           return new Response(
             JSON.stringify({ jobId, replayed: true }),
             { status: 202, headers: { 'content-type': 'application/json' } }

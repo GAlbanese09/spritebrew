@@ -306,6 +306,24 @@ export async function POST(request: Request) {
   const idempotencyKey = body.idempotencyKey as string;
   const jobId = await deriveJobId(userId, idempotencyKey);
 
+  // replay-first 001: a repeated request (the same idempotency key, so the same
+  // job id) is answered here, before the admission, the free-tier count and the
+  // debit, so it is never charged. A failed read carries on as before; the late
+  // check below still guards, and refunds this request's own debit.
+  try {
+    const kv = (process.env as Record<string, unknown>).SPRITEBREW_KV as
+      { get: (k: string) => Promise<string | null> } | undefined;
+    if (kv && typeof kv.get === 'function' && (await kv.get(`job:${jobId}`))) {
+      // No admission records this request, so this line is its trace; the job
+      // id finds the first request's admission.
+      console.log(JSON.stringify({ source: 'generate', event: 'replay_before_admission', jobId }));
+      return new Response(
+        JSON.stringify({ jobId, replayed: true }),
+        { status: 202, headers: { 'content-type': 'application/json' } }
+      );
+    }
+  } catch { /* carry on: the late check guards */ }
+
   // Money paused (n1-ledger 005 section 4): no fresh generation starts, so
   // nothing is debited. S0's admission record replaces the pause read: zero
   // rows is the paused answer, and the record is completed in the finally,
@@ -422,10 +440,40 @@ export async function POST(request: Request) {
           put: (k: string, v: string, opts?: unknown) => Promise<void>;
         };
 
-        // Request-side idempotency: same jobId already exists → return it without re-enqueue.
+        // Request-side idempotency. After replay-first's early check this fires
+        // only when the same job was written after that check, by an identical
+        // request running at the same time. This request was debited, so it
+        // credits its own debit back, and it never writes job:<jobId>, which
+        // belongs to the request that got there first. Neither credit nor alarm
+        // throws, so this branch cannot reach the catch below, which writes it.
         const existing = await kv.get(`job:${jobId}`);
         if (existing) {
-          outcome = 'replay (202, no new job)';
+          const refundKey = `refund:${requestId}`;
+          const refund = await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey, txCtx);
+          if (!refund.success) {
+            const alarmed = await recordUnrefundedAlarm({
+              userId,
+              jobId,
+              tokenCost,
+              reason: 'refund_credit_failed',
+              requestId,
+              idempotencyKey: refundKey,
+              balanceWritten: refund.balanceWritten === true,
+            });
+            if (!alarmed) {
+              // The record of last resort. No email, no token.
+              console.error(JSON.stringify({
+                source: 'generate',
+                event: 'unrefunded_alarm_not_written',
+                jobId,
+                userId,
+                tokenCost,
+                requestId,
+                balanceWritten: refund.balanceWritten === true,
+              }));
+            }
+          }
+          outcome = refund.success ? 'replay after debit (202, refunded)' : 'replay after debit (202, refund owed)';
           return new Response(
             JSON.stringify({ jobId, replayed: true }),
             { status: 202, headers: { 'content-type': 'application/json' } }

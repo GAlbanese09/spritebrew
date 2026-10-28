@@ -1,7 +1,8 @@
 export const runtime = 'edge';
 
 import { getAuthedUserId, type AuthMessages } from '@/lib/edgeAuth';
-import { getTokenBalance, readBalanceStrict } from '@/lib/tokenBalance';
+import { getTokenBalance, hasUserPaid, readBalanceStrict } from '@/lib/tokenBalance';
+import { getAccountStatus } from '@/lib/accountLock';
 import { MoneyPausedError, UPDATING_MESSAGE, isMoneyPaused } from '@/lib/moneyPause';
 import { isAdminUserServer } from '@/lib/adminIds';
 
@@ -21,7 +22,7 @@ const AUTH_MESSAGES: AuthMessages = {
 // cannot be known, never a guessed number. Only `?purchase=1` also reads the
 // money pause, as `moneyPaused`, failing closed (a failed read answers true).
 // Neither changes anything, and no money path reads them. Without the flag
-// the route is unchanged.
+// the route answers the balance, the caller's admin flag and `hasPaid`.
 
 export async function GET(request: Request) {
   const authResult = await getAuthedUserId(request, AUTH_MESSAGES);
@@ -49,11 +50,18 @@ export async function GET(request: Request) {
     }
     throw err;
   }
+  // Whether the account has ever paid, for the low-balance prompt (has-paid 001).
+  // Read-only. A refund-locked or disputed account answers false, and so does a
+  // failed flag read; a failed status read answers `active`, accountLock's default.
+  const [paid, status] = await Promise.all([
+    hasUserPaid(authResult.userId),
+    getAccountStatus(authResult.userId),
+  ]);
   return Response.json({
     success: true,
     balance,
     // The caller's own admin flag (cost visibility); no id reaches the client.
     isAdmin: isAdminUserServer(authResult.userId),
-    tokenCosts: { fast: 3, plus: 10, pro: 40, animStandard: 15, animExpensive: 50 },
+    hasPaid: paid && status === 'active',
   });
 }

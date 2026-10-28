@@ -304,7 +304,10 @@ export interface DebitResult {
    *  this key's debit was already recorded. 'no': no balance write was tried.
    *  'unknown': the balance write itself threw, so it may have landed.
    *  `success` is not evidence: the fail-open paths answer success too
-   *  (replay-first 007, Second 101 P2-A). */
+   *  (replay-first 007, Second 101 P2-A). And 'yes' is a write
+   *  acknowledgement, not proof of a net decrement: the read and the write
+   *  are not atomic, so two overlapping debits can both answer 'yes' for one
+   *  net charge (replay-first 012, Second 104). */
   debited: 'yes' | 'no' | 'unknown';
 }
 

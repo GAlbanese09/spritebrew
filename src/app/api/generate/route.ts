@@ -441,28 +441,34 @@ export async function POST(request: Request) {
         };
 
         // Request-side idempotency. After replay-first's early check this fires
-        // only when the same job was written after that check, by an identical
-        // request running at the same time. It never writes job:<jobId>, which
-        // belongs to the request that got there first. Neither credit nor alarm
-        // throws, so this branch cannot reach the catch below, which writes it.
+        // whenever the early read missed or failed and this read sees the job:
+        // an identical request running at the same time, or a stale or failed
+        // early read of an older job. It never writes job:<jobId>, which belongs
+        // to the request that got there first. The alarm never throws, so this
+        // branch cannot reach the catch below, which writes it.
         //
-        // replay-first 007 (Second 101): it acts on what the debit did, not on
-        // its `success`, which the fail-open paths answer with nothing debited.
-        // A debit that landed is credited back. One that may have landed is not
-        // credited, since that could pay out tokens never taken; it goes to an
-        // alarm, and George settles it from the balance and rows. Each alarm is
-        // keyed on this request's refund key, so two requests' debts for one
-        // job, or a consumer alarm for the first request's job, keep a row each.
+        // It acts on what the debit did, not on its `success`, which the
+        // fail-open paths answer with nothing debited (replay-first 007, Second
+        // 101), and it never credits (replay-first 012, Second 104). `debited`
+        // 'yes' means this request's balance write resolved, not that it took
+        // tokens of its own: the debit reads and writes the balance with no
+        // compare-and-set, so two overlapping identical requests can both
+        // answer 'yes' for one net charge, and crediting one would make the job
+        // free. So a debit held ('yes') or possibly held ('unknown') becomes
+        // this request's own obligation: an alarm, settled by hand from its
+        // evidence. Each alarm is keyed on this request's refund key, so two
+        // requests' debts for one job, or a consumer alarm for the first
+        // request's job, keep a row each.
         const existing = await kv.get(`job:${jobId}`);
         if (existing) {
           const refundKey = `refund:${requestId}`;
           let alarm: { reason: string; balanceWritten?: boolean; detail?: string } | undefined;
           if (debitResult.debited === 'yes') {
-            const refund = await creditTokens(userId, tokenCost, 'generation_failed_refund', refundKey, txCtx);
-            if (!refund.success) {
-              alarm = { reason: 'refund_credit_failed', balanceWritten: refund.balanceWritten === true };
-            }
-            outcome = refund.success ? 'replay after debit (202, refunded)' : 'replay after debit (202, refund owed)';
+            alarm = {
+              reason: 'replay_debit_unsettled',
+              detail: 'debit acknowledged; not credited automatically: an overlapping debit cannot be excluded',
+            };
+            outcome = 'replay after debit (202, held for settlement)';
           } else if (debitResult.debited === 'unknown') {
             alarm = { reason: 'debit_uncertain', detail: 'debit balance write threw; it may have landed' };
             outcome = 'replay after debit (202, debit uncertain)';

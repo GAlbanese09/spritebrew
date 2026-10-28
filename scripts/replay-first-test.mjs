@@ -3,14 +3,20 @@
 // Offline tests for replay-first 001: a repeated generate request (the same
 // idempotency key, so the same job id) is answered with 202 `replayed: true`
 // before the admission, the free-tier count and the debit. The late check still
-// guards two identical requests at once: the second credits back its own debit,
-// writes an alarm row if that credit fails, and never writes job:<jobId>. Run
-// from the repo root: `node scripts/replay-first-test.mjs`.
+// guards two identical requests at once: the second holds its debit for
+// settlement in an alarm row, and never writes job:<jobId>. Run from the repo
+// root: `node scripts/replay-first-test.mjs`.
 //
 // replay-first 007 (Second 101): the late branch acts on what `debitTokens`
 // says it did to the balance (`debited`), not on its `success`, and each refund
 // debt keeps its own alarm row (`obligationKey`). The helpers are bundled too,
 // for their own answers.
+//
+// replay-first 012 (Second 104): the late branch never credits. A debit it
+// holds becomes one `replay_debit_unsettled` row for that request, settled by
+// hand, because a resolved balance write is not proof of a debit of its own:
+// two overlapping identical requests both answer 'yes' for one net charge
+// (section 8, with held reads).
 //
 // Built the way s0-test.mjs builds the route: LEDGER_DB and EVENTS_DB are real
 // SQLite databases (node:sqlite, in memory) from the consumer repo's migrations;
@@ -77,9 +83,10 @@ function d1(db) {
 }
 // `kvGetHook(k)` runs before each get: it may throw (a failed read), change
 // kvMap (another request's write landing between two reads), or return MISS (a
-// stale read that does not see a record already there). `kvPutHook(k, v)` runs
-// before each put: it may throw before applying, or return THROW_AFTER to apply
-// and then throw.
+// stale read that does not see a record already there), or return a promise,
+// awaited before the read, to hold the read (section 8; it may resolve to MISS).
+// `kvPutHook(k, v)` runs before each put: it may throw before applying, or
+// return THROW_AFTER to apply and then throw.
 const MISS = Symbol('miss');
 const THROW_AFTER = Symbol('throw after');
 let ledger, events, kvMap, kvGetHook, kvPutHook, calls, sends, logs;
@@ -97,7 +104,9 @@ function reset() {
     SPRITEBREW_KV: {
       get: async (k) => {
         calls.push(`kv.get ${k}`);
-        if (kvGetHook(k) === MISS) return null;
+        let held = kvGetHook(k);
+        if (held && typeof held.then === 'function') held = await held;
+        if (held === MISS) return null;
         return kvMap.has(k) ? kvMap.get(k) : null;
       },
       getWithMetadata: async (k) => ({ value: kvMap.get(k) ?? null, metadata: null }),
@@ -163,6 +172,24 @@ const admissions = () => ledger.prepare('SELECT * FROM money_admissions').all().
 const alarms = () => events.prepare("SELECT COUNT(*) AS n FROM events WHERE event_name = 'generation.unrefunded'").get().n;
 const debits = () => [...kvMap.keys()].filter((k) => k.startsWith('token_idempotency:gen:')).length;
 const jobPuts = () => calls.filter((c) => c === `kv.put ${JOB_KEY}`).length;
+const txRows = (type) => [...kvMap.entries()].filter(([k]) => k.startsWith(`token_tx:${USER}:`))
+  .map(([, v]) => JSON.parse(v)).filter((t) => t.type === type);
+const alarmRows = () => events.prepare(
+  "SELECT dedupe_key, job_id, request_id, error_code, event_json FROM events WHERE event_name = 'generation.unrefunded' ORDER BY occurred_at_ms, dedupe_key")
+  .all().map((r) => ({ ...r, extra: JSON.parse(r.event_json).extra }));
+const requestIds = () => admissions().map((a) => JSON.parse(a.meta_json).requestId);
+const lastResort = () => logs.filter((l) => l.includes('unrefunded_alarm_not_written'));
+// replay-first 012: a late replay that debited holds the debit in one
+// replay_debit_unsettled row, keyed on its own refund key, and never credits.
+const HELD = 'replay after debit (202, held for settlement)';
+const HELD_DETAIL = 'debit acknowledged; not credited automatically: an overlapping debit cannot be excluded';
+const heldRowsFor = (rids) => {
+  const rows = alarmRows().filter((x) => x.error_code === 'replay_debit_unsettled');
+  return rows.length === rids.length && new Set(rids).size === rids.length && rids.every((id) => rows.some((x) =>
+    x.request_id === id && x.job_id === JOB && x.extra.reason === 'replay_debit_unsettled'
+    && x.extra.idempotencyKey === `refund:${id}` && x.dedupe_key === `${JOB}:refund:${id}:generation.unrefunded`
+    && x.extra.detail === HELD_DETAIL && !('balanceWritten' in x.extra)));
+};
 const genReq = (idem = IDEM) => new Request('https://dev.spritebrew.pages.dev/api/generate', {
   method: 'POST', headers: { Authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
   body: JSON.stringify({ prompt: 'a knight', style: 'rd_fast__no_style', width: 64, height: 64, idempotencyKey: idem }),
@@ -214,9 +241,10 @@ reset(); seedBalance(START);
   kvGetHook = (k) => { if (k === JOB_KEY && ++jobReads === 1) throw new Error('stub: KV get failed'); };
   kvMap.set(JOB_KEY, FIRST);
   r = await post();
-  check('a failed early read with the job already there: the late check answers 202 replayed and refunds',
-    r.res.status === 202 && r.body?.replayed === true && balance() === START && kvMap.get(JOB_KEY) === FIRST
-    && sends.length === 0 && endLines()[0]?.outcome === 'replay after debit (202, refunded)');
+  check('a failed early read with the job already there: the late check answers 202 replayed and holds the debit: no credit row, the balance debited, one held row, outcome held',
+    r.res.status === 202 && r.body?.replayed === true && balance() === START - cost && txRows('credit').length === 0
+    && alarms() === 1 && heldRowsFor(requestIds()) && kvMap.get(JOB_KEY) === FIRST
+    && sends.length === 0 && endLines()[0]?.outcome === HELD);
 }
 
 // ── 3. Two identical requests at once: the late check sees the first's job ──
@@ -228,15 +256,19 @@ reset(); seedBalance(START);
   kvGetHook = (k) => { if (k === JOB_KEY && ++jobReads === 2) kvMap.set(JOB_KEY, FIRST); };
   r = await post();
   check('concurrent: 202 replayed true with the same job id', r.res.status === 202 && r.body?.jobId === JOB && r.body?.replayed === true);
-  check('concurrent: admitted and debited once, then refunded, so the balance is back',
-    admissions().length === 1 && debits() === 1 && balance() === START && kvMap.has(`token_idempotency:refund:${admissions()[0] && JSON.parse(admissions()[0].meta_json).requestId}`));
-  check('concurrent: job:<jobId> unchanged and never written; nothing sent; no alarm',
-    kvMap.get(JOB_KEY) === FIRST && jobPuts() === 0 && sends.length === 0 && alarms() === 0);
-  check('concurrent: the admission is completed, outcome "replay after debit (202, refunded)", no replay_before_admission line',
-    admissions()[0]?.completed_at_ms !== null && endLines()[0]?.outcome === 'replay after debit (202, refunded)' && replayLines().length === 0);
+  check('concurrent: admitted and debited once, not credited: the balance stays debited, no credit row and no refund key',
+    admissions().length === 1 && debits() === 1 && balance() === START - cost && txRows('credit').length === 0
+    && ![...kvMap.keys()].some((k) => k.startsWith('token_idempotency:refund:')));
+  check(`concurrent: job:<jobId> unchanged and never written; nothing sent; one replay_debit_unsettled row, with this request's id and refund key`,
+    kvMap.get(JOB_KEY) === FIRST && jobPuts() === 0 && sends.length === 0 && alarms() === 1 && heldRowsFor(requestIds()));
+  check('concurrent: the admission is completed, outcome "replay after debit (202, held for settlement)", no replay_before_admission line',
+    admissions()[0]?.completed_at_ms !== null && endLines()[0]?.outcome === HELD && replayLines().length === 0);
 }
 
-// ── 4. The same, with the refund credit failing ──
+// ── 4. The same, with a credit fault set ──
+//
+// replay-first 012: the late branch no longer tries a credit, so the fault
+// changes nothing here; the case is kept as a control.
 
 reset(); seedBalance(START); setFault('credit_throw_before_balance');
 {
@@ -244,10 +276,11 @@ reset(); seedBalance(START); setFault('credit_throw_before_balance');
   kvGetHook = (k) => { if (k === JOB_KEY && ++jobReads === 2) kvMap.set(JOB_KEY, FIRST); };
   r = await post();
   check('concurrent, the refund fails: 202 replayed true', r.res.status === 202 && r.body?.replayed === true);
-  check('concurrent, the refund fails: one alarm row, job:<jobId> unchanged and never written, nothing sent',
-    alarms() === 1 && kvMap.get(JOB_KEY) === FIRST && jobPuts() === 0 && sends.length === 0 && balance() === START - cost);
-  check('concurrent, the refund fails: outcome "replay after debit (202, refund owed)"',
-    admissions()[0]?.completed_at_ms !== null && endLines()[0]?.outcome === 'replay after debit (202, refund owed)');
+  check(`concurrent, the credit fault set (no credit is tried): one replay_debit_unsettled row with this request's id and refund key, no credit row, the balance debited, job:<jobId> unchanged and never written, nothing sent`,
+    alarms() === 1 && heldRowsFor(requestIds()) && txRows('credit').length === 0 && kvMap.get(JOB_KEY) === FIRST
+    && jobPuts() === 0 && sends.length === 0 && balance() === START - cost);
+  check('concurrent, the credit fault set (no credit is tried): outcome "replay after debit (202, held for settlement)"',
+    admissions()[0]?.completed_at_ms !== null && endLines()[0]?.outcome === HELD);
   check('concurrent, the refund fails: no last-resort line (the alarm was written)',
     !logs.some((l) => l.includes('unrefunded_alarm_not_written')));
 }
@@ -285,13 +318,6 @@ check('a new key: 202 with its own job id, admitted, debited, counted and enqueu
 // job:<jobId> is byte-identical to that record and never written, that nothing
 // was sent, and the admission's outcome.
 
-const txRows = (type) => [...kvMap.entries()].filter(([k]) => k.startsWith(`token_tx:${USER}:`))
-  .map(([, v]) => JSON.parse(v)).filter((t) => t.type === type);
-const alarmRows = () => events.prepare(
-  "SELECT dedupe_key, job_id, request_id, error_code, event_json FROM events WHERE event_name = 'generation.unrefunded' ORDER BY occurred_at_ms, dedupe_key")
-  .all().map((r) => ({ ...r, extra: JSON.parse(r.event_json).extra }));
-const requestIds = () => admissions().map((a) => JSON.parse(a.meta_json).requestId);
-const lastResort = () => logs.filter((l) => l.includes('unrefunded_alarm_not_written'));
 // The early read misses on each request's first read of the job; the late read sees it.
 function lateSeesFirst() {
   kvMap.set(JOB_KEY, FIRST);
@@ -320,11 +346,11 @@ reset(); seedBalance(cost);
 {
   kvGetHook = lateSeesFirst();
   r = await post();
-  check('P2-A 2, a real debit to zero: refunded, the balance back to the cost, outcome refunded',
-    r.res.status === 202 && r.body?.replayed === true && balance() === cost
-    && endLines()[0]?.outcome === 'replay after debit (202, refunded)');
-  check('P2-A 2: one debit row, one credit row, no alarm; job:<jobId> untouched, nothing sent',
-    txRows('debit').length === 1 && txRows('credit').length === 1 && alarms() === 0 && untouched());
+  check('P2-A 2, a real debit to zero: held, not credited: the balance stays 0, outcome held',
+    r.res.status === 202 && r.body?.replayed === true && balance() === 0
+    && endLines()[0]?.outcome === HELD);
+  check(`P2-A 2: one debit row, no credit row, one replay_debit_unsettled row with this request's id and refund key; job:<jobId> untouched, nothing sent`,
+    txRows('debit').length === 1 && txRows('credit').length === 0 && alarms() === 1 && heldRowsFor(requestIds()) && untouched());
 }
 
 // 6.3 The balance write landed, the debit's idempotency put then threw.
@@ -333,9 +359,9 @@ reset(); seedBalance(START);
   kvGetHook = lateSeesFirst();
   kvPutHook = (k) => { if (isGenIdem(k)) throw new Error('stub: KV put failed'); };
   r = await post();
-  check('P2-A 3, the debit landed but its records did not: refunded, balance 100, no alarm, outcome refunded',
-    r.res.status === 202 && r.body?.replayed === true && balance() === START && alarms() === 0
-    && txRows('credit').length === 1 && endLines()[0]?.outcome === 'replay after debit (202, refunded)' && untouched());
+  check(`P2-A 3, the debit landed but its records did not: held, not credited: balance 95, no credit row, one replay_debit_unsettled row with this request's id and refund key, outcome held`,
+    r.res.status === 202 && r.body?.replayed === true && balance() === START - cost && alarms() === 1 && heldRowsFor(requestIds())
+    && txRows('credit').length === 0 && endLines()[0]?.outcome === HELD && untouched());
 }
 
 // 6.4 and 6.5 The balance put itself throws: after applying, and before.
@@ -390,28 +416,31 @@ for (const [label, hook, want] of [
 
 // ── 7. replay-first 007, P2-B: one alarm per obligation ──
 
-// 7.1 and 7.2 Two late replays for one job, each debited, each refund failing.
-for (const [n, fault, want, balanceWritten] of [
-  [7, 'credit_throw_before_balance', START - 2 * cost, false],
-  [8, 'credit_throw_after_balance', START, true],
+// 7.1 and 7.2 Two sequential late replays for one job, each debited and held
+// (replay-first 012). 7.2 sets a credit fault as the control: no credit is
+// tried, so the fault changes nothing.
+for (const [n, label, fault] of [
+  [7, 'two sequential late replays', null],
+  [8, 'the control, credit_throw_after_balance set (no credit is tried, so it changes nothing)', 'credit_throw_after_balance'],
 ]) {
-  reset(); seedBalance(START); setFault(fault);
+  reset(); seedBalance(START); if (fault) setFault(fault);
   kvGetHook = lateSeesFirst();
   const r1 = await post();
   const r2 = await post();
   const rows = alarmRows();
   const rids = requestIds();
   const keys = rids.map((id) => `refund:${id}`);
-  check(`P2-B ${n}, two failed late refunds (${fault}): both 202 replayed, both outcomes refund owed, balance ${want}`,
+  check(`P2-B ${n}, ${label}: both 202 replayed, both outcomes held, balance ${START - 2 * cost}`,
     r1.res.status === 202 && r2.res.status === 202 && r1.body?.replayed === true && r2.body?.replayed === true
-    && endLines().length === 2 && endLines().every((e) => e.outcome === 'replay after debit (202, refund owed)')
-    && balance() === want && untouched(2));
-  check(`P2-B ${n}: two rows for the job, each with its own request id, refund key and dedupe key, balanceWritten ${balanceWritten}`,
+    && endLines().length === 2 && endLines().every((e) => e.outcome === HELD)
+    && balance() === START - 2 * cost && untouched(2));
+  check(`P2-B ${n}: two replay_debit_unsettled rows for the job, each with its own request id, refund key and dedupe key, no balanceWritten, no credit row`,
     rows.length === 2 && rids.length === 2 && rids[0] !== rids[1] && rows.every((x) => x.job_id === JOB)
     && JSON.stringify(rows.map((x) => x.request_id).sort()) === JSON.stringify([...rids].sort())
     && JSON.stringify(rows.map((x) => x.extra.idempotencyKey).sort()) === JSON.stringify([...keys].sort())
     && JSON.stringify(rows.map((x) => x.dedupe_key).sort()) === JSON.stringify(keys.map((k) => `${JOB}:${k}:generation.unrefunded`).sort())
-    && rows.every((x) => x.extra.balanceWritten === balanceWritten && x.extra.reason === 'refund_credit_failed'));
+    && rows.every((x) => !('balanceWritten' in x.extra) && x.extra.reason === 'replay_debit_unsettled')
+    && heldRowsFor(rids) && txRows('credit').length === 0);
   check(`P2-B ${n}: no last-resort line`, lastResort().length === 0);
 }
 
@@ -422,11 +451,12 @@ reset(); seedBalance(START); setFault('credit_throw_before_balance');
   kvGetHook = lateSeesFirst();
   r = await post();
   const rows = alarmRows();
-  check('P2-B 9, a job-level row already there: the late replay still writes its own row (two rows), no last-resort line',
+  check('P2-B 9, a job-level row already there: the late replay still writes its own replay_debit_unsettled row (two rows), no credit row, the balance debited, no last-resort line, outcome held',
     first === true && r.res.status === 202 && rows.length === 2
     && rows.some((x) => x.dedupe_key === `${JOB}:generation.unrefunded`)
     && rows.some((x) => x.dedupe_key === `${JOB}:refund:${requestIds()[0]}:generation.unrefunded`)
-    && lastResort().length === 0 && endLines()[0]?.outcome === 'replay after debit (202, refund owed)' && untouched());
+    && heldRowsFor(requestIds()) && txRows('credit').length === 0 && balance() === START - cost
+    && lastResort().length === 0 && endLines()[0]?.outcome === HELD && untouched());
 }
 
 // 7.4 The same obligation twice dedupes.
@@ -449,6 +479,84 @@ reset();
   const rows = alarmRows();
   check('P2-B 11, no obligation key: the dedupe key is exactly <jobId>:generation.unrefunded, one row for two calls, both true',
     a === true && b === true && rows.length === 1 && rows[0].dedupe_key === `${JOB}:generation.unrefunded`);
+}
+
+// ── 8. replay-first 012, Second 104: two identical requests overlap ──
+//
+// Both requests start together and get their own request ids. Held reads set
+// the schedule: both early reads find no job (no MISS); then the debits read
+// the balance (8.1, both before either writes; 8.2, the second after the first
+// has landed); then the second late read waits for the first late reader's job
+// put. A is the request that writes the job, B the one that replays. A timer
+// releases any hold after 2 s, so a broken schedule fails its checks instead of
+// hanging the run, and says which hold it was.
+
+let timedOut = [];
+function barrier(n, label) {
+  let arrived = 0;
+  let release;
+  const all = new Promise((res) => { release = res; });
+  const timer = setTimeout(() => { timedOut.push(label); release(); }, 2_000);
+  return () => { if (++arrived === n) { clearTimeout(timer); release(); } return all; };
+}
+function deferred(label) {
+  let release;
+  const promise = new Promise((res) => { release = res; });
+  const timer = setTimeout(() => { timedOut.push(label); release(); }, 2_000);
+  return { promise, release: () => { clearTimeout(timer); release(); } };
+}
+
+for (const [label, overlap] of [['overlap (Second 104)', true], ['sequential control', false]]) {
+  reset(); seedBalance(START); timedOut = [];
+  const BAL = `token_balance:${USER}`;
+  const early = barrier(2, `${label}: the early reads`);
+  const bothDebits = overlap ? barrier(2, `${label}: the debits' balance reads`) : null;
+  const firstDebit = overlap ? null : deferred(`${label}: the first debit's balance put`);
+  const jobPut = deferred(`${label}: A's job put`);
+  let jobReads = 0, balanceReads = 0, aRecord = null;
+  const balancePuts = [];
+  kvGetHook = (k) => {
+    if (k === JOB_KEY) {
+      const n = ++jobReads;
+      if (n <= 2) return early();          // both early reads, released together
+      if (n === 4) return jobPut.promise;  // B's late read waits for A's job put
+      return undefined;                    // A's late read
+    }
+    if (k === BAL) {
+      const n = ++balanceReads;
+      if (overlap && n <= 2) return bothDebits();
+      if (!overlap && n === 2) return firstDebit.promise;
+    }
+    return undefined;
+  };
+  kvPutHook = (k, v) => {
+    if (k === BAL) { balancePuts.push(JSON.parse(v).balance); if (balancePuts.length === 1) firstDebit?.release(); }
+    if (k === JOB_KEY) { aRecord = v; jobPut.release(); }
+  };
+  const both = await Promise.all([post(), post()]);
+  const A = both.find((x) => x.body && !x.body.replayed);
+  const B = both.find((x) => x.body?.replayed === true);
+  const rids = requestIds();
+  const aRid = aRecord ? JSON.parse(aRecord).requestId : undefined;
+  const bRid = rids.find((id) => id !== aRid);
+  const endOf = (id) => endLines().find((e) => e.request_id === id)?.outcome;
+  const want = overlap ? START - cost : START - 2 * cost;
+  check(`${label}: both early reads found no job; the debits ${overlap ? 'both read 100 and each wrote 95' : 'ran in turn, 100 to 95, then 95 to 90'}; two request ids; no hold timed out`,
+    timedOut.length === 0 && jobReads === 4 && replayLines().length === 0 && rids.length === 2 && rids[0] !== rids[1]
+    && JSON.stringify(balancePuts.slice(0, 2)) === JSON.stringify(overlap ? [95, 95] : [95, 90]));
+  check(`${label}: balance ${want}, two debit rows, no credit row`,
+    balance() === want && txRows('debit').length === 2 && debits() === 2 && txRows('credit').length === 0);
+  check(`${label}: one job put and one send; A's record intact after B`,
+    jobPuts() === 1 && sends.length === 1 && sends[0]?.jobId === JOB && aRecord !== null
+    && kvMap.get(JOB_KEY) === aRecord && rids.includes(aRid) && JSON.parse(aRecord).status === 'pending');
+  check(`${label}: A answers 202 { jobId }, outcome "enqueued (202)"; B answers 202 replayed true, outcome held`,
+    A?.res.status === 202 && JSON.stringify(A?.body) === JSON.stringify({ jobId: JOB })
+    && B?.res.status === 202 && JSON.stringify(B?.body) === JSON.stringify({ jobId: JOB, replayed: true })
+    && endOf(aRid) === 'enqueued (202)' && endOf(bRid) === HELD
+    && admissions().length === 2 && admissions().every((a) => a.completed_at_ms !== null));
+  check(`${label}: exactly one replay_debit_unsettled row, with B's request id and B's refund key; no last-resort line`,
+    alarms() === 1 && bRid !== undefined && heldRowsFor([bRid]) && lastResort().length === 0);
+  if (timedOut.length) say('held reads released by the timer:', timedOut.join('; '));
 }
 
 say(`${pass} passed, ${fail} failed`);

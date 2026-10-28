@@ -16,8 +16,13 @@ import {
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
-import { finishedJob, type FinishedJob } from '@/lib/pollResume';
+import { type FinishedJob } from '@/lib/pollResume';
+import { finishJob, type JobResultIO } from '@/lib/jobResult';
+import { despillIfTransparent, decodedSize } from '@/lib/spriteUtils';
 import { StyleExamplesLightbox } from './StyleExamplesLightbox';
+
+/** The browser steps for finishing a job's result (see jobResult.ts). */
+const JOB_RESULT_IO: JobResultIO = { despill: despillIfTransparent, decodedSize };
 
 const EXAMPLE_PROMPTS = [
   'pixel art knight with sword',
@@ -66,6 +71,8 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
   const setCurrentSheetMetadata = useSpriteStore((s) => s.setCurrentSheetMetadata);
+  const setRescueInfo = useSpriteStore((s) => s.setRescueInfo);
+  const setOriginalCharacter = useSpriteStore((s) => s.setOriginalCharacter);
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
   const tokenBalance = useSpriteStore((s) => s.tokenBalance);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
@@ -106,8 +113,15 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   }, [userId, setTokenBalance, fetchBalance]);
 
   // Queue-and-poll integration. The hook auto-resumes a poll from
-  // localStorage on mount if a fresh-enough activeJob entry exists.
-  const poll = useGenerationPoll();
+  // localStorage on mount if a fresh-enough activeJob entry exists. A saved
+  // job it drops instead (another account's, or one too old) ends the
+  // Brewing state the form that sent it left on.
+  const poll = useGenerationPoll({
+    onDrop: () => {
+      setGenerating(false);
+      setGeneratingAction(null);
+    },
+  });
 
   // 1s click-debounce — guards against rapid double-clicks beyond the
   // existing isGenerating boolean (which has a one-render race window).
@@ -282,7 +296,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   // Poll-effect: react to terminal states from the queue path. A job resumed
   // here (after a reload, a return to /generate or a tab switch) carries the
   // context saved with it, so it writes its Recent entry, hints and style
-  // like one that never left this form.
+  // like one that never left this form; finishJob shows it by its own mode.
   useEffect(() => {
     if (poll.status === 'polling') {
       // Resume case — the hook fired startPolling on mount; mirror to the
@@ -291,29 +305,21 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       return;
     }
     if (poll.status === 'success' && poll.result) {
-      const dataUrl = `data:image/png;base64,${poll.result.resultBase64}`;
-      setGeneratedImage(dataUrl, dataUrl);
-      // The job's own entry, hints and style, from the context saved with
-      // it, whether this form sent it or resumed it. An Animate job finished
-      // here (the user picked this tab mid-job) takes the rescue fields as
-      // the status route reported them.
-      const { rescued, requestedWidth, requestedHeight, deliveredCellSize, deliveredFrames } = poll.result;
-      const rescueInfo = rescued ? { rescued, requestedWidth, requestedHeight, deliveredCellSize, deliveredFrames } : null;
-      const finished = finishedJob(poll.context, rescueInfo);
-      if (finished) {
-        setGenerationStyle(finished.style);
-        void fetchBalance();
-        onGenerated(dataUrl, finished.prompt, finished.style, finished.animate, poll.jobId);
-      } else {
-        // A job saved without its context, by the version before this one:
-        // onGenerated does not run, so drop the previous generation's style
-        // and hints rather than let /upload apply them to this image.
-        setGenerationStyle(null);
-        setCurrentSheetMetadata(null);
-      }
-      setGenerating(false);
-      setGeneratingAction(null);
-      poll.reset();
+      // The job's result by its own mode, the same in both forms (jobResult.ts):
+      // a Create sheet as delivered, clearing the previous animation's notice
+      // and character; an Animate job finished here (the user picked this tab
+      // mid-job) despilled and with its rescue notice, as the Animate form
+      // shows it. Then its Recent entry, hints and style.
+      const job = { result: poll.result, mode: poll.mode, context: poll.context, jobId: poll.jobId };
+      void finishJob(job, JOB_RESULT_IO, {
+        setRescueInfo, setOriginalCharacter, setGeneratedImage, setGenerationStyle, setCurrentSheetMetadata,
+        fetchBalance: () => { void fetchBalance(); },
+        onGenerated,
+      }).finally(() => {
+        setGenerating(false);
+        setGeneratingAction(null);
+        poll.reset();
+      });
       return;
     }
     if (poll.status === 'error' || poll.status === 'abandoned') {

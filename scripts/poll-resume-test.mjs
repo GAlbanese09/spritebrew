@@ -2,7 +2,8 @@
 //
 // Offline tests for src/lib/pollResume.ts: resumeDecision, when the
 // generation poll (src/hooks/useGenerationPoll.ts) resumes a saved job on
-// mount; parseJobContext, the click-time context saved with the job; and
+// mount, by its age and its account; parseJobContext, the click-time context
+// saved with the job; and
 // finishedJob, what a finished job writes from it, whichever form finishes
 // it. Run from the repo root: `node scripts/poll-resume-test.mjs`.
 // Bundles the module with esbuild into local/.poll-resume-test/ (gitignored).
@@ -50,6 +51,25 @@ check('a job from an earlier visit, exactly at the limit: resume',
   resumeDecision({ startedAt: LOADED - 9 * MIN }, LOADED + MIN, LOADED) === 'resume');
 check('a job saved the moment the page loaded counts as this session',
   resumeDecision({ startedAt: LOADED }, LOADED + 30 * MIN, LOADED) === 'resume');
+
+// A saved job belongs to the account that sent it (George's ruling, Oct 27):
+// another signed-in account drops it, however new it is.
+const A = { userId: 'user_a' };
+check("another account's job, started in this page session: drop",
+  resumeDecision({ startedAt: LOADED + MIN, ...A }, LOADED + 2 * MIN, LOADED, 'user_b') === 'drop');
+check("another account's job from an earlier visit, 5 minutes old: drop",
+  resumeDecision({ startedAt: LOADED - 4 * MIN, ...A }, LOADED + MIN, LOADED, 'user_b') === 'drop');
+check("the same account's job: decided by its age, as before",
+  resumeDecision({ startedAt: LOADED + MIN, ...A }, LOADED + 12 * MIN, LOADED, 'user_a') === 'resume' &&
+  resumeDecision({ startedAt: LOADED - 4 * MIN, ...A }, LOADED + MIN, LOADED, 'user_a') === 'resume' &&
+  resumeDecision({ startedAt: LOADED - 10 * MIN, ...A }, LOADED + MIN, LOADED, 'user_a') === 'drop');
+check('a job saved without a user id (by the version before): resumes for any account, as before',
+  resumeDecision({ startedAt: LOADED + MIN }, LOADED + 2 * MIN, LOADED, 'user_b') === 'resume' &&
+  resumeDecision({ startedAt: LOADED - 10 * MIN }, LOADED + MIN, LOADED, 'user_b') === 'drop');
+check('no user known yet (Clerk still loading): decided by its age, as before',
+  resumeDecision({ startedAt: LOADED + MIN, ...A }, LOADED + 2 * MIN, LOADED, undefined) === 'resume' &&
+  resumeDecision({ startedAt: LOADED + MIN, ...A }, LOADED + 2 * MIN, LOADED, null) === 'resume' &&
+  resumeDecision({ startedAt: LOADED - 10 * MIN, ...A }, LOADED + MIN, LOADED) === 'drop');
 
 // The click-time context saved with a job (history gap, HQ 2026-10-27-017):
 // kept when it fits the job's mode, copied field by field, else none.

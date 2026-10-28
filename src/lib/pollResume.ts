@@ -18,13 +18,22 @@ export const STALE_THRESHOLD_MS = 10 * 60 * 1_000;
  * resumed, however long the user spent on other pages: the form that
  * started it is gone, and nothing else will finish it ('resume'). With
  * nothing saved: 'none'.
+ *
+ * Another account's job (saved with its user id, found while a different
+ * account is signed in, as after a sign-out and another sign-in in this
+ * browser) is dropped, so this account never resumes it, gets its 403, or
+ * keeps its prompt in this browser (George's ruling, Oct 27). A job saved
+ * without a user id, by the version before this one, or found before the
+ * signed-in user is known, is decided as before.
  */
 export function resumeDecision(
-  saved: { startedAt: number } | null,
+  saved: { startedAt: number; userId?: string } | null,
   now: number,
-  pageLoadedAt: number
+  pageLoadedAt: number,
+  userId?: string | null
 ): 'none' | 'drop' | 'resume' {
   if (!saved) return 'none';
+  if (saved.userId && userId && saved.userId !== userId) return 'drop';
   if (saved.startedAt < pageLoadedAt && now - saved.startedAt > STALE_THRESHOLD_MS) return 'drop';
   return 'resume';
 }

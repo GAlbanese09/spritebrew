@@ -233,7 +233,7 @@ function stripeReq(evt) {
 }
 const checkoutEvent = (id, tokens = 100) => ({
   id, object: 'event', type: 'checkout.session.completed', api_version: '2026-03-25.dahlia', created: 1,
-  data: { object: { id: `cs_${id}`, object: 'checkout.session', payment_intent: null, amount_total: 499,
+  data: { object: { id: `cs_${id}`, object: 'checkout.session', payment_status: 'paid', payment_intent: null, amount_total: 499,
     metadata: { userId: USER, packId: 'starter', tokens: String(tokens) } } },
 });
 const json = async (res) => { try { return await res.clone().json(); } catch { return null; } };

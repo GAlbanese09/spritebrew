@@ -109,10 +109,11 @@ export async function POST(request: Request) {
 
     // A handler that throws leaves the event unmarked and answers 500, so
     // Stripe retries it; creditTokens keyed on event.id credits once.
+    let checkout: CheckoutResult | undefined;
     try {
       // ── checkout.session.completed ──
       if (event.type === 'checkout.session.completed') {
-        await handleCheckoutCompleted(event, kv);
+        checkout = await handleCheckoutCompleted(event, kv);
       }
 
       // ── charge.refunded ──
@@ -137,7 +138,9 @@ export async function POST(request: Request) {
       } catch { /* best effort */ }
     }
 
-    outcome = 'processed';
+    // A Checkout that is not paid is still marked: it is not an error, and a
+    // retry would not change it (paid-only 001).
+    outcome = checkout === 'not_paid' ? 'processed (not paid, no credit)' : 'processed';
     return Response.json({ received: true });
   } finally {
     await admission.complete(outcome);
@@ -146,21 +149,38 @@ export async function POST(request: Request) {
 
 // ── checkout.session.completed ──
 
-async function handleCheckoutCompleted(event: Stripe.Event, kv: KV | null): Promise<void> {
+/** What the Checkout handler did: credited, refused as not paid, or skipped
+ *  for bad metadata (logged, as before). Only 'not_paid' changes POST's outcome. */
+type CheckoutResult = 'credited' | 'not_paid' | 'skipped';
+
+async function handleCheckoutCompleted(event: Stripe.Event, kv: KV | null): Promise<CheckoutResult> {
   const session = event.data.object as Stripe.Checkout.Session;
+
+  // paid-only 001: credit only a paid Checkout. Card, Link, Cash App and Alipay
+  // arrive 'paid'; a delayed method (ACH, SEPA, bank transfer) arrives 'unpaid'
+  // and settles later, so crediting it here would credit before the money
+  // lands. Anything but 'paid', a missing status included, credits nothing,
+  // sets no flag and stores no record. A delayed method's credit would go in a
+  // checkout.session.async_payment_succeeded handler, which does not exist yet,
+  // so no delayed method may be turned on until it does.
+  if (session.payment_status !== 'paid') {
+    console.log(`[Stripe Webhook] Checkout not paid; no credit (status: ${session.payment_status ?? 'missing'}, session: ${session.id})`);
+    return 'not_paid';
+  }
+
   const userId = session.metadata?.userId;
   const packId = session.metadata?.packId;
   const tokensStr = session.metadata?.tokens;
 
   if (!userId || !packId || !tokensStr) {
     console.error('[Stripe Webhook] Missing metadata:', { userId, packId, tokensStr });
-    return;
+    return 'skipped';
   }
 
   const tokens = parseInt(tokensStr, 10);
   if (isNaN(tokens) || tokens <= 0) {
     console.error('[Stripe Webhook] Invalid token amount:', tokensStr);
-    return;
+    return 'skipped';
   }
 
   // Dev only (spec 10.3): hold the delivery before its credit.
@@ -206,6 +226,7 @@ async function handleCheckoutCompleted(event: Stripe.Event, kv: KV | null): Prom
       console.error('[Stripe Webhook] Failed to store purchase record:', err);
     }
   }
+  return 'credited';
 }
 
 // ── charge.refunded ──

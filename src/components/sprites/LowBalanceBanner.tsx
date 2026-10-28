@@ -24,17 +24,21 @@ function readDismissed(userId: string | null | undefined): boolean {
 
 /**
  * The low-balance banner on /generate (HQ 2026-10-27-021, George's words in
- * -023; rules in src/lib/lowBalance.ts). It reads the balance once for the
- * signed-in account, for its hasPaid (has-paid 001) and a fresh balance, then
- * follows the store's balance, which both forms refresh after every job. It
- * sits inside the page's signed-in Show, so it renders only in the browser.
+ * -023; rules in src/lib/lowBalance.ts). It reads the balance once for each
+ * visit of a signed-in account, for its hasPaid (has-paid 001) and a fresh
+ * balance, then follows the store's balance from the server, which both forms
+ * refresh after every job; this device's cached copy, which the Sidebar and
+ * the forms show at mount, never drives it. Its read is published to the
+ * store only if no newer balance was published while it was in flight
+ * (Second 099). It sits inside the page's signed-in Show, so it renders only
+ * in the browser.
  */
 export default function LowBalanceBanner() {
   const { userId, getToken } = useAuth();
-  const tokenBalance = useSpriteStore((s) => s.tokenBalance);
-  const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
+  const serverTokenBalance = useSpriteStore((s) => s.serverTokenBalance);
+  const setTokenBalanceIfUnchanged = useSpriteStore((s) => s.setTokenBalanceIfUnchanged);
 
-  // This account's hasPaid, once its balance read has answered.
+  // This account visit's hasPaid, once its own balance read has answered.
   const [read, setRead] = useState<{ userId: string; hasPaid: boolean } | null>(null);
   // This account's dismissal: its kept "Not now", or a return from Checkout
   // for this page view, whose tokens may still be on their way. The page's
@@ -45,15 +49,23 @@ export default function LowBalanceBanner() {
     initialDismissed(readDismissed(userId), typeof window === 'undefined' ? '' : window.location.search)
   );
 
-  if (dismissUser !== userId) {
+  // A change of account starts a new visit: that account's kept dismissal,
+  // and no read until this visit's own read answers, so a read from an
+  // earlier visit, even of the same account, never lets the store's balance
+  // act for it (Second 099). This pass acts on nothing; React renders again
+  // at once.
+  const accountChanged = dismissUser !== userId;
+  if (accountChanged) {
     setDismissUser(userId);
     setDismissed(readDismissed(userId));
+    setRead(null);
   }
 
-  // The balance this banner may act on: the store's, once this account's
-  // own read has answered, so neither the store's starting 0 nor another
-  // account's cached balance shows it.
-  const balance = read && read.userId === userId ? tokenBalance : null;
+  // The balance this banner may act on: the store's balance from the server,
+  // once this visit's own read has answered, so neither the store's starting
+  // 0, nor a cached copy, nor another account's balance shows it.
+  const visitRead = !accountChanged && read !== null && read.userId === userId ? read : null;
+  const balance = visitRead ? serverTokenBalance : null;
 
   // A dismissal lasts until the balance is seen at or above the threshold.
   const stillDismissed = dismissedAfter(dismissed, balance);
@@ -71,6 +83,10 @@ export default function LowBalanceBanner() {
   useEffect(() => {
     if (!userId) return;
     let cancelled = false;
+    // The store's balance version as this read begins: its answer is
+    // published only if no balance was published meanwhile (a job's
+    // refresh, the purchase watcher), so it never replaces a newer one.
+    const startVersion = useSpriteStore.getState().tokenBalanceVersion;
     void (async () => {
       try {
         const token = await getToken();
@@ -80,16 +96,16 @@ export default function LowBalanceBanner() {
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled || !data.success || typeof data.balance !== 'number') return;
-        setTokenBalance(data.balance);
+        setTokenBalanceIfUnchanged(data.balance, startVersion);
         setRead({ userId, hasPaid: data.hasPaid === true });
       } catch { /* no banner without a read */ }
     })();
     return () => {
       cancelled = true;
     };
-  }, [userId, getToken, setTokenBalance]);
+  }, [userId, getToken, setTokenBalanceIfUnchanged]);
 
-  const hasPaid = read !== null && read.userId === userId && read.hasPaid;
+  const hasPaid = visitRead !== null && visitRead.hasPaid;
   if (!showLowBalance({ hasPaid, balance, dismissed }) || balance === null || !userId) return null;
 
   const dismiss = (): void => {

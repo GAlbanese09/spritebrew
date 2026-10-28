@@ -71,6 +71,17 @@ interface SpriteStore {
   generationCount: number;
   generationCountDate: string;
   tokenBalance: number;
+  /** The last balance published from the server (setTokenBalance,
+   *  setTokenBalanceIfUnchanged); null until one is. restoreTokenBalance,
+   *  this device's cached copy, never sets it, so the low-balance banner,
+   *  which acts on this one, is never shown or hidden by a cached copy. */
+  serverTokenBalance: number | null;
+  /** Moves on every balance published from the server (setTokenBalance,
+   *  setTokenBalanceIfUnchanged), not on restoreTokenBalance. A balance read
+   *  records it as it begins and publishes through
+   *  setTokenBalanceIfUnchanged, so an answer that arrives after a newer
+   *  balance was published never replaces it. */
+  tokenBalanceVersion: number;
 
   // Reward celebration queue + streak snapshot
   pendingRewards: PendingReward[];
@@ -139,6 +150,14 @@ interface SpriteStore {
     pausedMessage: string | null
   ) => void;
   setTokenBalance: (balance: number) => void;
+  /** Show this device's cached balance for the account while its reads are
+   *  out. It leaves tokenBalanceVersion alone: the cache is older than any
+   *  read in flight, so such a read still publishes over it. */
+  restoreTokenBalance: (balance: number) => void;
+  /** Publish a balance read that began when tokenBalanceVersion was
+   *  `expectedVersion`, only if no balance was published since; returns
+   *  whether it applied. */
+  setTokenBalanceIfUnchanged: (balance: number, expectedVersion: number) => boolean;
   setCurrentSheetMetadata: (metadata: SlicerHints | null) => void;
   setRescueInfo: (info: RescueInfo | null) => void;
 
@@ -183,6 +202,8 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   generationCount: 0,
   generationCountDate: '',
   tokenBalance: 0,
+  serverTokenBalance: null,
+  tokenBalanceVersion: 0,
 
   pendingRewards: [],
   streakCount: 0,
@@ -345,7 +366,17 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
       generationPausedMessage: pausedMessage,
     }),
 
-  setTokenBalance: (balance) => set({ tokenBalance: balance }),
+  setTokenBalance: (balance) =>
+    set((state) => ({ tokenBalance: balance, serverTokenBalance: balance, tokenBalanceVersion: state.tokenBalanceVersion + 1 })),
+
+  restoreTokenBalance: (balance) => set({ tokenBalance: balance }),
+
+  setTokenBalanceIfUnchanged: (balance, expectedVersion) => {
+    const state = get();
+    if (state.tokenBalanceVersion !== expectedVersion) return false;
+    set({ tokenBalance: balance, serverTokenBalance: balance, tokenBalanceVersion: state.tokenBalanceVersion + 1 });
+    return true;
+  },
 
   setCurrentSheetMetadata: (metadata) => set({ currentSheetMetadata: metadata }),
 

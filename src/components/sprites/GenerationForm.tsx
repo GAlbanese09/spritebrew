@@ -74,6 +74,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const setRescueInfo = useSpriteStore((s) => s.setRescueInfo);
   const setOriginalCharacter = useSpriteStore((s) => s.setOriginalCharacter);
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
+  const restoreTokenBalance = useSpriteStore((s) => s.restoreTokenBalance);
   const tokenBalance = useSpriteStore((s) => s.tokenBalance);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
@@ -106,11 +107,11 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     if (userId) {
       try {
         const cached = localStorage.getItem(`spritebrew_tokens_${userId}`);
-        if (cached) setTokenBalance(parseInt(cached, 10));
+        if (cached) restoreTokenBalance(parseInt(cached, 10));
       } catch { /* ignore */ }
       fetchBalance();
     }
-  }, [userId, setTokenBalance, fetchBalance]);
+  }, [userId, restoreTokenBalance, fetchBalance]);
 
   // Queue-and-poll integration. The hook auto-resumes a poll from
   // localStorage on mount if a fresh-enough activeJob entry exists. A saved

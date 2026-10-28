@@ -7,6 +7,7 @@ import { Show, SignInButton, useAuth } from '@clerk/react';
 import GenerationForm from '@/components/sprites/GenerationForm';
 import AnimateForm from '@/components/sprites/AnimateForm';
 import GenerationResult from '@/components/sprites/GenerationResult';
+import LowBalanceBanner from '@/components/sprites/LowBalanceBanner';
 import { addToHistory, type SlicerHints } from '@/lib/generationHistory';
 import { useSpriteStore } from '@/stores/spriteStore';
 import type { AnimateGeneratedContext } from '@/components/sprites/AnimateForm';
@@ -371,6 +372,7 @@ export default function GeneratePage() {
       <Suspense fallback={null}>
         <PurchaseStatusContent />
       </Suspense>
+      <LowBalanceBanner />
       <EarlyAccessBanner />
       <LimitNoticeBanner />
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">

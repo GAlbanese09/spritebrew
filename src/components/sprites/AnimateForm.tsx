@@ -15,7 +15,7 @@ import { useAuth } from '@clerk/react';
 import { useSpriteStore, type RescueInfo } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import CharacterAutoPrep from './CharacterAutoPrep';
-import { loadImage, imageToCanvas, despillChromaEdges } from '@/lib/spriteUtils';
+import { despillIfTransparent, decodedSize } from '@/lib/spriteUtils';
 import {
   getTokenCost,
   ADVANCED_ANIM_RESOLUTION_PRESETS,
@@ -38,7 +38,7 @@ import {
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
-import { finishedJob, isAnimateContext } from '@/lib/pollResume';
+import { ANIMATE_FILL, finishJob, type JobResultIO } from '@/lib/jobResult';
 import { ANIMATE_INPUT_B64_CLIENT_MAX } from '@/lib/constants';
 import {
   loadLatestConfig,
@@ -85,7 +85,7 @@ const FRAME_COUNTS = [4, 6, 8, 10, 12, 16] as const;
  * Formerly user-configurable via a swatch row; removed July 15 — the
  * transparency toggle went with it since RD now default-strips.
  */
-const DEFAULT_BG_COLOR = '#ff00ff';
+const DEFAULT_BG_COLOR = ANIMATE_FILL;
 
 /** DecodeImage for the browser: the image's natural size once it loads. */
 const decodeImage: DecodeImage = (dataUrl, onLoad, onError) => {
@@ -95,43 +95,8 @@ const decodeImage: DecodeImage = (dataUrl, onLoad, onError) => {
   img.src = dataUrl;
 };
 
-/**
- * fix-a follow-up: decode → check-for-alpha → despill → re-encode.
- * Called UNCONDITIONALLY on animate-result base64 the first time it lands on
- * the client (July 14: RD default-strips animation backgrounds even without
- * remove_bg; we always send remove_bg anyway as belt-and-suspenders). Two
- * internal safety gates keep this safe on the exceptional inputs:
- *   (a) Corner-sample alpha check — if all four corners are opaque, RD
- *       returned an opaque sheet (rare, e.g. RD reverting the default). We
- *       short-circuit and return the input unchanged; no cleanup runs.
- *   (b) fillHex classification inside despillChromaEdges — neutral fills
- *       (black/white/gray/other hues) short-circuit with no work. Only
- *       magenta/green fills trigger the actual dilation + subtract pass.
- * Silent-fail on decode errors → returns the input dataUrl. The despill is
- * a quality-of-life step; a broken pass must never break the pipeline.
- */
-async function despillIfTransparent(dataUrl: string, fillHex: string): Promise<string> {
-  try {
-    const img = await loadImage(dataUrl);
-    const canvas = imageToCanvas(img);
-    const W = canvas.width;
-    const H = canvas.height;
-    if (W === 0 || H === 0) return dataUrl;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return dataUrl;
-    // Corner alpha sample — cheap check to skip the full despill pass on
-    // opaque sheets (fix-a-legacy or an RD miss).
-    const a0 = ctx.getImageData(0, 0, 1, 1).data[3];
-    const a1 = ctx.getImageData(W - 1, 0, 1, 1).data[3];
-    const a2 = ctx.getImageData(0, H - 1, 1, 1).data[3];
-    const a3 = ctx.getImageData(W - 1, H - 1, 1, 1).data[3];
-    if (a0 === 255 && a1 === 255 && a2 === 255 && a3 === 255) return dataUrl;
-    despillChromaEdges(canvas, fillHex);
-    return canvas.toDataURL('image/png');
-  } catch {
-    return dataUrl;
-  }
-}
+/** The browser steps for finishing a job's result (see jobResult.ts). */
+const JOB_RESULT_IO: JobResultIO = { despill: despillIfTransparent, decodedSize };
 
 /**
  * Animate-specific context for the onGenerated handoff. Passed as an
@@ -209,8 +174,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   }, [userId, setTokenBalance, fetchBalance]);
 
   // Queue-and-poll integration. Auto-resumes from localStorage on mount
-  // when a fresh-enough activeJob entry exists.
-  const poll = useGenerationPoll();
+  // when a fresh-enough activeJob entry exists. A saved job it drops
+  // instead (another account's, or one too old) ends the Brewing state the
+  // form that sent it left on.
+  const poll = useGenerationPoll({
+    onDrop: () => {
+      setGenerating(false);
+      setGeneratingAction(null);
+    },
+  });
 
   // Send-to-Animator handoff consumers. Reactive subscriptions (not getState()
   // on mount) because GenerationResult lives on the same /generate route —
@@ -963,81 +935,21 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       return;
     }
     if (poll.status === 'success' && poll.result) {
-      // Same despill wire as the SSE-success path: see that branch's
-      // comment for the RD default-strip context and the two internal
-      // safety gates that make unconditional calls safe. bgColor travels
-      // with the job (poll.context, saved with it, so a resumed job has it
-      // too); a job saved without its context, by the version before this
-      // one, has none. Since July 15 every animate request is flattened
-      // onto DEFAULT_BG_COLOR, so such a job despills with it (the
-      // neutral '#000000' skips the pass and could leave a magenta rim).
-      // A Create job finished here, after a tab switch mid-job, keeps the
-      // neutral fill: the Create form never despills, and the pass would
-      // recolor magenta outlines. Wrapped in an IIFE because useEffect
-      // callbacks can't be async themselves.
-      const rawDataUrl = `data:image/png;base64,${poll.result.resultBase64}`;
-      const ctx = poll.context;
-      const reqCtx = isAnimateContext(ctx) ? ctx : null;
-      const despillFill = reqCtx?.bgColor ?? (poll.mode === 'animate' ? DEFAULT_BG_COLOR : '#000000');
-      const pollResult = poll.result;
-      const jobId = poll.jobId;
-      (async () => {
-        const dataUrl = await despillIfTransparent(rawDataUrl, despillFill);
-        setGeneratedImage(dataUrl, dataUrl);
-
-        // Rescue metadata (consumer commit 0d71a88): build a client-side
-        // RescueInfo, deriving deliveredFrames from decoded sheet dims
-        // when the consumer omitted it (unreadable IHDR). The derivation
-        // requires a clean (W/cell)*(H/cell) division; anything else
-        // leaves deliveredFrames undefined and the slicer falls back to
-        // its existing behavior (any_animation_* auto-detect at 64×64).
-        let rescueInfo: RescueInfo | null = null;
-        if (pollResult.rescued) {
-          const cell = pollResult.deliveredCellSize;
-          let derivedFrames = pollResult.deliveredFrames;
-          if (derivedFrames === undefined && typeof cell === 'number' && cell > 0) {
-            try {
-              const probe = new Image();
-              probe.src = dataUrl;
-              await probe.decode();
-              const w = probe.naturalWidth;
-              const h = probe.naturalHeight;
-              if (w > 0 && h > 0 && w % cell === 0 && h % cell === 0) {
-                derivedFrames = (w / cell) * (h / cell);
-              }
-            } catch {
-              // Decode failed — leave derivedFrames undefined.
-            }
-          }
-          rescueInfo = {
-            rescued: true,
-            ...(typeof pollResult.requestedWidth === 'number' ? { requestedWidth: pollResult.requestedWidth } : {}),
-            ...(typeof pollResult.requestedHeight === 'number' ? { requestedHeight: pollResult.requestedHeight } : {}),
-            ...(typeof cell === 'number' ? { deliveredCellSize: cell } : {}),
-            ...(typeof derivedFrames === 'number' ? { deliveredFrames: derivedFrames } : {}),
-          };
-        }
-        setRescueInfo(rescueInfo);
-
-        // The job's own entry, hints and style, from the context saved with
-        // it, whether this form sent it or resumed it; also a Create job
-        // finished here (the user picked this tab mid-job).
-        const finished = finishedJob(ctx, rescueInfo);
-        if (finished) {
-          setGenerationStyle(finished.style);
-          void fetchBalance();
-          onGenerated(dataUrl, finished.prompt, finished.style, finished.animate, jobId);
-        } else {
-          // A job saved without its context, by the version before this one:
-          // onGenerated does not run, so drop the previous generation's style
-          // and hints rather than let /upload apply them to this sheet.
-          setGenerationStyle(null);
-          setCurrentSheetMetadata(null);
-        }
+      // The job's result by its own mode, the same in both forms (jobResult.ts):
+      // an animation is despilled with its request's fill and gets its rescue
+      // notice; a Create job finished here (the user picked this tab mid-job)
+      // is shown as delivered and clears the previous animation's notice. Then
+      // its Recent entry, hints and style from the context saved with it.
+      const job = { result: poll.result, mode: poll.mode, context: poll.context, jobId: poll.jobId };
+      void finishJob(job, JOB_RESULT_IO, {
+        setRescueInfo, setOriginalCharacter, setGeneratedImage, setGenerationStyle, setCurrentSheetMetadata,
+        fetchBalance: () => { void fetchBalance(); },
+        onGenerated,
+      }).finally(() => {
         setGenerating(false);
         setGeneratingAction(null);
         poll.reset();
-      })();
+      });
       return;
     }
     if (poll.status === 'error' || poll.status === 'abandoned') {

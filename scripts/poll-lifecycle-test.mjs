@@ -9,7 +9,8 @@
 // (gitignored), with react and @clerk/react swapped for small stand-ins
 // written there too: a fake React for one hook per mount (state, refs,
 // callbacks, effects, unmount; state updates re-render in a microtask) and a
-// useAuth whose getToken each case scripts. fetch and localStorage are
+// useAuth whose getToken and signed-in user each case scripts (no user, as
+// before Clerk loads, unless a case sets one). fetch and localStorage are
 // scripted the same way. This models React rather than running it; the same
 // sequences were also run in Chromium against the real page.
 
@@ -33,6 +34,9 @@ export function useState(init) {
     slot.set = (next) => {
       if (c.unmounted) { c.lateSets++; return; }
       slot.v = typeof next === 'function' ? next(slot.v) : next;
+      // An update during the hook's own render: React renders it again at
+      // once, before anything commits (see mount).
+      if (current === c) { c.renderAgain = true; return; }
       if (!c.scheduled) {
         c.scheduled = true;
         queueMicrotask(() => { c.scheduled = false; if (!c.unmounted) c.update(); });
@@ -50,7 +54,7 @@ export function useCallback(fn, deps) {
   const c = current; const i = c.i++;
   const prev = c.slots[i];
   if (prev && same(prev.deps, deps)) return prev.fn;
-  c.slots[i] = { fn, deps };
+  c.slots[i] = { fn, deps, memo: true };
   return fn;
 }
 function effectHook(queue) {
@@ -70,8 +74,28 @@ function effectHook(queue) {
 export const useLayoutEffect = effectHook('layout');
 export const useEffect = effectHook('passive');
 export function mount(hook, opts = {}) {
-  const c = { slots: {}, layout: [], passive: [], unmounted: false, scheduled: false, lateSets: 0, value: undefined, i: 0 };
-  c.render = () => { current = c; c.i = 0; c.value = hook(); current = null; };
+  const c = { slots: {}, layout: [], passive: [], unmounted: false, scheduled: false, renderAgain: false, lateSets: 0, value: undefined, i: 0 };
+  // A pass with an update during render is thrown away and rendered again,
+  // as React does: its effects and callbacks are discarded; state and refs
+  // are kept.
+  c.render = () => {
+    for (let pass = 0; ; pass++) {
+      if (pass > 25) throw new Error('Too many re-renders');
+      const kept = {};
+      for (const [k, s] of Object.entries(c.slots)) if (s && (s.effect || s.memo)) kept[k] = s;
+      const queued = [c.layout.length, c.passive.length];
+      c.renderAgain = false;
+      current = c; c.i = 0;
+      try { c.value = hook(); } finally { current = null; }
+      if (!c.renderAgain) return;
+      c.layout.length = queued[0];
+      c.passive.length = queued[1];
+      for (const [k, s] of Object.entries(c.slots)) {
+        if (!s || !(s.effect || s.memo) || kept[k] === s) continue;
+        if (k in kept) c.slots[k] = kept[k]; else delete c.slots[k];
+      }
+    }
+  };
   c.commitLayout = () => c.layout.splice(0).forEach((run) => run());
   c.commitPassive = () => c.passive.splice(0).forEach((run) => run());
   c.update = () => { c.render(); c.commitLayout(); c.commitPassive(); };
@@ -84,12 +108,12 @@ export function mount(hook, opts = {}) {
   return c;
 }
 `;
-const CLERK_STUB = 'export function useAuth() { return { getToken: globalThis.__getToken }; }';
+const CLERK_STUB = 'export function useAuth() { return { getToken: globalThis.__getToken, userId: globalThis.__userId }; }';
 const TAB_HOOK = path.join(ROOT, 'src/hooks/useGenerateTab.ts');
 const ENTRY = `
 export * from ${JSON.stringify(path.join(ROOT, 'src/hooks/useGenerationPoll.ts'))};
 ${fs.existsSync(TAB_HOOK) ? `export * from ${JSON.stringify(TAB_HOOK)};` : ''}
-export { mount } from ${JSON.stringify(path.join(DIR, 'fake-react.mjs'))};
+export { mount, useState as fakeUseState, useLayoutEffect as fakeUseLayoutEffect } from ${JSON.stringify(path.join(DIR, 'fake-react.mjs'))};
 `;
 fs.writeFileSync(path.join(DIR, 'fake-react.mjs'), FAKE_REACT);
 fs.writeFileSync(path.join(DIR, 'clerk-stub.mjs'), CLERK_STUB);
@@ -160,7 +184,7 @@ await build({
   alias: { react: path.join(DIR, 'fake-react.mjs'), '@clerk/react': path.join(DIR, 'clerk-stub.mjs') },
 });
 const mod = await import(pathToFileURL(OUT).href);
-const { useGenerationPoll, onBeforeResume, useGenerateTab, mount } = mod;
+const { useGenerationPoll, onBeforeResume, useGenerateTab, mount, fakeUseState, fakeUseLayoutEffect } = mod;
 
 const KEY = 'spritebrew:activeJob';
 const saved = () => { const raw = store.get(KEY); return raw ? JSON.parse(raw).jobId : null; };
@@ -174,6 +198,22 @@ function check(name, ok, detail) {
 }
 function fresh() {
   store.clear(); tokenQueue.length = 0; fetchQueue.length = 0; fetchCalls = []; jobLimit = Infinity;
+  globalThis.__userId = undefined;
+}
+
+// The stand-in itself: an update during render renders again before
+// anything commits, and only the last pass's effects run.
+{
+  const runs = [];
+  const h = mount(() => {
+    const [n, setN] = fakeUseState(0);
+    if (n < 2) setN(n + 1);
+    fakeUseLayoutEffect(() => { runs.push(n); }, [n]);
+    return n;
+  });
+  check("stand-in: an update during render renders again first, and only the last pass's effect runs",
+    h.value === 2 && JSON.stringify(runs) === '[2]', { value: h.value, runs });
+  h.unmount();
 }
 
 // 1. Leave while the body of a status response is being read, then come back
@@ -505,6 +545,240 @@ if (typeof useGenerateTab === 'function') {
   check('control: with room, the saved record keeps its context', kept !== null && kept.context !== undefined && kept.context.prompt === LONG.prompt,
     { kept: kept && Object.keys(kept) });
   c.unmount();
+}
+
+// 7. A saved job belongs to the account that sent it (George's ruling, Oct
+// 27). A sign-out unmounts the forms (they sit in the page's signed-in Show),
+// so another account meets the job when its own form mounts, or when the
+// job's 202 lands late.
+const ANIM_JOB = (id, userId) => JSON.stringify({ jobId: id, idempotencyKey: id.replace('job', 'key'), mode: 'animate', startedAt: Date.now(), ...(userId ? { userId } : {}) });
+{
+  fresh();
+  globalThis.__userId = 'user_a';
+  const a = mount(useGenerationPoll);
+  a.value.startPolling('job-21', 'key-21', 'create', { prompt: 'knight with sword', styleId: 'plus-classic' });
+  await settle();
+  const owner = store.get(KEY) ? JSON.parse(store.get(KEY)).userId : null;
+  check('account: the saved job carries the account that sent it', owner === 'user_a', { owner });
+  a.unmount(); // A signs out mid-job
+  globalThis.__userId = 'user_b';
+  const sentBefore = fetchCalls.length;
+  const b = mount(useGenerationPoll);
+  await settle();
+  check("account: another account's form drops it, with no request",
+    b.value.status === 'idle' && saved() === null && fetchCalls.length === sentBefore,
+    { status: b.value.status, saved: saved(), fetchCalls: fetchCalls.length - sentBefore });
+  b.unmount();
+
+  fresh();
+  globalThis.__userId = 'user_a';
+  const a2 = mount(useGenerationPoll);
+  a2.value.startPolling('job-22', 'key-22', 'create');
+  await settle();
+  a2.unmount();
+  fetchQueue.push(answer(SUCCESS));
+  const back = mount(useGenerationPoll);
+  await settle();
+  check('account: the same account, back after a leave, resumes and finishes it',
+    back.value.status === 'success' && back.value.isResume === true && saved() === null,
+    { status: back.value.status, saved: saved() });
+  back.unmount();
+
+  fresh();
+  globalThis.__userId = 'user_b';
+  store.set(KEY, JSON.stringify({ jobId: 'job-23', idempotencyKey: 'key-23', mode: 'create', startedAt: Date.now() }));
+  const old = mount(useGenerationPoll);
+  await settle();
+  check('account: a job saved without a user id (by the version before) still resumes',
+    old.value.status === 'polling' && saved() === 'job-23', { status: old.value.status, saved: saved() });
+  old.unmount();
+
+  fresh();
+  globalThis.__userId = 'user_a';
+  const send = sendFromAFormThatLeft(); // A sends, then signs out before the 202
+  globalThis.__userId = 'user_b';
+  const bForm = mount(useGenerationPoll);
+  send('job-24', 'key-24', 'create');
+  await settle();
+  check("account: A's 202 landing while B's form is mounted is dropped, with no request",
+    bForm.value.status === 'idle' && saved() === null && fetchCalls.length === 0,
+    { status: bForm.value.status, saved: saved(), fetchCalls: fetchCalls.length });
+  bForm.unmount();
+
+  // A form that stays mounted while the account changes saves its next job
+  // under the account now signed in.
+  fresh();
+  globalThis.__userId = 'user_a';
+  const stay = mount(useGenerationPoll);
+  globalThis.__userId = 'user_b';
+  stay.update();
+  stay.value.startPolling('job-28', 'key-28', 'create');
+  await settle();
+  const next = store.get(KEY) ? JSON.parse(store.get(KEY)).userId : null;
+  check('account: a form still mounted when the account changes saves its next job under the new account', next === 'user_b', { owner: next });
+  stay.unmount();
+
+  // A dropped job is reported to onDrop, so the form ends the Brewing state
+  // that the form which sent it left on; a resumed job, or nothing saved, is
+  // not reported. The hook calls the form's latest onDrop.
+  let drops = [];
+  let onDrop = () => drops.push('first');
+  const useWithDrop = () => useGenerationPoll({ onDrop });
+  const job = (id, extra) => JSON.stringify({ jobId: id, idempotencyKey: id.replace('job', 'key'), mode: 'create', startedAt: Date.now(), ...extra });
+
+  fresh();
+  globalThis.__userId = 'user_b';
+  store.set(KEY, job('job-29', { userId: 'user_a' }));
+  let f = mount(useWithDrop);
+  await settle();
+  check("onDrop: another account's job dropped on mount is reported once", drops.length === 1 && saved() === null, { drops, saved: saved() });
+  f.unmount();
+
+  drops = [];
+  fresh();
+  store.set(KEY, job('job-30', { startedAt: Date.now() - 60 * 60 * 1_000 }));
+  f = mount(useWithDrop);
+  await settle();
+  check('onDrop: a job from an earlier visit past the stale limit is reported', drops.length === 1 && saved() === null, { drops, saved: saved() });
+  f.unmount();
+
+  drops = [];
+  fresh();
+  globalThis.__userId = 'user_a';
+  store.set(KEY, job('job-31', { userId: 'user_a' }));
+  f = mount(useWithDrop);
+  await settle();
+  const resumed = f.value.status;
+  f.unmount();
+  fresh();
+  f = mount(useWithDrop);
+  await settle();
+  check('onDrop: control: a resumed job, and nothing saved, are not reported', drops.length === 0 && resumed === 'polling', { drops, resumed });
+  f.unmount();
+
+  drops = [];
+  fresh();
+  globalThis.__userId = 'user_a';
+  const sendLate = sendFromAFormThatLeft();
+  globalThis.__userId = 'user_b';
+  f = mount(useWithDrop);
+  onDrop = () => drops.push('second');
+  f.update();
+  sendLate('job-32', 'key-32', 'create');
+  await settle();
+  check("onDrop: A's 202 landing while B's form is mounted is reported, to the form's latest onDrop",
+    drops.join() === 'second' && saved() === null, { drops, saved: saved() });
+  f.unmount();
+  onDrop = () => drops.push('first');
+}
+if (typeof useGenerateTab === 'function') {
+  // The page's tab. Another account signing in by navigation (Clerk loaded
+  // before the page renders): the page opens on Create.
+  fresh();
+  globalThis.__userId = 'user_b';
+  store.set(KEY, ANIM_JOB('job-25', 'user_a'));
+  let page = mount(useGenerateTab);
+  let form = mount(useGenerationPoll);
+  await settle();
+  check("account, tab: another account's Animate job does not open Animate, and the Create form drops it",
+    page.value.tab === 'create' && form.value.status === 'idle' && saved() === null && fetchCalls.length === 0,
+    { tab: page.value.tab, status: form.value.status, saved: saved(), fetchCalls: fetchCalls.length });
+  form.unmount();
+  page.unmount();
+
+  // A reload: the page renders before Clerk knows the user, so its first tab
+  // follows the saved Animate job. When Clerk's user arrives, the page
+  // renders again, and the signed-in Show mounts the form for the tab that
+  // render settles on; the form's layout effects run, then the page's, then
+  // the form's mount effect.
+  async function reloadThenUserArrives(userId) {
+    const p = mount(useGenerateTab);
+    const firstTab = p.value.tab;
+    globalThis.__userId = userId;
+    p.render();
+    const formTab = p.value.tab;
+    const f = mount(useGenerationPoll, { defer: true });
+    f.commitLayout();
+    p.commitLayout();
+    f.commitPassive();
+    p.commitPassive();
+    await settle();
+    return { p, f, firstTab, formTab };
+  }
+  fresh();
+  store.set(KEY, ANIM_JOB('job-26', 'user_a'));
+  let run = await reloadThenUserArrives('user_b');
+  check("account, tab: on a reload, another account's Animate job: the render where the user arrives settles on Create, and the Create form drops the job",
+    run.firstTab === 'animate' && run.formTab === 'create' && run.p.value.tab === 'create' && run.f.value.status === 'idle' && saved() === null && fetchCalls.length === 0,
+    { firstTab: run.firstTab, formTab: run.formTab, tab: run.p.value.tab, status: run.f.value.status, saved: saved(), fetchCalls: fetchCalls.length });
+  run.f.unmount();
+  run.p.unmount();
+
+  fresh();
+  store.set(KEY, ANIM_JOB('job-27', 'user_a'));
+  run = await reloadThenUserArrives('user_a');
+  check('account, tab: on a reload, the same account stays on Animate, and the Animate form resumes the job',
+    run.firstTab === 'animate' && run.formTab === 'animate' && run.p.value.tab === 'animate' && run.f.value.status === 'polling' && saved() === 'job-27',
+    { firstTab: run.firstTab, formTab: run.formTab, tab: run.p.value.tab, status: run.f.value.status, saved: saved() });
+  run.f.unmount();
+  run.p.unmount();
+
+  // A pick does not outlive its account. A picks a tab and signs out; B
+  // signs in. B's own Create job opens on Create, and the resume check
+  // counts no pick for B.
+  async function pickThenAnotherAccount(pick, savedForB) {
+    globalThis.__userId = 'user_a';
+    const p = mount(useGenerateTab);
+    p.value.pickTab(pick);
+    await settle();
+    globalThis.__userId = null;
+    p.update();
+    globalThis.__userId = 'user_b';
+    if (savedForB) store.set(KEY, savedForB);
+    p.update();
+    await settle();
+    return p;
+  }
+  fresh();
+  page = await pickThenAnotherAccount('animate', JSON.stringify({ jobId: 'job-33', idempotencyKey: 'key-33', mode: 'create', startedAt: Date.now(), userId: 'user_b' }));
+  form = mount(useGenerationPoll);
+  await settle();
+  check("account, tab: A's pick does not hold for B: B's own Create job opens on Create, and the Create form resumes it",
+    page.value.tab === 'create' && form.value.status === 'polling' && saved() === 'job-33', { tab: page.value.tab, status: form.value.status, saved: saved() });
+  form.unmount();
+  page.unmount();
+
+  fresh();
+  page = await pickThenAnotherAccount('create', null);
+  const sendForB = sendFromAFormThatLeft();
+  form = mount(useGenerationPoll);
+  sendForB('job-34', 'key-34', 'animate');
+  await settle();
+  check("account, tab: ... and B's Animate job landing late opens Animate, with no request from the Create form (no pick counted for B)",
+    page.value.tab === 'animate' && form.value.status === 'idle' && fetchCalls.length === 0 && saved() === 'job-34',
+    { tab: page.value.tab, status: form.value.status, fetchCalls: fetchCalls.length, saved: saved() });
+  form.unmount();
+  page.unmount();
+
+  // Control: a pick holds while the same account stays signed in, through
+  // later renders: A's own Animate job landing late is resumed by the form
+  // on the tab A picked, and the tab stays.
+  fresh();
+  globalThis.__userId = 'user_a';
+  page = mount(useGenerateTab);
+  page.value.pickTab('create');
+  await settle();
+  page.update();
+  await settle();
+  const sendForA = sendFromAFormThatLeft();
+  form = mount(useGenerationPoll);
+  sendForA('job-35', 'key-35', 'animate');
+  await settle();
+  check('account, tab: control: a pick holds while the account stays signed in, through later renders',
+    page.value.tab === 'create' && form.value.status === 'polling' && saved() === 'job-35',
+    { tab: page.value.tab, status: form.value.status, saved: saved() });
+  form.unmount();
+  page.unmount();
 }
 
 if (failed > 0) {

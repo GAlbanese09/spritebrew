@@ -1161,3 +1161,45 @@ export function despillChromaEdges(canvas: HTMLCanvasElement, fillHex: string): 
 
   ctx.putImageData(imgData, 0, 0);
 }
+
+/**
+ * An animation sheet's despill, as the result card shows it: decode, check
+ * the four corners for transparency, despill the chroma rim, re-encode. Moved
+ * from AnimateForm so both forms finish an animation the same way (#26's
+ * follow-up). Two gates keep it safe on unusual input: an opaque sheet (all
+ * four corners opaque, as when RD returns no transparency) comes back as is,
+ * and despillChromaEdges does nothing for a neutral fill. Any decode error
+ * returns the input: a broken pass must never break the result.
+ */
+export async function despillIfTransparent(dataUrl: string, fillHex: string): Promise<string> {
+  try {
+    const img = await loadImage(dataUrl);
+    const canvas = imageToCanvas(img);
+    const W = canvas.width;
+    const H = canvas.height;
+    if (W === 0 || H === 0) return dataUrl;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return dataUrl;
+    const a0 = ctx.getImageData(0, 0, 1, 1).data[3];
+    const a1 = ctx.getImageData(W - 1, 0, 1, 1).data[3];
+    const a2 = ctx.getImageData(0, H - 1, 1, 1).data[3];
+    const a3 = ctx.getImageData(W - 1, H - 1, 1, 1).data[3];
+    if (a0 === 255 && a1 === 255 && a2 === 255 && a3 === 255) return dataUrl;
+    despillChromaEdges(canvas, fillHex);
+    return canvas.toDataURL('image/png');
+  } catch {
+    return dataUrl;
+  }
+}
+
+/** An image's decoded size, or null when it cannot be decoded. */
+export async function decodedSize(dataUrl: string): Promise<{ w: number; h: number } | null> {
+  try {
+    const probe = new Image();
+    probe.src = dataUrl;
+    await probe.decode();
+    return { w: probe.naturalWidth, h: probe.naturalHeight };
+  } catch {
+    return null;
+  }
+}

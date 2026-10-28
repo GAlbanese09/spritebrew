@@ -20,6 +20,9 @@ export interface ActiveJobLocalStorage {
   idempotencyKey: string;
   mode: GenMode;
   startedAt: number;
+  /** The signed-in user who sent the job; another user's mount drops it
+   *  (resumeDecision). Absent on a job saved before user ids were. */
+  userId?: string;
   /** The click that sent the job (see JobContext). Absent on a job saved
    *  before contexts were. */
   context?: JobContext;
@@ -64,6 +67,14 @@ export interface PollSuccessResult {
   requestedHeight?: number;
   deliveredCellSize?: number;
   deliveredFrames?: number;
+}
+
+export interface UseGenerationPollOptions {
+  /** Called when the hook drops a saved job instead of resuming it (see
+   *  resumeDecision): one from an earlier visit past the stale limit, or
+   *  another account's. The form ends the Brewing state that the form which
+   *  sent the job left on, since nothing will finish it here. */
+  onDrop?: () => void;
 }
 
 export interface UseGenerationPollResult {
@@ -111,21 +122,26 @@ function readActiveJob(): ActiveJobLocalStorage | null {
     ) {
       return null;
     }
-    // A missing or malformed context leaves the job without one; it still resumes.
-    const { context: rawContext, ...job } = parsed;
+    // A missing or malformed context leaves the job without one; it still
+    // resumes. A user id that is not text counts as absent.
+    const { context: rawContext, userId: rawUserId, ...job } = parsed;
     const context = parseJobContext(job.mode, rawContext);
-    return context ? { ...job, context } : job;
+    return {
+      ...job,
+      ...(typeof rawUserId === 'string' ? { userId: rawUserId } : {}),
+      ...(context ? { context } : {}),
+    };
   } catch {
     return null;
   }
 }
 
-/** The mode of the saved job that the next mount will resume (the same rule
- *  as the mount effect), or null. GeneratePage opens on that job's tab, so
- *  the form that started a job finishes it. */
-export function savedJobMode(): GenMode | null {
+/** The mode of the saved job that the next mount will resume for this user
+ *  (the same rule as the mount effect), or null. GeneratePage opens on that
+ *  job's tab, so the form that started a job finishes it. */
+export function savedJobMode(userId?: string | null): GenMode | null {
   const saved = readActiveJob();
-  if (!saved || resumeDecision(saved, Date.now(), PAGE_LOADED_AT) !== 'resume') return null;
+  if (!saved || resumeDecision(saved, Date.now(), PAGE_LOADED_AT, userId) !== 'resume') return null;
   return saved.mode;
 }
 
@@ -159,7 +175,8 @@ function clearActiveJob(): void {
  * - `startPolling` saves the job, with its click-time context, to
  *   localStorage and kicks off the poll loop.
  * - On mount, resumes a saved job (see resumeDecision): after a reload, and
- *   after the user left /generate and came back while or after it ran.
+ *   after the user left /generate and came back while or after it ran. A
+ *   saved job it drops instead is cleared and reported to `onDrop`.
  * - On unmount, aborts the poll loop and keeps the saved job, so the next
  *   mount (the other tab's form, or /generate on return) resumes it. A loop
  *   left running would finish unseen and clear the saved job, which left the
@@ -167,8 +184,8 @@ function clearActiveJob(): void {
  *   switch (paused-message audit, Oct 25).
  * - `reset` clears state + localStorage; call it when the user starts a new generation.
  */
-export function useGenerationPoll(): UseGenerationPollResult {
-  const { getToken } = useAuth();
+export function useGenerationPoll(options: UseGenerationPollOptions = {}): UseGenerationPollResult {
+  const { getToken, userId } = useAuth();
 
   const [status, setStatus] = useState<GenStatus>('idle');
   const [result, setResult] = useState<PollSuccessResult | undefined>();
@@ -185,6 +202,16 @@ export function useGenerationPoll(): UseGenerationPollResult {
   // The running loop: its controller and job. Null when idle.
   const activeRef = useRef<{ controller: AbortController; jobId: string } | null>(null);
   const mountedRef = useRef(false);
+  // The signed-in user, for the saved job's owner and the resume check.
+  const userIdRef = useRef(userId);
+  useEffect(() => {
+    userIdRef.current = userId;
+  }, [userId]);
+  // The form's latest onDrop, for the resume check below.
+  const onDropRef = useRef(options.onDrop);
+  useEffect(() => {
+    onDropRef.current = options.onDrop;
+  });
 
   // Stable callback so effect deps don't churn.
   const getTokenStable = useCallback(() => getToken(), [getToken]);
@@ -327,11 +354,13 @@ export function useGenerationPoll(): UseGenerationPollResult {
   const startPolling = useCallback(
     (jid: string, idempotencyKey: string, mode: GenMode, jobContext?: JobContext): void => {
       const now = Date.now();
+      const owner = userIdRef.current;
       writeActiveJob({
         jobId: jid,
         idempotencyKey,
         mode,
         startedAt: now,
+        ...(owner ? { userId: owner } : {}),
         ...(jobContext ? { context: jobContext } : {}),
       });
       if (!mountedRef.current) {
@@ -370,8 +399,11 @@ export function useGenerationPoll(): UseGenerationPollResult {
     const pickUp = (): void => {
       if (activeRef.current) return;
       const persisted = readActiveJob();
-      const decision = resumeDecision(persisted, Date.now(), PAGE_LOADED_AT);
-      if (decision === 'drop') clearActiveJob();
+      const decision = resumeDecision(persisted, Date.now(), PAGE_LOADED_AT, userIdRef.current);
+      if (decision === 'drop') {
+        clearActiveJob();
+        onDropRef.current?.();
+      }
       if (decision !== 'resume' || !persisted) return;
       // The page decides which form finishes a job, whenever the job was
       // saved: if a check takes it, the form on the job's tab resumes it.

@@ -980,7 +980,7 @@ const plain = await withFetch(tbFetch(), async () => {
 });
 const baseBal = await withFetch(tbFetch(), () => pb.readBaselineBalance(async () => tok));
 check('an ordinary balance load is unchanged, and neither it nor the baseline read reads the pause',
-  plain?.success === true && plain?.balance === 100 && 'tokenCosts' in plain && !('moneyPaused' in plain) && baseBal === 100 && pauseReads === 0);
+  plain?.success === true && plain?.balance === 100 && typeof plain?.hasPaid === 'boolean' && !('tokenCosts' in plain) && !('moneyPaused' in plain) && baseBal === 100 && pauseReads === 0);
 
 // BA-1: a balance read that fails must never become evidence. getTokenBalance
 // answers a guessed 5 on a KV error; the banner's reads are strict.

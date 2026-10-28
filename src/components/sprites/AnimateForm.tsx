@@ -139,6 +139,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const setCurrentSheetMetadata = useSpriteStore((s) => s.setCurrentSheetMetadata);
   const setOriginalCharacter = useSpriteStore((s) => s.setOriginalCharacter);
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
+  const restoreTokenBalance = useSpriteStore((s) => s.restoreTokenBalance);
   const tokenBalance = useSpriteStore((s) => s.tokenBalance);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
@@ -167,11 +168,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     if (userId) {
       try {
         const cached = localStorage.getItem(`spritebrew_tokens_${userId}`);
-        if (cached) setTokenBalance(parseInt(cached, 10));
+        if (cached) restoreTokenBalance(parseInt(cached, 10));
       } catch { /* ignore */ }
       fetchBalance();
     }
-  }, [userId, setTokenBalance, fetchBalance]);
+  }, [userId, restoreTokenBalance, fetchBalance]);
 
   // Queue-and-poll integration. Auto-resumes from localStorage on mount
   // when a fresh-enough activeJob entry exists. A saved job it drops

@@ -269,6 +269,7 @@ function TokenBalanceDisplay() {
   const { userId, getToken } = useAuth();
   const tokenBalance = useSpriteStore((s) => s.tokenBalance);
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
+  const restoreTokenBalance = useSpriteStore((s) => s.restoreTokenBalance);
 
   const fetchBalance = useCallback(async () => {
     if (!userId) return;
@@ -290,11 +291,11 @@ function TokenBalanceDisplay() {
     if (userId) {
       try {
         const cached = localStorage.getItem(`spritebrew_tokens_${userId}`);
-        if (cached) setTokenBalance(parseInt(cached, 10));
+        if (cached) restoreTokenBalance(parseInt(cached, 10));
       } catch { /* */ }
       fetchBalance();
     }
-  }, [userId, setTokenBalance, fetchBalance]);
+  }, [userId, restoreTokenBalance, fetchBalance]);
 
   if (!userId) return null;
 

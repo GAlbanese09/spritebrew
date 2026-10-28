@@ -13,6 +13,7 @@ import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import SheetLoop from '@/components/sprites/SheetLoop';
 import { sheetGeometry, galleryFrameSizeGuess } from '@/lib/animationGeometry';
+import { cleanGallerySheet } from '@/lib/spriteUtils';
 
 type FilterMode = 'all' | 'create' | 'animate';
 
@@ -62,6 +63,47 @@ export default function GalleryPage() {
   // a fresh fetch supersedes an entry's previous URL.
   const urlsRef = useRef<Record<string, string>>({});
 
+  // The pink cleanup of each animation (HQ 2026-10-28-005), made after the
+  // first paint so the page never waits on it: the stored copy shows first,
+  // and the clean copy replaces it when ready. Download and Send to Slicer
+  // use cleanedUrl, which waits for an entry's clean copy and starts it if
+  // the background pass has not reached it yet.
+  // storedRef: an animation's stored copy, until its cleanup runs.
+  // cleaningRef: jobId -> the URL its cleanup settles on.
+  // keptRef: a stored copy's URL that a clean copy replaced, kept alive as
+  // every URL here is (Download or the Slicer may hold it) until the entry
+  // is deleted.
+  const storedRef = useRef<Record<string, Blob>>({});
+  const cleaningRef = useRef<Record<string, Promise<string | undefined>>>({});
+  const keptRef = useRef<Record<string, string>>({});
+
+  const cleanedUrl = useCallback((jobId: string): Promise<string | undefined> => {
+    const started = cleaningRef.current[jobId];
+    if (started) return started;
+    const stored = storedRef.current[jobId];
+    const storedUrl = urlsRef.current[jobId];
+    if (!stored || !storedUrl) return Promise.resolve(storedUrl);
+    const run = (async () => {
+      try {
+        const cleaned = await cleanGallerySheet(stored);
+        if (storedRef.current[jobId] === stored) delete storedRef.current[jobId];
+        // Nothing needed cleaning, or the entry was deleted or fetched again
+        // meanwhile.
+        if (!cleaned || urlsRef.current[jobId] !== storedUrl) return urlsRef.current[jobId];
+        const url = URL.createObjectURL(cleaned);
+        // A new object: the first fetch hands the same one to imageUrls.
+        urlsRef.current = { ...urlsRef.current, [jobId]: url };
+        keptRef.current[jobId] = storedUrl;
+        setImageUrls((prev) => (prev[jobId] === storedUrl ? { ...prev, [jobId]: url } : prev));
+        return url;
+      } catch {
+        return urlsRef.current[jobId];
+      }
+    })();
+    cleaningRef.current[jobId] = run;
+    return run;
+  }, []);
+
   // Initial fetch on mount.
   useEffect(() => {
     let cancelled = false;
@@ -95,6 +137,7 @@ export default function GalleryPage() {
 
         // 2. Fetch image blobs in parallel
         const newUrls: Record<string, string> = {};
+        const stored: Record<string, Blob> = {};
         await Promise.all(
           fetched.map(async (e) => {
             try {
@@ -104,6 +147,7 @@ export default function GalleryPage() {
               if (imgResp.ok) {
                 const blob = await imgResp.blob();
                 newUrls[e.jobId] = URL.createObjectURL(blob);
+                if (e.mode === 'animate') stored[e.jobId] = blob;
               }
             } catch {
               // Skip failed image silently — entry still shows in list with placeholder
@@ -122,10 +166,27 @@ export default function GalleryPage() {
           if (!newUrls[jobId]) URL.revokeObjectURL(url);
         });
         urlsRef.current = newUrls;
+        // The stored copies that clean copies replaced: nothing shows or
+        // holds them once a fresh fetch replaces every entry's URL.
+        Object.values(keptRef.current).forEach((url) => URL.revokeObjectURL(url));
+        keptRef.current = {};
+        storedRef.current = stored;
+        cleaningRef.current = {};
 
         setEntries(fetched);
         setImageUrls(newUrls);
         setLoading(false);
+
+        // 3. The clean copies of the animations, two at a time after the
+        // first paint, in the order the entries show (a Create sheet is
+        // used as stored).
+        const queue = fetched.filter((e) => stored[e.jobId]).map((e) => e.jobId);
+        const worker = async (): Promise<void> => {
+          for (let jobId = queue.shift(); jobId !== undefined && !cancelled; jobId = queue.shift()) {
+            await cleanedUrl(jobId);
+          }
+        };
+        void Promise.all([worker(), worker()]);
       } catch {
         if (!cancelled) {
           setError('Could not load your gallery. Please try again.');
@@ -250,8 +311,8 @@ export default function GalleryPage() {
     </div>
   ) : null;
 
-  const handleDownload = useCallback((entry: GalleryEntryV1) => {
-    const url = imageUrls[entry.jobId];
+  const handleDownload = useCallback(async (entry: GalleryEntryV1) => {
+    const url = entry.mode === 'animate' ? await cleanedUrl(entry.jobId) : imageUrls[entry.jobId];
     if (!url) return;
     const a = document.createElement('a');
     a.href = url;
@@ -259,16 +320,16 @@ export default function GalleryPage() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  }, [imageUrls]);
+  }, [imageUrls, cleanedUrl]);
 
-  const handleSendToSlicer = useCallback((entry: GalleryEntryV1) => {
-    const url = imageUrls[entry.jobId];
+  const handleSendToSlicer = useCallback(async (entry: GalleryEntryV1) => {
+    const url = entry.mode === 'animate' ? await cleanedUrl(entry.jobId) : imageUrls[entry.jobId];
     if (!url) return;
     setGeneratedImage(url, url);
     setGenerationStyle(entry.style);
     setCurrentSheetMetadata(deriveSlicerHints(entry));
     router.push('/upload');
-  }, [imageUrls, setGeneratedImage, setGenerationStyle, setCurrentSheetMetadata, router]);
+  }, [imageUrls, cleanedUrl, setGeneratedImage, setGenerationStyle, setCurrentSheetMetadata, router]);
 
   const handleDelete = useCallback(async (jobId: string) => {
     if (!confirm('Delete this generation? This cannot be undone.')) return;
@@ -278,6 +339,9 @@ export default function GalleryPage() {
     const oldUrl = urlsRef.current[jobId];
     if (oldUrl) URL.revokeObjectURL(oldUrl);
     delete urlsRef.current[jobId];
+    if (keptRef.current[jobId]) URL.revokeObjectURL(keptRef.current[jobId]);
+    delete keptRef.current[jobId];
+    delete storedRef.current[jobId];
     setImageUrls((prev) => {
       const next = { ...prev };
       delete next[jobId];
@@ -314,6 +378,9 @@ export default function GalleryPage() {
       const url = urlsRef.current[e.jobId];
       if (url) URL.revokeObjectURL(url);
       delete urlsRef.current[e.jobId];
+      if (keptRef.current[e.jobId]) URL.revokeObjectURL(keptRef.current[e.jobId]);
+      delete keptRef.current[e.jobId];
+      delete storedRef.current[e.jobId];
     });
     setEntries(prev => prev.filter(e => !targetIds.has(e.jobId)));
     setImageUrls(prev => {

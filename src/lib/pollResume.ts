@@ -59,6 +59,15 @@ export interface AnimateJobContext {
   frameCount: number;
   /** The cell size requested, in px. */
   frameSize: number;
+  /** The character sent had fill-coloured pixels of its own (fillCleanup's
+   *  characterColours), so the sheet's fill pockets are not keyed. Absent on
+   *  a job saved before the pink cleanup, which is keyed, as the Gallery's
+   *  copy is. */
+  inputHasFill?: boolean;
+  /** The character sent had mostly-magenta pixels of its own
+   *  (characterColours). Only false turns on the bright rim rule; absent, as
+   *  on a job saved before it, the rule stays off, as on the Gallery's copy. */
+  inputHasMagenta?: boolean;
 }
 
 export type JobContext = CreateJobContext | AnimateJobContext;
@@ -87,7 +96,15 @@ export function parseJobContext(mode: 'create' | 'animate', raw: unknown): JobCo
     typeof c.bgColor === 'string' &&
     isPositiveInt(c.frameCount) &&
     isPositiveInt(c.frameSize)
-    ? { action: c.action, motionPrompt: c.motionPrompt, bgColor: c.bgColor, frameCount: c.frameCount, frameSize: c.frameSize }
+    ? {
+        action: c.action,
+        motionPrompt: c.motionPrompt,
+        bgColor: c.bgColor,
+        frameCount: c.frameCount,
+        frameSize: c.frameSize,
+        ...(typeof c.inputHasFill === 'boolean' ? { inputHasFill: c.inputHasFill } : {}),
+        ...(typeof c.inputHasMagenta === 'boolean' ? { inputHasMagenta: c.inputHasMagenta } : {}),
+      }
     : undefined;
 }
 

@@ -15,7 +15,7 @@ import { useAuth } from '@clerk/react';
 import { useSpriteStore, type RescueInfo } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import CharacterAutoPrep from './CharacterAutoPrep';
-import { despillIfTransparent, decodedSize } from '@/lib/spriteUtils';
+import { despillIfTransparent, decodedSize, imageCharacterColours } from '@/lib/spriteUtils';
 import {
   getTokenCost,
   ADVANCED_ANIM_RESOLUTION_PRESETS,
@@ -780,6 +780,13 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       return;
     }
     const { primary: rgbBase64, fallback64 } = encoded;
+    // What the character has of its own: fill-coloured pixels, so the
+    // sheet's fill pockets are not keyed and a character drawn in that pink
+    // keeps it (HQ 2026-10-28-004), and mostly-magenta ones, so the bright
+    // rim rule stays off and its violets and deep pinks keep their colour.
+    const own = await imageCharacterColours(characterDataUrl);
+    const inputHasFill = own.fill;
+    const inputHasMagenta = own.magenta;
 
     setGenerating(true);
     setGeneratingAction(selectedAction);
@@ -801,6 +808,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       bgColor: DEFAULT_BG_COLOR,
       frameCount,
       frameSize: selectedResolution,
+      inputHasFill,
+      inputHasMagenta,
     };
 
     let tookPollPath = false;
@@ -866,7 +875,10 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       // no-ops on opaque sheets (defensive if RD reverts default-strip),
       // (2) despillChromaEdges no-ops on neutral fills (only magenta /
       // green fills trigger the dilation + subtract pass).
-      const dataUrl = await despillIfTransparent(data.imageUrl!, reqCtx.bgColor);
+      const dataUrl = await despillIfTransparent(data.imageUrl!, reqCtx.bgColor, {
+        key: !reqCtx.inputHasFill,
+        bright: reqCtx.inputHasMagenta === false,
+      });
 
       setGeneratedImage(dataUrl, dataUrl);
       // SSE path is local-only and never traverses the consumer's fallback

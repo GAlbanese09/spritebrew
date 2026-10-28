@@ -1,5 +1,6 @@
 import { SLICER_FRAME_PRESETS, SLICER_DETECT_TRY_SIZES } from '@/lib/constants';
 import { countGridCuts, detectCleanGrid, findCleanGrid } from '@/lib/gridDetect';
+import { MAGENTA_FILL, characterColours, cleanAnimation, cornersOpaque, despillRim } from '@/lib/fillCleanup';
 
 // Square-only canonical sizes derived from the single-source-of-truth presets.
 // Used by detectFrameGrid's findBestStandardSize fallback.
@@ -1040,155 +1041,100 @@ export function removeBackgroundColor(
 }
 
 /**
- * Chroma-edge despill for animate sheets that came back from RD with hard
- * 1-bit alpha (Wave fix-a follow-up). Per-pixel analysis of a July 8 dev
- * smoke sheet showed silhouette-ring pixels retain a small color cast from
- * the pre-generation fill (~18% magenta-cast on ring 1, fading to the ~3%
- * interior baseline by ring 2). This function sheds that cast in place —
- * no alpha touched, no legitimate interior art touched.
- *
- * Fill classification:
- *   - Magenta-family: R and B both ≥ G + 60 in the fill color.
- *   - Green-family:   G ≥ max(R, B) + 60.
- *   - Anything else (black, white, gray, other hues): return no-op —
- *     nothing about a neutral fill leaves a chromatic cast to shed.
- *
- * Band selection: only opaque (alpha === 255) pixels within Chebyshev
- * distance ≤ 2 of any fully-transparent pixel. Computed via two dilation
- * passes over the transparency mask (each pass expands by one 8-neighbor
- * ring). That's the physically-affected annulus; interior pixels never saw
- * the fill so they carry no residue to shed.
- *
- * Luminance gate: only pixels with (0.299 R + 0.587 G + 0.114 B) ≤ 90 are
- * touched. Protects legitimate pink skin and mauve shading that sits on
- * silhouette edges — those readings are bright enough to survive the gate;
- * the dark ring pixels that actually carry the cast are dim by construction
- * (they're blends of dark art with dark magenta or green).
- *
- * Per-pixel correction:
- *   - Magenta: excess = min(R, B) − G. If excess > 0, subtract from R and
- *     B, leaving G untouched. Neutralizes any magenta component while
- *     preserving whatever green content the pixel actually had.
- *   - Green:   excess = G − max(R, B). If excess > 0, subtract from G.
- *     Symmetric neutralization.
- *
- * Never touches alpha. Single ImageData read + putImageData write. Silent
- * no-op on unparseable fillHex, on a zero-dim canvas, or on a canvas whose
- * 2D context is unavailable.
+ * The rim despill on a canvas, as since the Wave fix-a follow-up:
+ * fillCleanup's despillRim without its bright rule. Opaque pixels within 2 px
+ * of the removed background that are darker than luminance 90 lose the
+ * fill's cast, except a violet or deep pink that continues into the art.
+ * Never touches alpha. The whole cleanup, with the fill pockets and the
+ * bright rule, is cleanAnimationCanvas.
  */
 export function despillChromaEdges(canvas: HTMLCanvasElement, fillHex: string): void {
-  const m = /^#([0-9a-f]{6})$/i.exec(fillHex);
-  if (!m) return;
-  const fillR = parseInt(m[1].slice(0, 2), 16);
-  const fillG = parseInt(m[1].slice(2, 4), 16);
-  const fillB = parseInt(m[1].slice(4, 6), 16);
-
-  const magenta = fillR >= fillG + 60 && fillB >= fillG + 60;
-  const green = fillG >= Math.max(fillR, fillB) + 60;
-  if (!magenta && !green) return;
-
   const W = canvas.width;
   const H = canvas.height;
-  if (W === 0 || H === 0) return;
-
   const ctx = canvas.getContext('2d');
-  if (!ctx) return;
+  if (!ctx || W === 0 || H === 0) return;
   const imgData = ctx.getImageData(0, 0, W, H);
-  const px = imgData.data;
-
-  // Transparency mask: 1 = fully transparent, 0 = opaque or partial.
-  // (RD returns hard 1-bit alpha; partials shouldn't exist, but treating
-  //  only alpha===0 as source keeps the "opaque pixels near transparent
-  //  neighbors" semantic exact.)
-  const transparent = new Uint8Array(W * H);
-  for (let i = 0, p = 0; i < px.length; i += 4, p++) {
-    transparent[p] = px[i + 3] === 0 ? 1 : 0;
-  }
-
-  // Two 8-connected dilation passes → Chebyshev distance ≤ 2 from any
-  // transparent pixel.
-  const dilate = (src: Uint8Array): Uint8Array => {
-    const out = new Uint8Array(W * H);
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const p = y * W + x;
-        if (src[p]) { out[p] = 1; continue; }
-        let any = 0;
-        for (let dy = -1; dy <= 1 && !any; dy++) {
-          const ny = y + dy;
-          if (ny < 0 || ny >= H) continue;
-          for (let dx = -1; dx <= 1; dx++) {
-            const nx = x + dx;
-            if (nx < 0 || nx >= W) continue;
-            if (src[ny * W + nx]) { any = 1; break; }
-          }
-        }
-        out[p] = any;
-      }
-    }
-    return out;
-  };
-
-  const ring1 = dilate(transparent);
-  const ring2 = dilate(ring1);
-
-  for (let i = 0, p = 0; i < px.length; i += 4, p++) {
-    if (transparent[p]) continue; // never touch transparent pixels
-    if (!ring2[p]) continue;      // outside the 2-pixel band around alpha
-
-    const r = px[i];
-    const g = px[i + 1];
-    const b = px[i + 2];
-
-    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-    if (lum > 90) continue;       // spare bright art (skin, highlights)
-
-    if (magenta) {
-      const excess = Math.min(r, b) - g;
-      if (excess > 0) {
-        px[i] = r - excess;
-        px[i + 2] = b - excess;
-      }
-    } else {
-      // green
-      const excess = g - Math.max(r, b);
-      if (excess > 0) {
-        px[i + 1] = g - excess;
-      }
-    }
-    // px[i + 3] intentionally untouched.
-  }
-
-  ctx.putImageData(imgData, 0, 0);
+  if (despillRim(imgData.data, W, H, fillHex, { bright: false }) > 0) ctx.putImageData(imgData, 0, 0);
 }
 
 /**
- * An animation sheet's despill, as the result card shows it: decode, check
- * the four corners for transparency, despill the chroma rim, re-encode. Moved
- * from AnimateForm so both forms finish an animation the same way (#26's
- * follow-up). Two gates keep it safe on unusual input: an opaque sheet (all
- * four corners opaque, as when RD returns no transparency) comes back as is,
- * and despillChromaEdges does nothing for a neutral fill. Any decode error
- * returns the input: a broken pass must never break the result.
+ * The pink cleanup on a canvas (src/lib/fillCleanup.ts): on a sheet that came
+ * back with its background removed, the fill pockets are keyed (when `key`)
+ * and the rim despilled (its bright rule when `bright`). A sheet whose four
+ * corners are opaque (RD returned no transparency) is left as it is. Returns
+ * whether any pixel changed.
  */
-export async function despillIfTransparent(dataUrl: string, fillHex: string): Promise<string> {
+export function cleanAnimationCanvas(canvas: HTMLCanvasElement, fillHex: string, opts: { key: boolean; bright: boolean }): boolean {
+  const W = canvas.width;
+  const H = canvas.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx || W === 0 || H === 0) return false;
+  const imgData = ctx.getImageData(0, 0, W, H);
+  if (cornersOpaque(imgData.data, W, H)) return false;
+  const { keyed, despilled } = cleanAnimation(imgData.data, W, H, fillHex, opts);
+  if (keyed + despilled === 0) return false;
+  ctx.putImageData(imgData, 0, 0);
+  return true;
+}
+
+/**
+ * An animation sheet's cleanup as the result card shows it, in both forms
+ * through jobResult: decode, clean (cleanAnimationCanvas), re-encode. `key`
+ * is false when the character sent had fill-coloured pixels of its own;
+ * `bright` is true only when it is known to have had no mostly-magenta ones.
+ * Any decode error returns the input: a broken pass must never break the
+ * result.
+ */
+export async function despillIfTransparent(
+  dataUrl: string,
+  fillHex: string,
+  opts: { key?: boolean; bright?: boolean } = {}
+): Promise<string> {
   try {
-    const img = await loadImage(dataUrl);
-    const canvas = imageToCanvas(img);
-    const W = canvas.width;
-    const H = canvas.height;
-    if (W === 0 || H === 0) return dataUrl;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return dataUrl;
-    const a0 = ctx.getImageData(0, 0, 1, 1).data[3];
-    const a1 = ctx.getImageData(W - 1, 0, 1, 1).data[3];
-    const a2 = ctx.getImageData(0, H - 1, 1, 1).data[3];
-    const a3 = ctx.getImageData(W - 1, H - 1, 1, 1).data[3];
-    if (a0 === 255 && a1 === 255 && a2 === 255 && a3 === 255) return dataUrl;
-    despillChromaEdges(canvas, fillHex);
-    return canvas.toDataURL('image/png');
+    const canvas = imageToCanvas(await loadImage(dataUrl));
+    return cleanAnimationCanvas(canvas, fillHex, { key: opts.key ?? true, bright: opts.bright ?? false })
+      ? canvas.toDataURL('image/png')
+      : dataUrl;
   } catch {
     return dataUrl;
+  }
+}
+
+/**
+ * A Gallery animation sheet's cleanup (HQ 2026-10-28-005): the magenta fill,
+ * the key always on and the bright rim rule off, since the Gallery does not
+ * know the character that was sent (its own fill or mostly-magenta colours).
+ * A cleaned PNG, or null when nothing changed or the sheet cannot be decoded
+ * (the caller keeps the original).
+ */
+export async function cleanGallerySheet(blob: Blob): Promise<Blob | null> {
+  const url = URL.createObjectURL(blob);
+  try {
+    const canvas = imageToCanvas(await loadImage(url));
+    if (!cleanAnimationCanvas(canvas, MAGENTA_FILL, { key: true, bright: false })) return null;
+    return await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/**
+ * What a character image, before it is flattened onto the fill, has of its
+ * own (fillCleanup's characterColours): fill-coloured pixels, so the sheet
+ * made from it is not keyed, and mostly-magenta ones, so the bright rim rule
+ * stays off. An image that cannot be read counts as having both: then
+ * nothing is keyed and the bright rule stays off.
+ */
+export async function imageCharacterColours(dataUrl: string): Promise<{ fill: boolean; magenta: boolean }> {
+  try {
+    const canvas = imageToCanvas(await loadImage(dataUrl));
+    const ctx = canvas.getContext('2d');
+    if (!ctx || canvas.width === 0 || canvas.height === 0) return { fill: true, magenta: true };
+    return characterColours(ctx.getImageData(0, 0, canvas.width, canvas.height).data);
+  } catch {
+    return { fill: true, magenta: true };
   }
 }
 

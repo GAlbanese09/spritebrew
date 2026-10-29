@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@clerk/react';
 import { HotkeysProvider } from 'react-hotkeys-hook';
 import EditorLanding from '@/components/sprites/EditorLanding';
@@ -19,7 +19,7 @@ import {
   newDraftKey,
   type RecoveryManifestV1,
 } from '@/lib/editorRecovery';
-import { discardEditorDraft, editorWritesSettled, isEditorSessionOpen } from '@/components/sprites/useEditorRecovery';
+import { discardEditorDraft, editorWritesSettled, isEditorSessionOpen, visibleDraft } from '@/components/sprites/useEditorRecovery';
 
 /**
  * /editor — full-page Pixel Editor (v2 Phase 1).
@@ -58,11 +58,29 @@ type EditorPending =
   | { kind: 'image'; draftKey: string; dataUrl: string; width: number; height: number; source?: SpriteProjectSource }
   | { kind: 'restore'; draftKey: string; envelope: SpriteProjectV1; bytes: Uint8ClampedArray };
 
+const NO_DRAFTS: RecoveryManifestV1[] = [];
+
 export default function EditorPage() {
   const [pending, setPending] = useState<EditorPending | null>(null);
-  // This user's saved drafts, newest first (any editor surface).
-  const [drafts, setDrafts] = useState<RecoveryManifestV1[]>([]);
   const { isLoaded: authLoaded, userId } = useAuth();
+  // The signed-in user id, null when signed out, undefined until Clerk knows.
+  const account = authLoaded ? (userId ?? null) : undefined;
+  // This account's saved drafts, newest first (any editor surface), with the
+  // account they were listed for: shown only to that account, so a sign-out
+  // or an account change hides them at once (Second 121).
+  const [listed, setListed] = useState<{ account: string | null; drafts: RecoveryManifestV1[] } | null>(null);
+  const drafts = listed && listed.account === account ? listed.drafts : NO_DRAFTS;
+  // The account as of the latest render, and a count that every restore,
+  // every new image and every account change moves on: an async restore
+  // opens its draft only if nothing has moved it since it began.
+  const accountRef = useRef(account);
+  const intentRef = useRef(0);
+  useLayoutEffect(() => {
+    if (accountRef.current !== account) {
+      accountRef.current = account;
+      intentRef.current++;
+    }
+  });
   const [isLoadingHandoff, setIsLoadingHandoff] = useState(false);
   // Handoff-source rejection (Fix #5). When a Send-to-Editor handoff carries
   // an image whose dimensions exceed the editor's caps, surface a clear error
@@ -111,6 +129,7 @@ export default function EditorPage() {
         setIsLoadingHandoff(false);
         return;
       }
+      intentRef.current++;
       setPending({
         kind: 'image',
         draftKey: newDraftKey('page'),
@@ -138,7 +157,7 @@ export default function EditorPage() {
   // draft an editor in this tab is still working on is left out. Best-
   // effort: any failure leaves the landing without a list.
   useEffect(() => {
-    if (pending !== null || isLoadingHandoff || !authLoaded) return;
+    if (pending !== null || isLoadingHandoff || account === undefined) return;
     if (useSpriteStore.getState().pendingEditorHandoff) return;
 
     const token = { cancelled: false };
@@ -151,13 +170,17 @@ export default function EditorPage() {
         const all = (await getDraftStore().listDrafts())
           .map((c) => c.manifest)
           .filter((m) => !isEditorSessionOpen(m.draftId));
-        if (!token.cancelled) setDrafts(draftsFor(all, userId ?? null));
+        if (!token.cancelled) setListed({ account, drafts: draftsFor(all, account) });
       } catch {
-        if (!token.cancelled) setDrafts([]);
+        if (!token.cancelled) setListed(null);
       }
     })();
     return () => { token.cancelled = true; };
-  }, [pending, isLoadingHandoff, authLoaded, userId, getDraftStore]);
+  }, [pending, isLoadingHandoff, account, getDraftStore]);
+
+  const unlist = useCallback((draftId: string) => {
+    setListed((l) => l && { ...l, drafts: l.drafts.filter((m) => m.draftId !== draftId) });
+  }, []);
 
   // Shared dismiss for both pending kinds. Keep-it-simple lifecycle: in-editor
   // Back does NOT delete the draft (it persists and is offered again next
@@ -167,33 +190,53 @@ export default function EditorPage() {
     setPending(null);
   }, [reset]);
 
+  // Opens a draft for the account signed in when it was chosen, if that
+  // account may see it (its owner checked against the store, not the list on
+  // screen), and only if no account change, other restore or new image came
+  // in the meantime (Second 121).
   const handleRestoreDraft = useCallback(async (draftId: string) => {
+    const intent = ++intentRef.current;
+    const who = accountRef.current;
+    if (who === undefined) return;
+    const stillWanted = () => intentRef.current === intent && accountRef.current === who;
     try {
+      const found = await visibleDraft(draftId, who);
+      if (!stillWanted()) return;
+      if (!found) { unlist(draftId); return; }
       const draft = await getDraftStore().loadDraft(draftId);
+      if (!stillWanted()) return;
       setPending({ kind: 'restore', draftKey: draftId, envelope: draft.project, bytes: draft.bytes });
     } catch {
       // Draft corrupt or gone: drop it from the list; the editor starts fresh.
-      setDrafts((list) => list.filter((m) => m.draftId !== draftId));
+      if (stillWanted()) unlist(draftId);
     }
-  }, [getDraftStore]);
+  }, [getDraftStore, unlist]);
 
+  // Deletes a draft only if the account signed in at the click may see it,
+  // and still is when the check answers (Second 121).
   const handleDiscardDraft = useCallback(async (draftId: string) => {
+    const who = accountRef.current;
     // Cancel any in-flight probe BEFORE deleting, so its stale result can't
     // resurrect the draft in the list after we remove it.
     if (probeCancelRef.current) probeCancelRef.current.cancelled = true;
-    await discardEditorDraft(draftId);
-    setDrafts((list) => list.filter((m) => m.draftId !== draftId));
-  }, []);
+    if (who !== undefined && (await visibleDraft(draftId, who)) && accountRef.current === who) {
+      await discardEditorDraft(draftId);
+    }
+    unlist(draftId);
+  }, [unlist]);
 
   // "Restore in Editor" on Generate: open that draft (one-shot, like the
-  // Send to Editor handoff above).
+  // Send to Editor handoff above), once Clerk knows the account, and only
+  // for the account that chose it there.
   useEffect(() => {
+    if (account === undefined) return;
     const { pendingEditorRestore, setPendingEditorRestore } = useSpriteStore.getState();
     if (!pendingEditorRestore) return;
     setPendingEditorRestore(null);
+    if (pendingEditorRestore.account !== account) return;
     setIsLoadingHandoff(true);
-    void handleRestoreDraft(pendingEditorRestore).finally(() => setIsLoadingHandoff(false));
-  }, [handleRestoreDraft]);
+    void handleRestoreDraft(pendingEditorRestore.draftId).finally(() => setIsLoadingHandoff(false));
+  }, [handleRestoreDraft, account]);
 
   if (isLoadingHandoff) {
     return (
@@ -229,9 +272,10 @@ export default function EditorPage() {
           </div>
         )}
         <EditorLanding
-          onProjectReady={(dataUrl, width, height, source) =>
-            setPending({ kind: 'image', draftKey: newDraftKey('page'), dataUrl, width, height, source })
-          }
+          onProjectReady={(dataUrl, width, height, source) => {
+            intentRef.current++;
+            setPending({ kind: 'image', draftKey: newDraftKey('page'), dataUrl, width, height, source });
+          }}
           drafts={drafts}
           onRestoreDraft={(draftId) => void handleRestoreDraft(draftId)}
           onDiscardDraft={(draftId) => void handleDiscardDraft(draftId)}

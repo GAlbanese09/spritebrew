@@ -34,10 +34,6 @@ const EDITOR_HOTKEY_SCOPE = 'editor';
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 32;
 
-// How long a Leave by the browser's Back waits for the page to go before
-// it falls back to the Editor's landing (BUILD 2026-10-29).
-const LEAVE_BACK_WAIT_MS = 500;
-
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
@@ -45,6 +41,7 @@ import { useSpriteStore } from '@/stores/spriteStore';
 import { extractPaletteFromImageData } from '@/lib/imagePalette';
 import { useEditorRecovery, closeEditorDraft } from './useEditorRecovery';
 import { useEditorHistoryGuard } from './useEditorHistoryGuard';
+import { useLeaveByBack } from './useLeaveByBack';
 import EditorLeaveDialog from './EditorLeaveDialog';
 import { isDevHost } from '@/lib/isDevHost';
 import { devRecoverySelfTest } from '@/lib/editorRecovery';
@@ -1114,6 +1111,8 @@ export default function PixelEditorBody({
     return () => document.removeEventListener('click', onClick, true);
   }, [guardPage]);
 
+  const leaveByBack = useLeaveByBack(onDismiss);
+
   const stayInEditor = useCallback(() => {
     // A Back already took the editor's history entry; put it back.
     if (leaveAsk?.kind === 'back') rearmPageGuard();
@@ -1125,25 +1124,13 @@ export default function PixelEditorBody({
     setLeaveAsk(null);
     if (!ask) return;
     void closeEditorDraft(draftKey);
-    if (ask.kind === 'back') {
-      // The user's Back already took the editor's own entry; this one
-      // leaves the page. When there is no page to go back to (the editor is
-      // the tab's first page), or the entry below is this same page (Next
-      // keeps the editor mounted then), the editor goes to its landing
-      // instead of staying open with its session closed.
-      const from = window.location.pathname;
-      let moved = false;
-      const onPop = () => { moved = true; };
-      window.addEventListener('popstate', onPop, { once: true });
-      window.history.back();
-      window.setTimeout(() => {
-        window.removeEventListener('popstate', onPop);
-        if (!moved || window.location.pathname === from) onDismiss();
-      }, LEAVE_BACK_WAIT_MS);
-    }
+    // The user's Back already took the editor's own entry; this one leaves
+    // the page, or goes to the landing when there is nowhere to go back to
+    // (useLeaveByBack).
+    if (ask.kind === 'back') leaveByBack();
     else if (ask.kind === 'href') goTo(ask.href);
     else onDismiss();
-  }, [leaveAsk, draftKey, goTo, onDismiss]);
+  }, [leaveAsk, draftKey, goTo, onDismiss, leaveByBack]);
 
   // The page header's Back: straight to the landing when there is nothing
   // to lose, else ask.

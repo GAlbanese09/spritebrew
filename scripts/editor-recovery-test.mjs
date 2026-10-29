@@ -53,6 +53,7 @@ const FAKE_REACT = lines(
 const CLERK = 'export function useAuth() { return globalThis.__auth; }';
 const FAKE_RECOVERY = lines(
   'export const MAX_DRAFTS = 5;',
+  'export function draftVisibleTo(m, owner) { return m.owner === undefined || m.owner === null || m.owner === owner; }',
   'const db = (globalThis.__draftDb ??= { manifests: new Map(), log: [], gate: null });',
   'export class IndexedDbDraftStore {',
   '  async saveDraft(input) {',
@@ -63,6 +64,7 @@ const FAKE_RECOVERY = lines(
   '    db.log.push(["saved", input.projectKey]);',
   '    return { manifest: db.manifests.get(input.projectKey) };',
   '  }',
+  '  async getLatest(id) { const m = db.manifests.get(id); return m ? { manifest: m } : null; }',
   '  async markClosed(id) { db.log.push(["close", id]); const m = db.manifests.get(id); if (m) m.closedAt = 1; }',
   '  async deleteDraft(id) { db.log.push(["delete", id]); db.manifests.delete(id); }',
   '  async prune(keep, protect) { db.log.push(["prune", keep, protect]); }',
@@ -367,8 +369,8 @@ const saves = () => db.log.filter((e) => e[0] === 'save');
   edit();
   await advance(1000);
   const then = saves().map((e) => [e[1], e[3]]);
-  check('if Clerk has not loaded after 5 s the edit is saved as no account, and once Clerk knows the account the next save takes it',
-    early === 0 && same(late, [null]) && same(then, [[key, null], [key, 'user_a']]), { early, late, then });
+  check('if Clerk has not loaded after 5 s the edit is saved with no owner yet, and once Clerk knows the account the next save takes it',
+    early === 0 && late.length === 1 && late[0] === undefined && then.length === 2 && then[0][0] === key && then[0][1] === undefined && then[1][0] === key && then[1][1] === 'user_a', { early, late, then });
   c.unmount();
 }
 
@@ -442,8 +444,8 @@ const saves = () => db.log.filter((e) => e[0] === 'save');
   await advance(300);
   c.unmount();
   await advance(10);
-  check('an editor that goes before Clerk knows the account still saves its edit, as no account',
-    saves().length === 1 && saves()[0][3] === null, db.log);
+  check('an editor that goes before Clerk knows the account still saves its edit, with no owner yet',
+    saves().length === 1 && saves()[0][3] === undefined, db.log);
 }
 
 // 18. A list read after editorWritesSettled() sees what an editor that just
@@ -461,6 +463,55 @@ const saves = () => db.log.filter((e) => e[0] === 'save');
   await waiting;
   check('a list read after editorWritesSettled() sees the close of an editor that just went',
     before === false && settled === true && db.log.some((e) => e[0] === 'close' && e[1] === key), { before, settled, log: db.log });
+}
+
+// 19. Second 121 P2-A: the session's account is the one known when it began.
+// A sign-out or another account before its first save does not move it.
+for (const [label, later] of [['a sign-out', null], ['another account', 'user_b']]) {
+  const { c } = await session({ user: 'user_a' });
+  await drain();
+  edit();
+  await advance(300);
+  globalThis.__auth = { isLoaded: true, userId: later };
+  c.render();
+  c.unmount();
+  await advance(10);
+  check(`an edit by A, then ${label} before the first save, then the editor goes: saved as A`,
+    saves().length === 1 && saves()[0][3] === 'user_a' && saves()[0][5] === 40, db.log);
+}
+
+// 20. The same when Clerk loads during the session: pinned when it loads.
+{
+  const { c } = await session({ loaded: false, user: undefined });
+  await drain();
+  globalThis.__auth = { isLoaded: true, userId: 'user_a' };
+  c.render();
+  edit();
+  await advance(300);
+  globalThis.__auth = { isLoaded: true, userId: null };
+  c.render();
+  c.unmount();
+  await advance(10);
+  check('Clerk loads as A during the session, A edits, then signs out before the first save: saved as A',
+    saves().length === 1 && saves()[0][3] === 'user_a', db.log);
+}
+
+// 21. Second 121 P2-C: a close before Clerk loads still saves its newest
+// state, before the close; an existing draft keeps its owner.
+for (const existing of [false, true]) {
+  const { key, c } = await session({ key: existing ? 'page:owned-restore' : undefined, loaded: false, user: undefined });
+  if (existing) db.manifests.set(key, { draftId: key, owner: 'user_a' });
+  await drain();
+  edit();
+  await advance(300);
+  const closing = R.closeEditorDraft(key);
+  c.unmount();
+  await closing;
+  await advance(20_000);
+  const order = db.log.filter((e) => e[0] === 'save' || e[0] === 'close').map((e) => e[0] + ':' + (e[0] === 'save' ? e[2] + ':' + e[5] : ''));
+  const m = db.manifests.get(key);
+  check(`a close before Clerk loads saves the newest pixels first, then closes${existing ? ', and the draft keeps its owner' : ''}`,
+    same(order, ['save:explicit:40', 'close:']) && m && m.closedAt === 1 && (existing ? m.owner === 'user_a' : m.owner === undefined), { order, m });
 }
 
 console.log(`${pass} passed, ${fail} failed`);

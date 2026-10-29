@@ -8,7 +8,9 @@ import {
   isRecoveryAvailable,
   requestPersistentStorage,
   MAX_DRAFTS,
+  draftVisibleTo,
   type DraftSurface,
+  type RecoveryManifestV1,
   type SaveReason,
 } from '@/lib/editorRecovery';
 import type { SpriteProjectV1 } from '@/lib/spriteProject';
@@ -63,6 +65,14 @@ function afterWrites(key: string, step: () => Promise<void>): Promise<void> {
   return chain;
 }
 
+/** The draft's manifest when `owner` (the signed-in user id, or null when
+ *  signed out) may restore or discard it now, else null: its own, or one no
+ *  account owns (Second 121). */
+export async function visibleDraft(draftId: string, owner: string | null): Promise<RecoveryManifestV1 | null> {
+  const found = await editorDraftStore().getLatest(draftId);
+  return found && draftVisibleTo(found.manifest, owner) ? found.manifest : null;
+}
+
 /** Discard in the editor or on a restore banner: no later save may write
  *  the draft, and it is deleted once any write in flight has landed. */
 export function discardEditorDraft(key: string): Promise<void> {
@@ -114,9 +124,16 @@ export function useEditorRecovery({
   const getPaletteRef = useRef(getPalette);
   const { isLoaded, userId } = useAuth();
   const authRef = useRef({ isLoaded, userId });
+  // The open session's account, pinned the first time Clerk is known to
+  // have loaded while it is open: at its start if Clerk had loaded by then,
+  // else at the first render after. A sign-out or another account later in
+  // the session never moves its draft (Second 121). undefined: not known.
+  const sessionRef = useRef<{ owner: string | null | undefined } | null>(null);
   useLayoutEffect(() => {
     getPaletteRef.current = getPalette;
     authRef.current = { isLoaded, userId };
+    const session = sessionRef.current;
+    if (session && session.owner === undefined && isLoaded) session.owner = userId ?? null;
   });
 
   useEffect(() => {
@@ -126,12 +143,10 @@ export function useEditorRecovery({
     let disposed = false;
     let available = false;
     let persistRequested = false;
-    // The account the session's draft belongs to, fixed at the first write
-    // once Clerk knows it. Until then (Clerk late, or never loading) the
-    // session saves after CLERK_WAIT_MS as no account, and takes the account
-    // at the first write after Clerk has loaded.
-    let owner: string | null = null;
-    let ownerKnown = false;
+    const session: { owner: string | null | undefined } = {
+      owner: authRef.current.isLoaded ? (authRef.current.userId ?? null) : undefined,
+    };
+    sessionRef.current = session;
     let clerkWaitOver = false;
     const clerkTimer = setTimeout(() => { clerkWaitOver = true; }, CLERK_WAIT_MS);
     // True once this session has asked for a write (it had edits).
@@ -178,15 +193,15 @@ export function useEditorRecovery({
     // wait for Clerk any longer.
     const doSave = (reason: SaveReason, last = false) => {
       if (!available || ended.has(projectKey)) return;
-      if (!ownerKnown) {
-        if (authRef.current.isLoaded) {
-          owner = authRef.current.userId ?? null;
-          ownerKnown = true;
-        } else if (!clerkWaitOver && !last) {
-          // The account is not known until Clerk loads; try again shortly.
-          scheduleSave();
-          return;
-        }
+      // Until Clerk has loaded the session's account is not known. A save
+      // waits for it, but not past CLERK_WAIT_MS and never on the session's
+      // last save; meanwhile the draft is saved with no owner of its own (a
+      // draft that has one keeps it), and the first save once the account is
+      // known sets it. The owner travels with this snapshot.
+      const owner = session.owner;
+      if (owner === undefined && !clerkWaitOver && !last) {
+        scheduleSave();
+        return;
       }
       const snap = snapshot();
       if (!snap) return;
@@ -210,10 +225,12 @@ export function useEditorRecovery({
       doSave('lifecycle');
     };
 
-    // closeEditorDraft's "save the newest state now".
+    // closeEditorDraft's "save the newest state now": the session's last
+    // save, so it never waits for Clerk (Second 121: a close before Clerk
+    // loaded saved nothing).
     const flushExplicit = () => {
       clearTimers();
-      doSave('explicit');
+      doSave('explicit', true);
     };
     flushers.set(projectKey, flushExplicit);
 
@@ -259,6 +276,7 @@ export function useEditorRecovery({
       // the session already, and doSave skips it.
       clearTimers();
       doSave('lifecycle', true);
+      if (sessionRef.current === session) sessionRef.current = null;
       disposed = true;
       available = false;
       openSessions.delete(projectKey);

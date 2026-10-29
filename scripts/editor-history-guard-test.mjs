@@ -53,6 +53,7 @@ fs.writeFileSync(path.join(DIR, 'fake-react.mjs'), lines(
 ));
 fs.writeFileSync(path.join(DIR, 'entry.mjs'), lines(
   `export { useEditorHistoryGuard } from ${JSON.stringify(path.join(ROOT, 'src/components/sprites/useEditorHistoryGuard.ts'))};`,
+  `export { useLeaveByBack, LEAVE_BACK_WAIT_MS } from ${JSON.stringify(path.join(ROOT, 'src/components/sprites/useLeaveByBack.ts'))};`,
   `export { mount } from ${JSON.stringify(path.join(DIR, 'fake-react.mjs'))};`,
 ));
 
@@ -73,6 +74,11 @@ const hist = {
   },
 };
 win.history = hist;
+// The page's path is the current entry's (an entry without one is the
+// editor's own page).
+Object.defineProperty(win, 'location', { get: () => ({ pathname: (hist.state && hist.state.path) || '/editor' }) });
+win.setTimeout = setTimeout;
+win.clearTimeout = clearTimeout;
 globalThis.window = win;
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
@@ -83,7 +89,7 @@ await build({
   tsconfig: path.join(ROOT, 'tsconfig.json'),
   plugins: [{ name: 'stand-ins', setup(b) { b.onResolve({ filter: /^react$/ }, () => ({ path: path.join(DIR, 'fake-react.mjs') })); } }],
 });
-const { useEditorHistoryGuard, mount } = await import(pathToFileURL(OUT).href);
+const { useEditorHistoryGuard, useLeaveByBack, LEAVE_BACK_WAIT_MS, mount } = await import(pathToFileURL(OUT).href);
 
 let pass = 0, fail = 0;
 const check = (name, ok, detail) => {
@@ -220,6 +226,22 @@ function guard(active = true) {
     opened.length === 2 && opened.index === 1 && opened.ownsTop === true && hist.index === 0 && calls.back === 0, { opened, index: hist.index, calls });
 }
 
+// 9c. Second 121: an editor replaced at once by another (which takes over
+// the same entry) must not take that entry off as it goes.
+{
+  fresh();
+  const a = guard();
+  const idOnTop = hist.state.__spritebrewEditor;
+  a.c.unmount();
+  const b = guard();
+  await tick();
+  check("an editor that goes while a new one takes over its entry leaves the entry to the new one",
+    hist.index === 2 && hist.state.__spritebrewEditor === idOnTop && b.c.value.ownsTop() === true && a.calls.back === 0, { index: hist.index });
+  b.c.unmount();
+  await tick();
+  check('and the new one takes it off when it goes', hist.index === 1, { index: hist.index });
+}
+
 // 9. ownsTop: whether a navigation away should replace the entry.
 {
   fresh();
@@ -236,6 +258,62 @@ function guard(active = true) {
     onTop === true && afterBack === false && afterRearm === true && afterPush === false, { onTop, afterBack, afterRearm, afterPush });
   c.unmount();
   await tick();
+}
+
+// 10. Leave by Back (useLeaveByBack): it leaves when there is a page to go
+// back to, falls back when there is not (or the entry below is this same
+// page), and its wait dies with the editor that started it (Second 121).
+const waitOut = () => new Promise((r) => setTimeout(r, LEAVE_BACK_WAIT_MS + 150));
+function leaver() {
+  const calls = { fallback: 0 };
+  const c = mount(() => useLeaveByBack(() => { calls.fallback++; }));
+  return { c, calls, leave: () => c.value() };
+}
+{
+  hist.entries = [{ path: '/generate' }, { path: '/editor' }];
+  hist.index = 1;
+  const a = leaver();
+  a.leave();
+  await tick();
+  // Next renders /generate: the editor goes.
+  a.c.unmount();
+  await waitOut();
+  check('Leave by Back with a page to go back to: it goes there, and nothing more happens',
+    hist.index === 0 && a.calls.fallback === 0, { index: hist.index, calls: a.calls });
+}
+{
+  hist.entries = [{ path: '/editor' }];
+  hist.index = 0;
+  const a = leaver();
+  a.leave();
+  await waitOut();
+  check("Leave by Back on the tab's first page: the fallback runs once", a.calls.fallback === 1, a.calls);
+  a.c.unmount();
+}
+{
+  hist.entries = [{ path: '/editor' }, { path: '/editor', x: 1 }];
+  hist.index = 1;
+  const a = leaver();
+  a.leave();
+  await waitOut();
+  check('Leave by Back onto another entry of the same page: the fallback runs once', hist.index === 0 && a.calls.fallback === 1, a.calls);
+  a.c.unmount();
+}
+{
+  // Second 121 P2-D: the editor goes to /generate, and before its wait is
+  // over the user comes back to /editor and a new editor opens.
+  hist.entries = [{ path: '/generate' }, { path: '/editor' }];
+  hist.index = 1;
+  const a = leaver();
+  a.leave();
+  await tick();
+  a.c.unmount();
+  hist.index = 1;
+  const b = leaver();
+  await waitOut();
+  check('an old Leave by Back never acts after its editor went, even back on the same page with a new editor',
+    a.calls.fallback === 0 && b.calls.fallback === 0, { a: a.calls, b: b.calls });
+  b.c.unmount();
 }
 
 console.log(`${pass} passed, ${fail} failed`);

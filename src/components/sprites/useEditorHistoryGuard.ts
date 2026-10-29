@@ -5,6 +5,11 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 /** The history state field that marks the editor's own entry. */
 const ENTRY_KEY = '__spritebrewEditor';
 
+// The guard that armed the current entry last. An editor that went takes
+// the entry off only if no newer editor has taken it over in the meantime
+// (Second 121: a replaced guard could pop its successor's entry).
+let entryHolder: object | null = null;
+
 /**
  * Keeps the browser's Back inside the editor while `active` (BUILD
  * 2026-10-29). On iOS an edge swipe is a Back that no page can block, and it
@@ -25,8 +30,9 @@ export function useEditorHistoryGuard(
   active: boolean,
   onBack: () => void,
 ): { rearm: () => void; ownsTop: () => boolean } {
-  // This guard's own entry id, made when it first arms.
+  // This guard's own entry id, made when it first arms, and its identity.
   const idRef = useRef<string | null>(null);
+  const selfRef = useRef<object>({});
   const onBackRef = useRef(onBack);
   // True while our entry is on the history and not yet popped.
   const armedRef = useRef(false);
@@ -58,10 +64,12 @@ export function useEditorHistoryGuard(
     }
     if (!isOurs()) window.history.pushState({ [ENTRY_KEY]: idRef.current }, '');
     armedRef.current = true;
+    entryHolder = selfRef.current;
   }, [isOurs]);
 
   useEffect(() => {
     if (!active) return;
+    const self = selfRef.current;
     arm();
     const onPopState = () => {
       if (!armedRef.current || isOurs()) return;
@@ -77,8 +85,9 @@ export function useEditorHistoryGuard(
       // entry is still on top, take it off.
       setTimeout(() => {
         if (mountedRef.current && activeRef.current) return;
-        if (armedRef.current && isOurs()) {
+        if (armedRef.current && isOurs() && entryHolder === self) {
           armedRef.current = false;
+          entryHolder = null;
           window.history.back();
         }
       }, 0);

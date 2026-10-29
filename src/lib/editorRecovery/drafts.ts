@@ -25,6 +25,12 @@ export function newDraftKey(surface: DraftSurface): string {
   return `${surface}:${Date.now().toString(36)}-${rand}`;
 }
 
+/** Whether `owner` (the signed-in user id, or null when signed out) may see,
+ *  restore or discard the draft: its own, or one no account owns. */
+export function draftVisibleTo(m: Pick<RecoveryManifestV1, 'owner'>, owner: string | null): boolean {
+  return m.owner === undefined || m.owner === null || m.owner === owner;
+}
+
 /** The drafts this account may see, newest first, at most MAX_DRAFTS: its
  *  own, plus the device's drafts that no account owns, which are shown to
  *  anyone, as the Editor did before: drafts made signed out (owner null; so
@@ -33,7 +39,7 @@ export function newDraftKey(surface: DraftSurface): string {
  *  the signed-in user id, or null when signed out. */
 export function draftsFor(manifests: readonly RecoveryManifestV1[], owner: string | null): RecoveryManifestV1[] {
   return manifests
-    .filter((m) => m.owner === undefined || m.owner === null || m.owner === owner)
+    .filter((m) => draftVisibleTo(m, owner))
     .slice()
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, MAX_DRAFTS);

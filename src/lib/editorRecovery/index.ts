@@ -28,6 +28,7 @@ export {
   MAX_DRAFTS,
   newDraftKey,
   draftsFor,
+  draftVisibleTo,
   unfinishedDraft,
   draftsToPrune,
   draftSourceLabel,

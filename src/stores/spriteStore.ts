@@ -97,9 +97,10 @@ interface SpriteStore {
    *  generatedImageDataUrl (which stays as-is for back-navigation). */
   pendingEditorHandoff: boolean;
   /** One-shot intent: the user chose "Restore in Editor" for a saved editor
-   *  draft on Generate (BUILD 2026-10-29). The draft's key; /editor's mount
-   *  effect consumes it and opens the draft. */
-  pendingEditorRestore: string | null;
+   *  draft on Generate (BUILD 2026-10-29). The draft's key and the account
+   *  that chose it (null when signed out); /editor's mount effect consumes
+   *  it and opens the draft only for that same account (Second 121). */
+  pendingEditorRestore: { draftId: string; account: string | null } | null;
 
   /** One-shot intent flag: user clicked "Send to Animator" on a Create-mode
    *  Generation Result. Detected by GeneratePage (which flips the tab to
@@ -174,7 +175,7 @@ interface SpriteStore {
   // Send-to-editor handoff
   setPendingEditorHandoff: (pending: boolean) => void;
   clearPendingEditorHandoff: () => void;
-  setPendingEditorRestore: (draftKey: string | null) => void;
+  setPendingEditorRestore: (intent: { draftId: string; account: string | null } | null) => void;
 
   // Send-to-animator handoff
   setPendingAnimatorHandoff: (pending: boolean) => void;
@@ -414,7 +415,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
 
   setPendingEditorHandoff: (pending) => set({ pendingEditorHandoff: pending }),
   clearPendingEditorHandoff: () => set({ pendingEditorHandoff: false }),
-  setPendingEditorRestore: (draftKey) => set({ pendingEditorRestore: draftKey }),
+  setPendingEditorRestore: (intent) => set({ pendingEditorRestore: intent }),
 
   setPendingAnimatorHandoff: (pending) => set({ pendingAnimatorHandoff: pending }),
   clearPendingAnimatorHandoff: () => set({ pendingAnimatorHandoff: false }),

@@ -9,6 +9,10 @@
  * goes stale when a newer Send to Slicer is clicked, since the newest choice
  * is the one the Slicer opens. Downloads do not replace each other or a Slicer
  * choice: each Download click asked for its own file.
+ *
+ * The page runs both actions through whenCurrent, so the click, the wait and
+ * the check before acting are this module's code, the same code
+ * scripts/gallery-ownership-test.mjs drives.
  */
 
 export interface GalleryToken {
@@ -16,6 +20,8 @@ export interface GalleryToken {
   /** The Send to Slicer click this token belongs to; null for a Download. */
   readonly slicer: number | null;
 }
+
+export type GalleryAction = 'download' | 'slicer';
 
 export interface GalleryOwnership {
   /** Token for a Download clicked now. */
@@ -26,13 +32,23 @@ export interface GalleryOwnership {
   isCurrent(token: GalleryToken): boolean;
   /** The Gallery unmounts or its account changes: every token captured before now goes stale. */
   endVisit(): void;
+  /**
+   * A click now: takes the action's token, then waits for the sheet's URL,
+   * and calls act only if there is a URL and the token is still current.
+   * Resolves true if it acted.
+   */
+  whenCurrent(
+    action: GalleryAction,
+    getUrl: () => string | undefined | Promise<string | undefined>,
+    act: (url: string) => void,
+  ): Promise<boolean>;
 }
 
 /** One per Gallery page instance. */
 export function createGalleryOwnership(): GalleryOwnership {
   let visit = 0;
   let slicer = 0;
-  return {
+  const ownership: GalleryOwnership = {
     download: () => ({ visit, slicer: null }),
     slicer: () => {
       slicer += 1;
@@ -42,5 +58,13 @@ export function createGalleryOwnership(): GalleryOwnership {
     endVisit: () => {
       visit += 1;
     },
+    whenCurrent: async (action, getUrl, act) => {
+      const token = action === 'slicer' ? ownership.slicer() : ownership.download();
+      const url = await getUrl();
+      if (!url || !ownership.isCurrent(token)) return false;
+      act(url);
+      return true;
+    },
   };
+  return ownership;
 }

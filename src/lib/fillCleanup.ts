@@ -107,6 +107,14 @@ export function keyFill(px: Uint8ClampedArray | Uint8Array): number {
 export const INTERIOR_REACH = 4;
 
 /**
+ * How many mostly-magenta rim pixels despillRim looks around one by one
+ * before it builds its count table for the rest of a W x H sheet.
+ */
+export function looksBeforeTable(W: number, H: number): number {
+  return Math.max(256, (W * H) >> 8);
+}
+
+/**
  * The rim despill (despillChromaEdges' rules, on RGBA data). Only opaque
  * pixels within 2 px (Chebyshev) of a fully transparent pixel, the ring the
  * fill could tint; interior art is never touched, and neither is alpha.
@@ -178,7 +186,7 @@ export function despillRim(
   // many (art that is mostly magenta near its rim) builds a count table of
   // those interior pixels once, so each look is a box sum and the whole
   // pass stays bounded (Second 118).
-  const LOOKS_BEFORE_TABLE = Math.max(256, (W * H) >> 8);
+  const LOOKS_BEFORE_TABLE = looksBeforeTable(W, H);
   let looks = 0;
   let table: Int32Array | null = null;
   const buildTable = (): Int32Array => {

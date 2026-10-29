@@ -22,7 +22,7 @@ await build({
   bundle: true, format: 'esm', platform: 'node', outfile: OUT, logLevel: 'silent',
 });
 const {
-  MAGENTA_FILL, INTERIOR_REACH, inKeyBand, isMagentaFill, mostlyMagenta, hasFillPixels, characterColours, keyFill, despillRim,
+  MAGENTA_FILL, INTERIOR_REACH, looksBeforeTable, inKeyBand, isMagentaFill, mostlyMagenta, hasFillPixels, characterColours, keyFill, despillRim,
   cleanAnimation, cornersOpaque,
 } = await import(pathToFileURL(OUT).href);
 
@@ -150,35 +150,102 @@ check('the saturated art colours are all mostly magenta (violet is dark too, so 
       same(at(px, BW, 1, 4), despilled([207, 67, 158])), at(px, BW, 1, 4));
   }
 
-  // The reach's edges, with the count table built (the fringe pixel is the
-  // first mostly-magenta candidate): art exactly INTERIOR_REACH away, right
-  // or below, protects a rim pixel; one more pixel away does not. And after
-  // the table is built, a pixel 2 px above the bottom edge is still rim.
+  // The reach's edges, on both of despillRim's paths. Each sheet holds a
+  // 12 x 11 brown block (its outer ring transparent) at the bottom left,
+  // with a bright fringe pixel on its rim. On the "table" sheets a band of
+  // 1 px violet stripes runs above the block: rim pixels, never interior,
+  // so they protect nothing, but they give despillRim more mostly-magenta
+  // rim pixels to look around than looksBeforeTable allows before it
+  // reaches the block, so the block is answered from the count table. The
+  // plain sheets have no band and stay one by one. On both: art exactly
+  // INTERIOR_REACH away (right, below, or above at the sheet's bottom edge)
+  // protects the rim pixel; one more pixel away does not; and a dark cast
+  // 2 px above the bottom edge is still rim and loses its cast.
   {
-    const BW = 12;
-    const BH = 11;
-    const edgeSheet = (fringeAt, violetAt, castAt) => sheet(BW, BH, (x, y) => {
-      if (x === 0 || y === 0 || x === BW - 1 || y === BH - 1) return null;
-      if (x === fringeAt[0] && y === fringeAt[1]) return [207, 67, 158, 255];
-      if (violetAt && x === violetAt[0] && y === violetAt[1]) return [...ART.violet, 255];
-      if (castAt && x === castAt[0] && y === castAt[1]) return [70, 50, 65, 255];
+    const BW = 40;
+    const OY = 17;
+    const BH = OY + 11;
+    const edgeSheet = (table, fringeAt, violetAt, castAt) => sheet(BW, BH, (x, y) => {
+      if (table && y >= 1 && y <= 14 && x % 2 === 1) return [...ART.violet, 255];
+      const by = y - OY;
+      if (by < 0 || x > 11 || x === 0 || by === 0 || x === 11 || by === 10) return null;
+      if (x === fringeAt[0] && by === fringeAt[1]) return [207, 67, 158, 255];
+      if (violetAt && x === violetAt[0] && by === violetAt[1]) return [...ART.violet, 255];
+      if (castAt && x === castAt[0] && by === castAt[1]) return [70, 50, 65, 255];
       return [...BROWN, 255];
     });
-    const fringeAfter = (fringeAt, violetAt) => {
-      const px = edgeSheet(fringeAt, violetAt);
-      despillRim(px, BW, BH, MAGENTA_FILL, { bright: true });
-      return at(px, BW, fringeAt[0], fringeAt[1]);
+    // The mostly-magenta rim pixels despillRim looks around before it
+    // reaches (x, y), by the rule's own terms. Alpha never changes and a
+    // pixel's colour changes only when the loop reaches it, so counting on
+    // the sheet as built is exact.
+    const looksBefore = (px, x0, y0) => {
+      const near = (x, y) => {
+        for (let ny = Math.max(0, y - 2); ny <= Math.min(BH - 1, y + 2); ny++) {
+          for (let nx = Math.max(0, x - 2); nx <= Math.min(BW - 1, x + 2); nx++) if (px[(ny * BW + nx) * 4 + 3] === 0) return true;
+        }
+        return false;
+      };
+      let n = 0;
+      for (let p = 0; p < y0 * BW + x0; p++) {
+        const k = p * 4;
+        if (px[k + 3] !== 0 && Math.min(px[k], px[k + 2]) > px[k + 1] && mostlyMagenta(px[k], px[k + 1], px[k + 2]) && near(p % BW, Math.floor(p / BW))) n++;
+      }
+      return n;
     };
-    check(`rim: magenta art exactly ${INTERIOR_REACH} px to the right protects a rim pixel; ${INTERIOR_REACH + 1} px does not`,
-      same(fringeAfter([1, 5], [1 + INTERIOR_REACH, 5]), [207, 67, 158, 255]) && same(fringeAfter([1, 5], [2 + INTERIOR_REACH, 5]), despilled([207, 67, 158])),
-      [fringeAfter([1, 5], [1 + INTERIOR_REACH, 5]), fringeAfter([1, 5], [2 + INTERIOR_REACH, 5])]);
-    check(`rim: magenta art exactly ${INTERIOR_REACH} px below protects a rim pixel; ${INTERIOR_REACH + 1} px does not`,
-      same(fringeAfter([5, 1], [5, 1 + INTERIOR_REACH]), [207, 67, 158, 255]) && same(fringeAfter([5, 1], [5, 2 + INTERIOR_REACH]), despilled([207, 67, 158])),
-      [fringeAfter([5, 1], [5, 1 + INTERIOR_REACH]), fringeAfter([5, 1], [5, 2 + INTERIOR_REACH])]);
-    const px = edgeSheet([1, 5], null, [8, BH - 3]);
-    despillRim(px, BW, BH, MAGENTA_FILL, { bright: true });
-    check('rim: after the count table is built, a dark cast 2 px above the bottom edge is still rim and loses its cast',
-      same(at(px, BW, 8, BH - 3), [55, 50, 50, 255]), at(px, BW, 8, BH - 3));
+    const limit = looksBeforeTable(BW, BH);
+    const pairs = [
+      ['to the right', [1, 5], [1 + INTERIOR_REACH, 5], [2 + INTERIOR_REACH, 5]],
+      ['below', [5, 1], [5, 1 + INTERIOR_REACH], [5, 2 + INTERIOR_REACH]],
+      ['above, at the bottom edge', [5, 9], [5, 9 - INTERIOR_REACH], [5, 8 - INTERIOR_REACH]],
+    ];
+    for (const table of [true, false]) {
+      const path = table ? 'from the count table' : 'one by one';
+      const reached = [];
+      const fringeAfter = (fringeAt, violetAt) => {
+        const px = edgeSheet(table, fringeAt, violetAt);
+        reached.push(looksBefore(px, fringeAt[0], OY + fringeAt[1]));
+        despillRim(px, BW, BH, MAGENTA_FILL, { bright: true });
+        return at(px, BW, fringeAt[0], OY + fringeAt[1]);
+      };
+      for (const [where, fringeAt, inReach, outOfReach] of pairs) {
+        const kept = fringeAfter(fringeAt, inReach);
+        const lost = fringeAfter(fringeAt, outOfReach);
+        check(`rim, ${path}: magenta art exactly ${INTERIOR_REACH} px ${where} protects a rim pixel; ${INTERIOR_REACH + 1} px does not`,
+          same(kept, [207, 67, 158, 255]) && same(lost, despilled([207, 67, 158])), [kept, lost]);
+      }
+      const px = edgeSheet(table, [1, 5], null, [8, 8]);
+      reached.push(looksBefore(px, 8, OY + 8));
+      despillRim(px, BW, BH, MAGENTA_FILL, { bright: true });
+      check(`rim, ${path}: a dark cast 2 px above the bottom edge is still rim and loses its cast`,
+        same(at(px, BW, 8, OY + 8), [55, 50, 50, 255]), at(px, BW, 8, OY + 8));
+      check(table
+        ? `each of those pixels is reached after more than looksBeforeTable (${limit}) looks, so the table answers it`
+        : `each of those pixels is reached within looksBeforeTable (${limit}) looks, so it is answered one by one`,
+      reached.every((n) => (table ? n > limit : n <= limit)), reached);
+    }
+  }
+
+  // The cost stays bounded (Second 118's note). On a 128 x 128 violet sheet
+  // with a transparent pixel every 5 px, every opaque pixel is a mostly
+  // magenta rim pixel. despillRim may read the sheet at most 35 times per
+  // pixel (it reads it 23 times); without the count table it reads it about
+  // 300 times per pixel here, and without its ring memo about 50. Reads are
+  // counted through a wrapper, so the check does not depend on the
+  // machine's speed.
+  {
+    const N = 128;
+    const px = sheet(N, N, (x, y) => (x % 5 === 2 && y % 5 === 2 ? null : [...ART.violet, 255]));
+    let reads = 0;
+    const counted = new Proxy(px, {
+      get(t, k) {
+        if (typeof k === 'string' && k.charCodeAt(0) >= 48 && k.charCodeAt(0) <= 57) reads++;
+        return Reflect.get(t, k);
+      },
+      set(t, k, v) { return Reflect.set(t, k, v); },
+    });
+    const changed = despillRim(counted, N, N, MAGENTA_FILL, { bright: true });
+    check('a sheet that is all mostly-magenta rim costs at most 35 reads per pixel',
+      reads <= 35 * N * N && changed > 0, { readsPerPixel: Math.round(reads / (N * N)), changed });
   }
 
   // The limits, for the record: a stroke too thin to have an interior gives

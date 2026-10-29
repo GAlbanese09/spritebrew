@@ -317,27 +317,31 @@ export default function GalleryPage() {
     </div>
   ) : null;
 
-  const handleDownload = useCallback(async (entry: GalleryEntryV1) => {
-    const token = ownership.download();
-    const url = entry.mode === 'animate' ? await cleanedUrl(entry.jobId) : imageUrls[entry.jobId];
-    if (!url || !ownership.isCurrent(token)) return;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `spritebrew_${entry.mode}_${entry.jobId}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }, [imageUrls, cleanedUrl, ownership]);
+  // Both wait for an animation's clean copy, and act only if the click still
+  // owns it then (whenCurrent).
+  const handleDownload = useCallback((entry: GalleryEntryV1) => ownership.whenCurrent(
+    'download',
+    () => (entry.mode === 'animate' ? cleanedUrl(entry.jobId) : imageUrls[entry.jobId]),
+    (url) => {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `spritebrew_${entry.mode}_${entry.jobId}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    },
+  ), [imageUrls, cleanedUrl, ownership]);
 
-  const handleSendToSlicer = useCallback(async (entry: GalleryEntryV1) => {
-    const token = ownership.slicer();
-    const url = entry.mode === 'animate' ? await cleanedUrl(entry.jobId) : imageUrls[entry.jobId];
-    if (!url || !ownership.isCurrent(token)) return;
-    setGeneratedImage(url, url);
-    setGenerationStyle(entry.style);
-    setCurrentSheetMetadata(deriveSlicerHints(entry));
-    router.push('/upload');
-  }, [imageUrls, cleanedUrl, ownership, setGeneratedImage, setGenerationStyle, setCurrentSheetMetadata, router]);
+  const handleSendToSlicer = useCallback((entry: GalleryEntryV1) => ownership.whenCurrent(
+    'slicer',
+    () => (entry.mode === 'animate' ? cleanedUrl(entry.jobId) : imageUrls[entry.jobId]),
+    (url) => {
+      setGeneratedImage(url, url);
+      setGenerationStyle(entry.style);
+      setCurrentSheetMetadata(deriveSlicerHints(entry));
+      router.push('/upload');
+    },
+  ), [imageUrls, cleanedUrl, ownership, setGeneratedImage, setGenerationStyle, setCurrentSheetMetadata, router]);
 
   const handleDelete = useCallback(async (jobId: string) => {
     if (!confirm('Delete this generation? This cannot be undone.')) return;

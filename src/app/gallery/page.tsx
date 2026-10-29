@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Download, Scissors, Trash2, Images, Sparkles, Play, Loader2 } from 'lucide-react';
@@ -81,6 +81,11 @@ export default function GalleryPage() {
   // still belongs to this visit and, for the Slicer, is still the newest
   // choice (Second 118; src/lib/galleryOwnership.ts).
   const [ownership] = useState(createGalleryOwnership);
+  // The visit ends when the page unmounts or its account changes, in the
+  // commit that makes the change. A layout cleanup runs there, before any
+  // waiting action can resume; a passive one (useEffect) may run later, so
+  // an action clicked in the old visit could act first (Second 119).
+  useLayoutEffect(() => () => ownership.endVisit(), [userId, ownership]);
 
   const cleanedUrl = useCallback((jobId: string): Promise<string | undefined> => {
     const started = cleaningRef.current[jobId];
@@ -202,7 +207,6 @@ export default function GalleryPage() {
     run();
     return () => {
       cancelled = true;
-      ownership.endVisit();
       // Intentionally NOT revoking urlsRef on unmount — Slicer handoff needs them
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

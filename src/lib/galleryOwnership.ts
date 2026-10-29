@@ -5,10 +5,12 @@
  * An action captures a token when it is clicked and acts only if the token is
  * still current when the clean copy is ready, as /upload's async work does
  * (src/lib/sheetOwnership.ts). Every token goes stale when the Gallery's visit
- * ends: the page unmounts or its account changes. A Send to Slicer token also
- * goes stale when a newer Send to Slicer is clicked, since the newest choice
- * is the one the Slicer opens. Downloads do not replace each other or a Slicer
- * choice: each Download click asked for its own file.
+ * ends: the page unmounts or its account changes. The page ends it in a
+ * layout cleanup, in the commit that makes the change, so no waiting action
+ * resumes in between (Second 119). A Send to Slicer token also goes stale
+ * when a newer Send to Slicer is clicked, since the newest choice is the one
+ * the Slicer opens. Downloads do not replace each other or a Slicer choice:
+ * each Download click asked for its own file.
  *
  * The page runs both actions through whenCurrent, so the click, the wait and
  * the check before acting are this module's code, the same code

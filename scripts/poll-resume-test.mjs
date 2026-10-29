@@ -85,6 +85,16 @@ check('context: a Create context on an Animate job: none', parseJobContext('anim
 check('context: an Animate context on a Create job: none', parseJobContext('create', ANIMATE) === undefined);
 check('context: an Animate context without its frame size: none',
   parseJobContext('animate', { ...ANIMATE, frameSize: undefined }) === undefined);
+check('context: the pink guard (inputHasFill) is kept when it is a boolean, and an Animate context is valid without it',
+  same(parseJobContext('animate', { ...ANIMATE, inputHasFill: true }), { ...ANIMATE, inputHasFill: true }) &&
+  same(parseJobContext('animate', { ...ANIMATE, inputHasFill: false }), { ...ANIMATE, inputHasFill: false }) &&
+  same(parseJobContext('animate', ANIMATE), ANIMATE));
+check('context: an inputHasFill that is not a boolean is dropped, and the context kept',
+  same(parseJobContext('animate', { ...ANIMATE, inputHasFill: 'yes' }), ANIMATE));
+check('context: the bright guard (inputHasMagenta) is kept when it is a boolean, dropped otherwise',
+  same(parseJobContext('animate', { ...ANIMATE, inputHasMagenta: false }), { ...ANIMATE, inputHasMagenta: false }) &&
+  same(parseJobContext('animate', { ...ANIMATE, inputHasFill: true, inputHasMagenta: true }), { ...ANIMATE, inputHasFill: true, inputHasMagenta: true }) &&
+  same(parseJobContext('animate', { ...ANIMATE, inputHasMagenta: 0 }), ANIMATE));
 check('context: a frame count of 0, or not a whole number: none',
   parseJobContext('animate', { ...ANIMATE, frameCount: 0 }) === undefined &&
   parseJobContext('animate', { ...ANIMATE, frameCount: 2.5 }) === undefined);

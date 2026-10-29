@@ -15,10 +15,12 @@ import { finishedJob, isAnimateContext, type FinishedJob, type JobContext } from
  *  DEFAULT_BG_COLOR); the despill removes its rim from the returned sheet. */
 export const ANIMATE_FILL = '#ff00ff';
 
-/** The browser steps: the despill (spriteUtils' despillIfTransparent) and an
- *  image's decoded size, null when it cannot be decoded. */
+/** The browser steps: the cleanup (spriteUtils' despillIfTransparent, which
+ *  keys the fill pockets when `key` and despills the rim, with its bright
+ *  rule when `bright`) and an image's decoded size, null when it cannot be
+ *  decoded. */
 export interface JobResultIO {
-  despill: (dataUrl: string, fill: string) => Promise<string>;
+  despill: (dataUrl: string, fill: string, opts: { key: boolean; bright: boolean }) => Promise<string>;
   decodedSize: (dataUrl: string) => Promise<{ w: number; h: number } | null>;
 }
 
@@ -60,10 +62,12 @@ export interface PreparedResult {
 }
 
 /**
- * A finished job's result, by the job's own mode. An animation is despilled
- * with its request's fill (ANIMATE_FILL for a job saved without its context)
- * and gets its rescue fields; a Create sheet is used as delivered, with no
- * rescue, whichever form finishes it.
+ * A finished job's result, by the job's own mode. An animation is cleaned
+ * with its request's fill (ANIMATE_FILL for a job saved without its context),
+ * its fill pockets keyed unless the character sent had fill-coloured pixels
+ * of its own, the bright rim rule on only when the character is known to
+ * have had no mostly-magenta ones, and gets its rescue fields; a Create sheet
+ * is used as delivered, with no rescue, whichever form finishes it.
  */
 export async function prepareJobResult(
   result: PollSuccessResult,
@@ -73,7 +77,11 @@ export async function prepareJobResult(
 ): Promise<PreparedResult> {
   const delivered = `data:image/png;base64,${result.resultBase64}`;
   if (mode !== 'animate') return { dataUrl: delivered, rescueInfo: null, finished: finishedJob(ctx, null) };
-  const dataUrl = await io.despill(delivered, isAnimateContext(ctx) ? ctx.bgColor : ANIMATE_FILL);
+  const animate = isAnimateContext(ctx) ? ctx : null;
+  const dataUrl = await io.despill(delivered, animate ? animate.bgColor : ANIMATE_FILL, {
+    key: animate?.inputHasFill !== true,
+    bright: animate?.inputHasMagenta === false,
+  });
   const rescueInfo = await rescueInfoFor(result, dataUrl, io.decodedSize);
   return { dataUrl, rescueInfo, finished: finishedJob(ctx, rescueInfo) };
 }

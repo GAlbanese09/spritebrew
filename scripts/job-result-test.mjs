@@ -30,11 +30,14 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 // Fakes: the despill marks the image with its fill; the decode answers with
 // the size each case sets. Both record their calls.
 function fakeIO(size = null) {
-  const calls = { despill: [], decode: [] };
+  const calls = { despill: [], key: [], bright: [], decode: [] };
   return {
     calls,
     io: {
-      despill: async (dataUrl, fill) => { calls.despill.push(fill); return `${dataUrl}#despilled-${fill}`; },
+      despill: async (dataUrl, fill, opts) => {
+        calls.despill.push(fill); calls.key.push(opts?.key); calls.bright.push(opts?.bright);
+        return `${dataUrl}#despilled-${fill}`;
+      },
       decodedSize: async (dataUrl) => { calls.decode.push(dataUrl); return size; },
     },
   };
@@ -96,6 +99,38 @@ const rescued = (extra) => ({ resultBase64: B64, completedAt: 1, rescued: true, 
   check('Animate saved without its context: despilled with the animate fill, and no entry, style or hints',
     same(calls2.despill, [ANIMATE_FILL]) && ANIMATE_FILL === '#ff00ff' &&
     same(log2.map((c) => c[0]), ['rescue', 'image', 'style', 'hints']) && log2[2][1] === null && log2[3][1] === null, { calls2, log2 });
+}
+
+// 2b. The pink cleanup's guard (HQ 2026-10-28-004): the fill pockets are
+// keyed unless the character sent had fill-coloured pixels of its own.
+{
+  const keyFor = async (ctx) => {
+    const { io, calls } = fakeIO();
+    await prepareJobResult(plain, 'animate', ctx, io);
+    return calls.key[0];
+  };
+  check('guard: a character with fill pixels of its own: the sheet is not keyed', (await keyFor({ ...ANIMATE, inputHasFill: true })) === false);
+  check('guard: a character without them: keyed', (await keyFor({ ...ANIMATE, inputHasFill: false })) === true);
+  check('guard: a job saved before the guard (no field), or without its context: keyed, as the Gallery keys it',
+    (await keyFor(ANIMATE)) === true && (await keyFor(null)) === true);
+  const { io, calls } = fakeIO();
+  await prepareJobResult(plain, 'create', { ...CREATE }, io);
+  check('guard: a Create sheet is never cleaned at all', calls.despill.length === 0 && calls.key.length === 0, calls);
+
+  // The bright rim rule: on only when the character is known to have had no
+  // mostly-magenta colours of its own (the pink audit, Oct 28).
+  const brightFor = async (ctx) => {
+    const { io: io2, calls: c2 } = fakeIO();
+    await prepareJobResult(plain, 'animate', ctx, io2);
+    return c2.bright[0];
+  };
+  check('bright rule: on for a character known to have no mostly-magenta colours', (await brightFor({ ...ANIMATE, inputHasMagenta: false })) === true);
+  check('bright rule: off for a character with them', (await brightFor({ ...ANIMATE, inputHasMagenta: true })) === false);
+  check('bright rule: off for a job saved without the field or without its context, as on the Gallery copy',
+    (await brightFor(ANIMATE)) === false && (await brightFor(null)) === false);
+  check('the two guards are independent: fill pixels of its own turn off the key, magenta ones the bright rule',
+    same(await (async () => { const { io: io3, calls: c3 } = fakeIO(); await prepareJobResult(plain, 'animate', { ...ANIMATE, inputHasFill: true, inputHasMagenta: true }, io3); return [c3.key[0], c3.bright[0]]; })(), [false, false]) &&
+    same(await (async () => { const { io: io3, calls: c3 } = fakeIO(); await prepareJobResult(plain, 'animate', { ...ANIMATE, inputHasFill: false, inputHasMagenta: false }, io3); return [c3.key[0], c3.bright[0]]; })(), [true, true]));
 }
 
 // 3. A rescued animation: the notice's fields, and the frame count derived

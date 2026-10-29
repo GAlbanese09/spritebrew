@@ -1,55 +1,147 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useAuth } from '@clerk/react';
 import { useEditorStore } from './editorStore';
 import {
   IndexedDbDraftStore,
   isRecoveryAvailable,
   requestPersistentStorage,
+  MAX_DRAFTS,
+  type DraftSurface,
   type SaveReason,
 } from '@/lib/editorRecovery';
 import type { SpriteProjectV1 } from '@/lib/spriteProject';
 import { isDevHost } from '@/lib/isDevHost';
 
-/** Stable projectKey for the singleton page-mode scratch draft. Exported so
- *  the /editor landing's recovery probe + restore/discard handlers reference
- *  the same key as the controller's save path — one source of truth. */
+/** The full-page editor's draft key from before every session had its own
+ *  (BUILD 2026-10-29). Drafts saved under it are still listed and restored. */
 export const PAGE_SCRATCH_KEY = 'page:scratch';
 const DEBOUNCE_MS = 1000;
 const MAX_WAIT_MS = 10000;
+// How long a session waits for Clerk to know the account before it saves as
+// no account rather than hold the work back (Clerk can fail to load).
+const CLERK_WAIT_MS = 5000;
+
+// One store for every session and for the close and discard calls, so its
+// database connection is opened once.
+let sharedStore: IndexedDbDraftStore | null = null;
+/** The editor's draft store, shared by every editor surface in this tab. */
+export function editorDraftStore(): IndexedDbDraftStore {
+  return (sharedStore ??= new IndexedDbDraftStore());
+}
+
+// Shared by a session's saver and the explicit discard and close calls,
+// per draft key: the chain of writes in flight, the session's "save the
+// newest state now", and the drafts no later save may touch.
+const writeChains = new Map<string, Promise<void>>();
+const flushers = new Map<string, () => void>();
+const ended = new Set<string>();
+// Sessions open in this tab: their drafts are not offered for restore.
+const openSessions = new Set<string>();
+
+/** True while an editor in this tab is working on the draft. */
+export function isEditorSessionOpen(key: string): boolean {
+  return openSessions.has(key);
+}
+
+const settle = (p: Promise<void> | undefined) => (p ?? Promise.resolve()).catch(() => {});
+
+/** Settles once every draft write already asked for in this tab has landed
+ *  (at most 2 s), so a list of drafts read after it sees them: an editor
+ *  that just went has saved or closed its draft by then. */
+export function editorWritesSettled(): Promise<void> {
+  const all = Promise.all([...writeChains.values()].map(settle)).then(() => undefined);
+  return Promise.race([all, new Promise<void>((resolve) => setTimeout(resolve, 2000))]);
+}
+
+/** Runs `step` after every write already asked for under `key`, in the same
+ *  queue, so a later session's writes under the key come after it. */
+function afterWrites(key: string, step: () => Promise<void>): Promise<void> {
+  const chain = settle(writeChains.get(key)).then(() => step().catch(() => { /* best-effort */ }));
+  writeChains.set(key, chain);
+  return chain;
+}
+
+/** Discard in the editor or on a restore banner: no later save may write
+ *  the draft, and it is deleted once any write in flight has landed. */
+export function discardEditorDraft(key: string): Promise<void> {
+  ended.add(key);
+  return afterWrites(key, () => editorDraftStore().deleteDraft(key));
+}
+
+/** The session ended the way the user chose (Save, Back, a confirmed
+ *  Leave). Its newest state is saved first, then the draft is marked
+ *  closed, so Generate no longer offers it; the Editor still lists it. Call
+ *  it before the editor unmounts: the newest state is read at once. If the
+ *  editor stays open and is edited again, the session goes on (see the
+ *  revision subscription below). */
+export function closeEditorDraft(key: string): Promise<void> {
+  flushers.get(key)?.();
+  ended.add(key);
+  return afterWrites(key, () => editorDraftStore().markClosed(key));
+}
 
 interface UseEditorRecoveryOptions {
-  /** Active only for the full-page editor. The modal surface is Stage 3+. */
+  /** Off only where there is nothing to save. */
   enabled: boolean;
   /** Reads the body's current palette so it can be merged into the saved
    *  envelope (toProject() emits an empty palette). Called at save time. */
   getPalette: () => string[];
-  projectKey?: string;
+  /** This session's draft key (newDraftKey), or a restored draft's key. */
+  projectKey: string;
+  surface: DraftSurface;
 }
 
+/**
+ * Saves the editor's work to IndexedDB as the user edits, on every editor
+ * surface (BUILD 2026-10-29: the modal used to save nothing, and an iPhone
+ * reload lost a whole session): 1 s after an edit, at least every 10 s while
+ * editing goes on, and at once when the tab is hidden or Back is used.
+ * Each write is a snapshot read when it is asked for; writes run one after
+ * another, so the newest snapshot lands last. The draft records the signed-
+ * in account, so it is offered only to that account.
+ */
 export function useEditorRecovery({
   enabled,
   getPalette,
-  projectKey = PAGE_SCRATCH_KEY,
+  projectKey,
+  surface,
 }: UseEditorRecoveryOptions): void {
   // Latest palette-getter in a ref so the long-lived subscription and
   // lifecycle handlers read the current palette without being rebuilt on
   // every palette change.
   const getPaletteRef = useRef(getPalette);
-  getPaletteRef.current = getPalette;
+  const { isLoaded, userId } = useAuth();
+  const authRef = useRef({ isLoaded, userId });
+  useLayoutEffect(() => {
+    getPaletteRef.current = getPalette;
+    authRef.current = { isLoaded, userId };
+  });
 
   useEffect(() => {
     if (!enabled || typeof window === 'undefined') return;
 
-    const store = new IndexedDbDraftStore();
+    const store = editorDraftStore();
     let disposed = false;
     let available = false;
     let persistRequested = false;
+    // The account the session's draft belongs to, fixed at the first write
+    // once Clerk knows it. Until then (Clerk late, or never loading) the
+    // session saves after CLERK_WAIT_MS as no account, and takes the account
+    // at the first write after Clerk has loaded.
+    let owner: string | null = null;
+    let ownerKnown = false;
+    let clerkWaitOver = false;
+    const clerkTimer = setTimeout(() => { clerkWaitOver = true; }, CLERK_WAIT_MS);
+    // True once this session has asked for a write (it had edits).
+    let wrote = false;
+    // A session that starts under a key (a restore) may write it again.
+    ended.delete(projectKey);
+    openSessions.add(projectKey);
 
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     let maxWaitTimer: ReturnType<typeof setTimeout> | null = null;
-    let saving = false;
-    let resaveQueued = false;
 
     const clearTimers = () => {
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
@@ -70,46 +162,73 @@ export function useEditorRecovery({
       const bytes = s.getFramePixels(project.frames[0].id);
       if (!bytes) return null;
       project.color.palette = getPaletteRef.current() ?? [];
-      return { project, bytes };
+      return { project, bytes: new Uint8ClampedArray(bytes) };
     };
 
     const scheduleSave = () => {
-      if (!available) return;
+      if (!available || ended.has(projectKey)) return;
       if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => { clearTimers(); void doSave('edit'); }, DEBOUNCE_MS);
+      debounceTimer = setTimeout(() => { clearTimers(); doSave('edit'); }, DEBOUNCE_MS);
       if (!maxWaitTimer) {
-        maxWaitTimer = setTimeout(() => { clearTimers(); void doSave('idle'); }, MAX_WAIT_MS);
+        maxWaitTimer = setTimeout(() => { clearTimers(); doSave('idle'); }, MAX_WAIT_MS);
       }
     };
 
-    const doSave = async (reason: SaveReason) => {
-      if (saving) { resaveQueued = true; return; }
+    // `last`: the session's final save (its editor is going), which cannot
+    // wait for Clerk any longer.
+    const doSave = (reason: SaveReason, last = false) => {
+      if (!available || ended.has(projectKey)) return;
+      if (!ownerKnown) {
+        if (authRef.current.isLoaded) {
+          owner = authRef.current.userId ?? null;
+          ownerKnown = true;
+        } else if (!clerkWaitOver && !last) {
+          // The account is not known until Clerk loads; try again shortly.
+          scheduleSave();
+          return;
+        }
+      }
       const snap = snapshot();
       if (!snap) return;
-      saving = true;
-      try {
-        await store.saveDraft({ projectKey, project: snap.project, bytes: snap.bytes, reason });
-        if (!persistRequested) { persistRequested = true; void requestPersistentStorage(); }
-      } catch (err) {
-        if (isDevHost()) console.warn('[editorRecovery] save failed', err);
-      } finally {
-        saving = false;
-        if (resaveQueued && !disposed) { resaveQueued = false; scheduleSave(); }
-      }
+      wrote = true;
+      // Queued behind the writes already asked for, so a Discard or a close
+      // asked for after this write comes after it too.
+      void afterWrites(projectKey, async () => {
+        try {
+          await store.saveDraft({ projectKey, project: snap.project, bytes: snap.bytes, reason, owner, surface });
+          void store.prune(MAX_DRAFTS, projectKey).catch(() => { /* best-effort */ });
+          if (!persistRequested) { persistRequested = true; void requestPersistentStorage(); }
+        } catch (err) {
+          if (isDevHost()) console.warn('[editorRecovery] save failed', err);
+        }
+      });
     };
 
     const flushUrgent = () => {
       if (!available) return;
       clearTimers();
-      void doSave('lifecycle');
+      doSave('lifecycle');
     };
+
+    // closeEditorDraft's "save the newest state now".
+    const flushExplicit = () => {
+      clearTimers();
+      doSave('explicit');
+    };
+    flushers.set(projectKey, flushExplicit);
 
     // revision bumps on every history write (stroke end, undo, redo, revert,
     // flip, load, reset). historyIndex alone stops moving once the stack is
     // at its cap, since endStroke then shifts the stack and leaves the index
     // in place, which silently ended autosave after 50 strokes.
     // subscribeWithSelector is already enabled.
-    const unsub = useEditorStore.subscribe((s) => s.revision, () => scheduleSave());
+    const unsub = useEditorStore.subscribe((s) => s.revision, () => {
+      // An edit after a close or a Discard while this editor is still open
+      // (a Leave whose Back had nowhere to go, say): the session goes on, so
+      // its work is saved again, until the next close or Discard.
+      if (ended.has(projectKey) && useEditorStore.getState().historyIndex > 0) ended.delete(projectKey);
+      scheduleSave();
+    });
 
     // popstate is the SPA Back signal in this App Router app (pagehide does NOT
     // fire for client-side back). popstate and visibilitychange keep the page
@@ -129,18 +248,38 @@ export function useEditorRecovery({
         return;
       }
       if (useEditorStore.getState().historyIndex > 0) scheduleSave();
-    });
+    }).catch(() => { /* no recovery in this context */ });
 
     return () => {
-      disposed = true;
-      unsub();
+      // The editor goes without a close or a Discard (a sign-out, or the
+      // page around it going away): its newest state is saved now. This
+      // cleanup runs before the body's own reset(), so the store still
+      // holds it; where the store was reset first (the page's own Back),
+      // there is nothing to save. A Save, a Leave or a Discard has ended
+      // the session already, and doSave skips it.
       clearTimers();
+      doSave('lifecycle', true);
+      disposed = true;
+      available = false;
+      openSessions.delete(projectKey);
+      unsub();
+      clearTimeout(clerkTimer);
+      if (flushers.get(projectKey) === flushExplicit) flushers.delete(projectKey);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('popstate', onPopState);
-      // Deliberately NO flush and NO delete here. reset() has very likely
-      // already nulled the store, and unmount also fires on browser-Back, the
-      // exact case we want left recoverable. Discard-on-dismiss is Stage 3.
+      // A session that saved nothing (no edit of its own) and ends any way
+      // at all (a Back or a link from a restored draft left as it was)
+      // closes the draft it opened, as the editor's own Back would, so
+      // Generate stops offering it; the Editor still lists it. A new session
+      // has no draft, so this does nothing there. Queued now, so a list read
+      // after editorWritesSettled() sees it; it waits one task first, so a
+      // StrictMode remount (which reopens the session at once) is not taken
+      // for an end.
+      if (!wrote) {
+        void afterWrites(projectKey, () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+          .then(() => (openSessions.has(projectKey) ? undefined : store.markClosed(projectKey))));
+      }
     };
-  }, [enabled, projectKey]);
+  }, [enabled, projectKey, surface]);
 }

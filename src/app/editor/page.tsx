@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useAuth } from '@clerk/react';
 import { HotkeysProvider } from 'react-hotkeys-hook';
 import EditorLanding from '@/components/sprites/EditorLanding';
 import PixelEditorBody from '@/components/sprites/PixelEditorBody';
@@ -14,9 +15,11 @@ import { useSpriteStore } from '@/stores/spriteStore';
 import {
   IndexedDbDraftStore,
   isRecoveryAvailable,
-  type RecoveryCandidate,
+  draftsFor,
+  newDraftKey,
+  type RecoveryManifestV1,
 } from '@/lib/editorRecovery';
-import { PAGE_SCRATCH_KEY } from '@/components/sprites/useEditorRecovery';
+import { discardEditorDraft, editorWritesSettled, isEditorSessionOpen } from '@/components/sprites/useEditorRecovery';
 
 /**
  * /editor — full-page Pixel Editor (v2 Phase 1).
@@ -48,13 +51,18 @@ import { PAGE_SCRATCH_KEY } from '@/components/sprites/useEditorRecovery';
  * /gallery, /preview, /export.
  */
 
+// Every session has its own draft key (BUILD 2026-10-29): a new one for a
+// new image, or the restored draft's own key, so a restored session keeps
+// saving into the draft it came from.
 type EditorPending =
-  | { kind: 'image'; dataUrl: string; width: number; height: number; source?: SpriteProjectSource }
-  | { kind: 'restore'; envelope: SpriteProjectV1; bytes: Uint8ClampedArray };
+  | { kind: 'image'; draftKey: string; dataUrl: string; width: number; height: number; source?: SpriteProjectSource }
+  | { kind: 'restore'; draftKey: string; envelope: SpriteProjectV1; bytes: Uint8ClampedArray };
 
 export default function EditorPage() {
   const [pending, setPending] = useState<EditorPending | null>(null);
-  const [recoveryCandidate, setRecoveryCandidate] = useState<RecoveryCandidate | null>(null);
+  // This user's saved drafts, newest first (any editor surface).
+  const [drafts, setDrafts] = useState<RecoveryManifestV1[]>([]);
+  const { isLoaded: authLoaded, userId } = useAuth();
   const [isLoadingHandoff, setIsLoadingHandoff] = useState(false);
   // Handoff-source rejection (Fix #5). When a Send-to-Editor handoff carries
   // an image whose dimensions exceed the editor's caps, surface a clear error
@@ -105,6 +113,7 @@ export default function EditorPage() {
       }
       setPending({
         kind: 'image',
+        draftKey: newDraftKey('page'),
         dataUrl: generatedImageDataUrl,
         width: img.naturalWidth,
         height: img.naturalHeight,
@@ -123,14 +132,13 @@ export default function EditorPage() {
     // imperatively), so an empty deps array is genuinely correct here.
   }, []);
 
-  // Stage 3: probe for a recoverable page-mode draft whenever we're about to
-  // show the landing (no pending project, not mid-handoff, no handoff queued).
-  // Re-runs when pending returns to null (e.g. after Back) so the banner
-  // reflects the latest draft. Best-effort: any failure leaves the landing
-  // un-gated. getLatest returns null when there's no draft, which also clears
-  // a stale banner.
+  // Probe for this user's saved drafts whenever the landing is about to show
+  // (no pending project, not mid-handoff, no handoff queued). Re-runs when
+  // pending returns to null (e.g. after Back) so the list is current. A
+  // draft an editor in this tab is still working on is left out. Best-
+  // effort: any failure leaves the landing without a list.
   useEffect(() => {
-    if (pending !== null || isLoadingHandoff) return;
+    if (pending !== null || isLoadingHandoff || !authLoaded) return;
     if (useSpriteStore.getState().pendingEditorHandoff) return;
 
     const token = { cancelled: false };
@@ -138,14 +146,18 @@ export default function EditorPage() {
     (async () => {
       try {
         if (!(await isRecoveryAvailable())) return;
-        const candidate = await getDraftStore().getLatest(PAGE_SCRATCH_KEY);
-        if (!token.cancelled) setRecoveryCandidate(candidate);
+        // The editor session that just ended has saved or closed its draft.
+        await editorWritesSettled();
+        const all = (await getDraftStore().listDrafts())
+          .map((c) => c.manifest)
+          .filter((m) => !isEditorSessionOpen(m.draftId));
+        if (!token.cancelled) setDrafts(draftsFor(all, userId ?? null));
       } catch {
-        if (!token.cancelled) setRecoveryCandidate(null);
+        if (!token.cancelled) setDrafts([]);
       }
     })();
     return () => { token.cancelled = true; };
-  }, [pending, isLoadingHandoff, getDraftStore]);
+  }, [pending, isLoadingHandoff, authLoaded, userId, getDraftStore]);
 
   // Shared dismiss for both pending kinds. Keep-it-simple lifecycle: in-editor
   // Back does NOT delete the draft (it persists and is offered again next
@@ -155,30 +167,33 @@ export default function EditorPage() {
     setPending(null);
   }, [reset]);
 
-  const handleRestoreDraft = useCallback(async () => {
+  const handleRestoreDraft = useCallback(async (draftId: string) => {
     try {
-      const draft = await getDraftStore().loadDraft(PAGE_SCRATCH_KEY);
-      setPending({ kind: 'restore', envelope: draft.project, bytes: draft.bytes });
+      const draft = await getDraftStore().loadDraft(draftId);
+      setPending({ kind: 'restore', draftKey: draftId, envelope: draft.project, bytes: draft.bytes });
     } catch {
-      // Draft corrupt or gone — drop the banner; the editor starts fresh.
-      setRecoveryCandidate(null);
+      // Draft corrupt or gone: drop it from the list; the editor starts fresh.
+      setDrafts((list) => list.filter((m) => m.draftId !== draftId));
     }
   }, [getDraftStore]);
 
-  const handleDiscardDraft = useCallback(async () => {
-    // Cancel any in-flight probe BEFORE deleting, so its stale getLatest
-    // result can't resurrect the banner after we clear it. The probe effect's
-    // local cancelled flag only flips on effect re-run; discard doesn't
-    // change any dep, so without this we'd see the banner reappear pointing
-    // at a deleted draft.
+  const handleDiscardDraft = useCallback(async (draftId: string) => {
+    // Cancel any in-flight probe BEFORE deleting, so its stale result can't
+    // resurrect the draft in the list after we remove it.
     if (probeCancelRef.current) probeCancelRef.current.cancelled = true;
-    try {
-      await getDraftStore().deleteDraft(PAGE_SCRATCH_KEY);
-    } catch {
-      // best-effort
-    }
-    setRecoveryCandidate(null);
-  }, [getDraftStore]);
+    await discardEditorDraft(draftId);
+    setDrafts((list) => list.filter((m) => m.draftId !== draftId));
+  }, []);
+
+  // "Restore in Editor" on Generate: open that draft (one-shot, like the
+  // Send to Editor handoff above).
+  useEffect(() => {
+    const { pendingEditorRestore, setPendingEditorRestore } = useSpriteStore.getState();
+    if (!pendingEditorRestore) return;
+    setPendingEditorRestore(null);
+    setIsLoadingHandoff(true);
+    void handleRestoreDraft(pendingEditorRestore).finally(() => setIsLoadingHandoff(false));
+  }, [handleRestoreDraft]);
 
   if (isLoadingHandoff) {
     return (
@@ -215,11 +230,11 @@ export default function EditorPage() {
         )}
         <EditorLanding
           onProjectReady={(dataUrl, width, height, source) =>
-            setPending({ kind: 'image', dataUrl, width, height, source })
+            setPending({ kind: 'image', draftKey: newDraftKey('page'), dataUrl, width, height, source })
           }
-          recoveryCandidate={recoveryCandidate}
-          onRestoreDraft={handleRestoreDraft}
-          onDiscardDraft={handleDiscardDraft}
+          drafts={drafts}
+          onRestoreDraft={(draftId) => void handleRestoreDraft(draftId)}
+          onDiscardDraft={(draftId) => void handleDiscardDraft(draftId)}
         />
       </>
     );
@@ -247,6 +262,7 @@ export default function EditorPage() {
             onDismiss={handleDismiss}
             layout="page"
             source={pending.source}
+            draftKey={pending.draftKey}
           />
         ) : (
           <PixelEditorBody
@@ -258,8 +274,9 @@ export default function EditorPage() {
             layout="page"
             source={pending.envelope.source}
             restore={{ envelope: pending.envelope, bytes: pending.bytes }}
+            draftKey={pending.draftKey}
             onDiscardDraft={async () => {
-              await handleDiscardDraft();
+              await handleDiscardDraft(pending.draftKey);
               handleDismiss();
             }}
           />

@@ -9,7 +9,7 @@ import {
   editorDimsRejectionMessage,
 } from '@/components/sprites/editorStore';
 import type { SpriteProjectSource } from '@/lib/spriteProject';
-import type { RecoveryCandidate } from '@/lib/editorRecovery';
+import { draftListLine, draftSentence, type RecoveryManifestV1 } from '@/lib/editorRecovery';
 
 /**
  * Landing UI for the /editor route. Lets the user choose how to start
@@ -37,35 +37,23 @@ interface EditorLandingProps {
     height: number,
     source?: SpriteProjectSource,
   ) => void;
-  /** Stage 3: a recoverable page-mode draft, or null/undefined if none.
-   *  When set, a restore banner renders above the start cards. */
-  recoveryCandidate?: RecoveryCandidate | null;
-  /** Restore the draft (parent reads bytes and mounts the body in restore mode). */
-  onRestoreDraft?: () => void;
-  /** Discard the draft (parent deletes it from IndexedDB). */
-  onDiscardDraft?: () => void;
-}
-
-/** Relative-time formatter for the restore banner. Cheap, no Intl — the
- *  banner just needs "just now" / "5 minutes ago" / "2 hours ago" / "1 day
- *  ago" granularity. */
-function formatDraftAge(ts: number): string {
-  const secs = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (secs < 60) return 'just now';
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs} hour${hrs === 1 ? '' : 's'} ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days} day${days === 1 ? '' : 's'} ago`;
+  /** The saved editor drafts this user may restore, newest first (from
+   *  either editor surface; BUILD 2026-10-29). The newest gets the restore
+   *  banner above the start cards; the rest are listed under it. */
+  drafts?: RecoveryManifestV1[];
+  /** Restore a draft (parent reads its bytes and mounts the body in restore mode). */
+  onRestoreDraft?: (draftId: string) => void;
+  /** Discard a draft (parent deletes it from IndexedDB). */
+  onDiscardDraft?: (draftId: string) => void;
 }
 
 export default function EditorLanding({
   onProjectReady,
-  recoveryCandidate,
+  drafts = [],
   onRestoreDraft,
   onDiscardDraft,
 }: EditorLandingProps) {
+  const [newest, ...older] = drafts;
   const [size, setSize] = useState<SizePreset>(32);
   // Fix #5: editor-specific dimension guardrail at the upload ingestion point.
   // UploadZone itself stays generic (the /upload slicer route uses it with
@@ -96,7 +84,7 @@ export default function EditorLanding({
   return (
     <div className="h-full overflow-auto p-8">
       <div className="max-w-4xl mx-auto">
-        {recoveryCandidate && (
+        {newest && (
           <div className="mb-6 rounded-lg border border-accent-amber bg-bg-surface p-4 flex items-start gap-3">
             <RotateCcw size={18} className="text-accent-amber flex-shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
@@ -104,20 +92,45 @@ export default function EditorLanding({
                 Recover your last edit?
               </p>
               <p className="text-[11px] font-mono text-text-secondary leading-relaxed">
-                A {recoveryCandidate.manifest.summary.width}×{recoveryCandidate.manifest.summary.height} draft
-                from {formatDraftAge(recoveryCandidate.manifest.updatedAt)} is saved on this device.
+                {draftSentence(newest)}
               </p>
               <div className="flex items-center gap-2 mt-3">
-                <Button variant="primary" size="sm" onClick={onRestoreDraft}>
+                <Button variant="primary" size="sm" onClick={() => onRestoreDraft?.(newest.draftId)}>
                   Restore
                 </Button>
                 <button
-                  onClick={onDiscardDraft}
+                  onClick={() => onDiscardDraft?.(newest.draftId)}
                   className="text-[11px] font-mono text-text-muted hover:text-text-primary cursor-pointer px-2 py-1"
                 >
                   Discard
                 </button>
               </div>
+              {older.length > 0 && (
+                <div className="mt-4 border-t border-border-subtle pt-3">
+                  <p className="text-[10px] font-mono text-text-muted uppercase tracking-wider mb-2">Older drafts</p>
+                  <ul className="flex flex-col gap-2">
+                    {older.map((m) => (
+                      <li key={m.draftId} className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[11px] font-mono text-text-secondary flex-1 min-w-0">{draftListLine(m)}</span>
+                        <button
+                          onClick={() => onRestoreDraft?.(m.draftId)}
+                          aria-label={`Restore ${draftListLine(m)}`}
+                          className="text-[11px] font-mono text-accent-amber hover:text-accent-amber-strong cursor-pointer px-2 py-1"
+                        >
+                          Restore
+                        </button>
+                        <button
+                          onClick={() => onDiscardDraft?.(m.draftId)}
+                          aria-label={`Discard ${draftListLine(m)}`}
+                          className="text-[11px] font-mono text-text-muted hover:text-text-primary cursor-pointer px-2 py-1"
+                        >
+                          Discard
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </div>
         )}

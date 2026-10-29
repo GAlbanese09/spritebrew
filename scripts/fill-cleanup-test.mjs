@@ -150,6 +150,37 @@ check('the saturated art colours are all mostly magenta (violet is dark too, so 
       same(at(px, BW, 1, 4), despilled([207, 67, 158])), at(px, BW, 1, 4));
   }
 
+  // The reach's edges, with the count table built (the fringe pixel is the
+  // first mostly-magenta candidate): art exactly INTERIOR_REACH away, right
+  // or below, protects a rim pixel; one more pixel away does not. And after
+  // the table is built, a pixel 2 px above the bottom edge is still rim.
+  {
+    const BW = 12;
+    const BH = 11;
+    const edgeSheet = (fringeAt, violetAt, castAt) => sheet(BW, BH, (x, y) => {
+      if (x === 0 || y === 0 || x === BW - 1 || y === BH - 1) return null;
+      if (x === fringeAt[0] && y === fringeAt[1]) return [207, 67, 158, 255];
+      if (violetAt && x === violetAt[0] && y === violetAt[1]) return [...ART.violet, 255];
+      if (castAt && x === castAt[0] && y === castAt[1]) return [70, 50, 65, 255];
+      return [...BROWN, 255];
+    });
+    const fringeAfter = (fringeAt, violetAt) => {
+      const px = edgeSheet(fringeAt, violetAt);
+      despillRim(px, BW, BH, MAGENTA_FILL, { bright: true });
+      return at(px, BW, fringeAt[0], fringeAt[1]);
+    };
+    check(`rim: magenta art exactly ${INTERIOR_REACH} px to the right protects a rim pixel; ${INTERIOR_REACH + 1} px does not`,
+      same(fringeAfter([1, 5], [1 + INTERIOR_REACH, 5]), [207, 67, 158, 255]) && same(fringeAfter([1, 5], [2 + INTERIOR_REACH, 5]), despilled([207, 67, 158])),
+      [fringeAfter([1, 5], [1 + INTERIOR_REACH, 5]), fringeAfter([1, 5], [2 + INTERIOR_REACH, 5])]);
+    check(`rim: magenta art exactly ${INTERIOR_REACH} px below protects a rim pixel; ${INTERIOR_REACH + 1} px does not`,
+      same(fringeAfter([5, 1], [5, 1 + INTERIOR_REACH]), [207, 67, 158, 255]) && same(fringeAfter([5, 1], [5, 2 + INTERIOR_REACH]), despilled([207, 67, 158])),
+      [fringeAfter([5, 1], [5, 1 + INTERIOR_REACH]), fringeAfter([5, 1], [5, 2 + INTERIOR_REACH])]);
+    const px = edgeSheet([1, 5], null, [8, BH - 3]);
+    despillRim(px, BW, BH, MAGENTA_FILL, { bright: true });
+    check('rim: after the count table is built, a dark cast 2 px above the bottom edge is still rim and loses its cast',
+      same(at(px, BW, 8, BH - 3), [55, 50, 50, 255]), at(px, BW, 8, BH - 3));
+  }
+
   // The limits, for the record: a stroke too thin to have an interior gives
   // the rules nothing to tell by. A bright one changes only with the bright
   // rule, which is why it is on only when the character had no mostly
@@ -180,6 +211,71 @@ check('the saturated art colours are all mostly magenta (violet is dark too, so 
     return same(at(px, W, 2, 6), [207, 67, 158, 255]);
   })());
   check('rim never touches alpha', fringe.every((r) => r.edge[3] === 255 && r.interior[3] === 255));
+}
+
+// 4b. despillRim against the definition written plainly (the rule as
+// reviewed, with no memo and no count table), on deterministic random
+// sheets. The large dense ones have far more mostly-magenta rim pixels than
+// despillRim looks around before it builds its count table, so both of its
+// ways of answering are checked (Second 118).
+{
+  const referenceRim = (px, W, H, bright) => {
+    const near = (x, y) => {
+      for (let ny = Math.max(0, y - 2); ny <= Math.min(H - 1, y + 2); ny++) {
+        for (let nx = Math.max(0, x - 2); nx <= Math.min(W - 1, x + 2); nx++) if (px[(ny * W + nx) * 4 + 3] === 0) return true;
+      }
+      return false;
+    };
+    const inside = (x, y) => {
+      for (let ny = Math.max(0, y - INTERIOR_REACH); ny <= Math.min(H - 1, y + INTERIOR_REACH); ny++) {
+        for (let nx = Math.max(0, x - INTERIOR_REACH); nx <= Math.min(W - 1, x + INTERIOR_REACH); nx++) {
+          const k = (ny * W + nx) * 4;
+          if (px[k + 3] !== 0 && mostlyMagenta(px[k], px[k + 1], px[k + 2]) && !near(nx, ny)) return true;
+        }
+      }
+      return false;
+    };
+    let looks = 0;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        if (px[i + 3] === 0) continue;
+        const [r, g, b] = [px[i], px[i + 1], px[i + 2]];
+        const excess = Math.min(r, b) - g;
+        if (excess <= 0) continue;
+        const dark = 0.299 * r + 0.587 * g + 0.114 * b <= 90;
+        const mostly = mostlyMagenta(r, g, b);
+        if (!dark && !(bright && mostly)) continue;
+        if (!near(x, y)) continue;
+        if (mostly) { looks++; if (inside(x, y)) continue; }
+        px[i] = r - excess;
+        px[i + 2] = b - excess;
+      }
+    }
+    return looks;
+  };
+  let seed = 20261028;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  const palette = [[148, 0, 211], [218, 112, 214], [255, 20, 147], [207, 67, 158], [165, 22, 119], [125, 24, 108], [128, 0, 128], [90, 60, 40], [70, 50, 65], [235, 170, 150]];
+  let compared = 0;
+  let mismatched = 0;
+  let mostLooks = 0;
+  for (const [W, H] of [[5, 5], [13, 13], [40, 40], [96, 64], [160, 120]]) {
+    for (let rep = 0; rep < 3; rep++) {
+      const holes = [0.08, 0.25, 0.5][rep];
+      const px = sheet(W, H, (x, y) => (((x * 7 + y * 13) % 11) / 11 < holes || rnd() < holes / 3 ? null : [...palette[Math.floor(rnd() * palette.length)], 255]));
+      for (const bright of [true, false]) {
+        const mine = Uint8ClampedArray.from(px);
+        const ref = Uint8ClampedArray.from(px);
+        despillRim(mine, W, H, MAGENTA_FILL, { bright });
+        mostLooks = Math.max(mostLooks, referenceRim(ref, W, H, bright));
+        compared++;
+        if (!same(Array.from(mine), Array.from(ref))) mismatched++;
+      }
+    }
+  }
+  check(`despillRim matches the rule written plainly on ${compared} random sheets (up to ${mostLooks} mostly-magenta rim pixels on one sheet, past the count table's start)`,
+    mismatched === 0 && mostLooks > 256, { mismatched, mostLooks });
 }
 
 // 5. cleanAnimation: the key first, so the rim around a keyed pocket is despilled.

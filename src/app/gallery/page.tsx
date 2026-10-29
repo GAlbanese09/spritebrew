@@ -14,6 +14,7 @@ import Badge from '@/components/ui/Badge';
 import SheetLoop from '@/components/sprites/SheetLoop';
 import { sheetGeometry, galleryFrameSizeGuess } from '@/lib/animationGeometry';
 import { cleanGallerySheet } from '@/lib/spriteUtils';
+import { createGalleryOwnership } from '@/lib/galleryOwnership';
 
 type FilterMode = 'all' | 'create' | 'animate';
 
@@ -76,6 +77,10 @@ export default function GalleryPage() {
   const storedRef = useRef<Record<string, Blob>>({});
   const cleaningRef = useRef<Record<string, Promise<string | undefined>>>({});
   const keptRef = useRef<Record<string, string>>({});
+  // A Download or Send to Slicer waiting for its clean copy acts only if it
+  // still belongs to this visit and, for the Slicer, is still the newest
+  // choice (Second 118; src/lib/galleryOwnership.ts).
+  const [ownership] = useState(createGalleryOwnership);
 
   const cleanedUrl = useCallback((jobId: string): Promise<string | undefined> => {
     const started = cleaningRef.current[jobId];
@@ -197,6 +202,7 @@ export default function GalleryPage() {
     run();
     return () => {
       cancelled = true;
+      ownership.endVisit();
       // Intentionally NOT revoking urlsRef on unmount — Slicer handoff needs them
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -312,24 +318,26 @@ export default function GalleryPage() {
   ) : null;
 
   const handleDownload = useCallback(async (entry: GalleryEntryV1) => {
+    const token = ownership.download();
     const url = entry.mode === 'animate' ? await cleanedUrl(entry.jobId) : imageUrls[entry.jobId];
-    if (!url) return;
+    if (!url || !ownership.isCurrent(token)) return;
     const a = document.createElement('a');
     a.href = url;
     a.download = `spritebrew_${entry.mode}_${entry.jobId}.png`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  }, [imageUrls, cleanedUrl]);
+  }, [imageUrls, cleanedUrl, ownership]);
 
   const handleSendToSlicer = useCallback(async (entry: GalleryEntryV1) => {
+    const token = ownership.slicer();
     const url = entry.mode === 'animate' ? await cleanedUrl(entry.jobId) : imageUrls[entry.jobId];
-    if (!url) return;
+    if (!url || !ownership.isCurrent(token)) return;
     setGeneratedImage(url, url);
     setGenerationStyle(entry.style);
     setCurrentSheetMetadata(deriveSlicerHints(entry));
     router.push('/upload');
-  }, [imageUrls, cleanedUrl, setGeneratedImage, setGenerationStyle, setCurrentSheetMetadata, router]);
+  }, [imageUrls, cleanedUrl, ownership, setGeneratedImage, setGenerationStyle, setCurrentSheetMetadata, router]);
 
   const handleDelete = useCallback(async (jobId: string) => {
     if (!confirm('Delete this generation? This cannot be undone.')) return;

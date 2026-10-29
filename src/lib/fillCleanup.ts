@@ -143,28 +143,68 @@ export function despillRim(
   const green = fillG >= Math.max(fillR, fillB) + 60;
   if (!magenta && !green) return 0;
 
-  // Within 2 px (Chebyshev) of a fully transparent pixel: the ring the fill
-  // could tint. Checked only for the pixels the gates pick, which are few;
-  // the despill never changes alpha, so the check can read the sheet as the
+  // Each pixel's ring answer, worked out at most once (0 not yet, 1 yes,
+  // 2 no). The despill never changes alpha, so an answer stays right as the
   // loop goes.
+  const ring = new Uint8Array(W * H);
+  // Within 2 px (Chebyshev) of a fully transparent pixel: the ring the fill
+  // could tint.
   const nearTransparent = (x: number, y: number): boolean => {
-    for (let ny = Math.max(0, y - 2); ny <= Math.min(H - 1, y + 2); ny++) {
-      for (let nx = Math.max(0, x - 2); nx <= Math.min(W - 1, x + 2); nx++) {
-        if (px[(ny * W + nx) * 4 + 3] === 0) return true;
+    const p = y * W + x;
+    if (ring[p] === 0) {
+      let near = false;
+      for (let ny = Math.max(0, y - 2); ny <= Math.min(H - 1, y + 2) && !near; ny++) {
+        for (let nx = Math.max(0, x - 2); nx <= Math.min(W - 1, x + 2); nx++) {
+          if (px[(ny * W + nx) * 4 + 3] === 0) {
+            near = true;
+            break;
+          }
+        }
+      }
+      ring[p] = near ? 1 : 2;
+    }
+    return ring[p] === 1;
+  };
+  // An interior pixel (more than 2 px from the transparency) that is mostly
+  // magenta. The despill changes only ring pixels, which are never
+  // interior, so reading the sheet as the loop changes it gives the answer
+  // the sheet before the loop gives.
+  const interiorMagenta = (x: number, y: number): boolean => {
+    const k = (y * W + x) * 4;
+    return px[k + 3] !== 0 && mostlyMagenta(px[k], px[k + 1], px[k + 2]) && !nearTransparent(x, y);
+  };
+  // Whether one lies within INTERIOR_REACH. A sheet with only a few mostly
+  // magenta rim pixels (most sheets) looks around each one. A sheet with
+  // many (art that is mostly magenta near its rim) builds a count table of
+  // those interior pixels once, so each look is a box sum and the whole
+  // pass stays bounded (Second 118).
+  const LOOKS_BEFORE_TABLE = Math.max(256, (W * H) >> 8);
+  let looks = 0;
+  let table: Int32Array | null = null;
+  const buildTable = (): Int32Array => {
+    const t = new Int32Array((W + 1) * (H + 1));
+    for (let y = 0; y < H; y++) {
+      let row = 0;
+      for (let x = 0; x < W; x++) {
+        if (interiorMagenta(x, y)) row++;
+        t[(y + 1) * (W + 1) + x + 1] = t[y * (W + 1) + x + 1] + row;
       }
     }
-    return false;
+    return t;
   };
-  // A mostly-magenta pixel of the art's interior within INTERIOR_REACH. It
-  // reads the sheet as the loop changes it: an interior pixel is never
-  // changed, and a changed rim pixel is not interior, so the answer is the
-  // same as on the sheet before the loop.
   const magentaInside = (x: number, y: number): boolean => {
-    for (let ny = Math.max(0, y - INTERIOR_REACH); ny <= Math.min(H - 1, y + INTERIOR_REACH); ny++) {
-      for (let nx = Math.max(0, x - INTERIOR_REACH); nx <= Math.min(W - 1, x + INTERIOR_REACH); nx++) {
-        const k = (ny * W + nx) * 4;
-        if (px[k + 3] === 0 || !mostlyMagenta(px[k], px[k + 1], px[k + 2])) continue;
-        if (!nearTransparent(nx, ny)) return true;
+    const x0 = Math.max(0, x - INTERIOR_REACH);
+    const x1 = Math.min(W - 1, x + INTERIOR_REACH);
+    const y0 = Math.max(0, y - INTERIOR_REACH);
+    const y1 = Math.min(H - 1, y + INTERIOR_REACH);
+    if (!table && ++looks > LOOKS_BEFORE_TABLE) table = buildTable();
+    if (table) {
+      const w = W + 1;
+      return table[(y1 + 1) * w + x1 + 1] - table[y0 * w + x1 + 1] - table[(y1 + 1) * w + x0] + table[y0 * w + x0] > 0;
+    }
+    for (let ny = y0; ny <= y1; ny++) {
+      for (let nx = x0; nx <= x1; nx++) {
+        if (interiorMagenta(nx, ny)) return true;
       }
     }
     return false;

@@ -24,6 +24,19 @@ import {
   RecoveryQuotaError,
   RecoveryUnavailableError,
 } from './types';
+export {
+  MAX_DRAFTS,
+  newDraftKey,
+  draftsFor,
+  unfinishedDraft,
+  draftsToPrune,
+  draftSourceLabel,
+  formatDraftAge,
+  formatDraftClock,
+  draftSentence,
+  draftListLine,
+  type DraftSurface,
+} from './drafts';
 
 // ── Public types ────────────────────────────────────────────────────────────
 export type {

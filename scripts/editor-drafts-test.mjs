@@ -133,6 +133,10 @@ const m = (id, { owner, updatedAt = NOW, closedAt, kind = 'generation', w = 512,
   const s = D.draftSentence(m('x', { owner: 'user_a', updatedAt: at942 }), new Date(2026, 9, 29, 9, 52).getTime());
   check('the restore sentence reads as proposed to George (BUILD 2026-10-29-001)',
     s === `A 512${TIMES}512 draft from 10 minutes ago (${D.formatDraftClock(at942, NOW)}), from a generated sheet, is saved on this device.`, s);
+  check('the Editor heads a draft whose session ended normally "Continue your last edit?", and one a reload or a crash interrupted (or from before owners) "Recover your last edit?" (George, HQ 2026-10-30-001)',
+    D.draftHeading(m('c', { owner: 'user_a', closedAt: NOW })) === 'Continue your last edit?'
+      && D.draftHeading(m('o', { owner: 'user_a' })) === 'Recover your last edit?'
+      && D.draftHeading(m('legacy')) === 'Recover your last edit?');
   const l = D.draftListLine(m('y', { owner: 'user_a', updatedAt: NOW - 2 * 24 * 60 * MIN, kind: 'sheet-import', w: 64, h: 32 }), NOW);
   check('an older draft line reads "64x32 . from a Slicer frame . 2 days ago"',
     l === `64${TIMES}32 ${DOT} from a Slicer frame ${DOT} 2 days ago`, l);

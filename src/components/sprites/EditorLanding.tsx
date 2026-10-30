@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { UploadCloud, FilePlus, FolderOpen, Image as ImageIcon, AlertCircle, RotateCcw } from 'lucide-react';
 import UploadZone from './UploadZone';
 import Button from '@/components/ui/Button';
@@ -9,7 +9,7 @@ import {
   editorDimsRejectionMessage,
 } from '@/components/sprites/editorStore';
 import type { SpriteProjectSource } from '@/lib/spriteProject';
-import { draftListLine, draftSentence, type RecoveryManifestV1 } from '@/lib/editorRecovery';
+import { draftHeading, draftListLine, draftSentence, type RecoveryManifestV1 } from '@/lib/editorRecovery';
 
 /**
  * Landing UI for the /editor route. Lets the user choose how to start
@@ -41,6 +41,9 @@ interface EditorLandingProps {
    *  either editor surface; BUILD 2026-10-29). The newest gets the restore
    *  banner above the start cards; the rest are listed under it. */
   drafts?: RecoveryManifestV1[];
+  /** Told the moment an upload starts, before its image is decoded, so the
+   *  parent can drop a restore that is still loading (the later choice wins). */
+  onChoose?: () => void;
   /** Restore a draft (parent reads its bytes and mounts the body in restore mode). */
   onRestoreDraft?: (draftId: string) => void;
   /** Discard a draft (parent deletes it from IndexedDB). */
@@ -49,11 +52,24 @@ interface EditorLandingProps {
 
 export default function EditorLanding({
   onProjectReady,
+  onChoose,
   drafts = [],
   onRestoreDraft,
   onDiscardDraft,
 }: EditorLandingProps) {
   const [newest, ...older] = drafts;
+  // The user's choices here (a blank canvas, an upload, a restore): the
+  // latest one wins. An uploaded image that finishes decoding after a later
+  // choice, or after this landing went (liveRef turns false in the commit
+  // that removes it), opens nothing (Second 122: a late decode replaced the
+  // draft the user had restored since).
+  const choiceRef = useRef(0);
+  const uploadRef = useRef<{ file: File; choice: number } | null>(null);
+  const liveRef = useRef(false);
+  useLayoutEffect(() => {
+    liveRef.current = true;
+    return () => { liveRef.current = false; };
+  }, []);
   const [size, setSize] = useState<SizePreset>(32);
   // Fix #5: editor-specific dimension guardrail at the upload ingestion point.
   // UploadZone itself stays generic (the /upload slicer route uses it with
@@ -61,7 +77,13 @@ export default function EditorLanding({
   // feedback without a page transition into the body.
   const [uploadError, setUploadError] = useState<string | null>(null);
 
+  function restoreDraft(draftId: string) {
+    choiceRef.current++;
+    onRestoreDraft?.(draftId);
+  }
+
   function handleStartBlank() {
+    choiceRef.current++;
     // Empty canvas → transparent PNG data URL.
     const canvas = document.createElement('canvas');
     canvas.width = size;
@@ -70,7 +92,19 @@ export default function EditorLanding({
     onProjectReady(dataUrl, size, size, { kind: 'blank' });
   }
 
-  function handleUploadLoaded(_file: File, blobUrl: string, w: number, h: number) {
+  function handleUploadStart(file: File) {
+    uploadRef.current = { file, choice: ++choiceRef.current };
+    onChoose?.();
+  }
+
+  function handleUploadLoaded(file: File, blobUrl: string, w: number, h: number) {
+    const upload = uploadRef.current;
+    if (!liveRef.current || !upload || upload.file !== file || upload.choice !== choiceRef.current) {
+      // A later choice came, or the landing went: this image is not wanted.
+      URL.revokeObjectURL(blobUrl);
+      return;
+    }
+    uploadRef.current = null;
     if (!dimsWithinEditorLimits(w, h)) {
       // Revoke the blob URL we won't be using.
       URL.revokeObjectURL(blobUrl);
@@ -89,13 +123,13 @@ export default function EditorLanding({
             <RotateCcw size={18} className="text-accent-amber flex-shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
               <p className="text-xs font-mono font-semibold text-text-primary mb-1">
-                Recover your last edit?
+                {draftHeading(newest)}
               </p>
               <p className="text-[11px] font-mono text-text-secondary leading-relaxed">
                 {draftSentence(newest)}
               </p>
               <div className="flex items-center gap-2 mt-3">
-                <Button variant="primary" size="sm" onClick={() => onRestoreDraft?.(newest.draftId)}>
+                <Button variant="primary" size="sm" onClick={() => restoreDraft(newest.draftId)}>
                   Restore
                 </Button>
                 <button
@@ -113,7 +147,7 @@ export default function EditorLanding({
                       <li key={m.draftId} className="flex items-center gap-2 flex-wrap">
                         <span className="text-[11px] font-mono text-text-secondary flex-1 min-w-0">{draftListLine(m)}</span>
                         <button
-                          onClick={() => onRestoreDraft?.(m.draftId)}
+                          onClick={() => restoreDraft(m.draftId)}
                           aria-label={`Restore ${draftListLine(m)}`}
                           className="text-[11px] font-mono text-accent-amber hover:text-accent-amber-strong cursor-pointer px-2 py-1"
                         >
@@ -200,6 +234,7 @@ export default function EditorLanding({
 
             <UploadZone
               onImageLoaded={handleUploadLoaded}
+              onLoadStart={handleUploadStart}
               currentImage={null}
               onRemove={() => {}}
             />

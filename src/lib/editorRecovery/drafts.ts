@@ -129,6 +129,15 @@ export function draftSentence(m: RecoveryManifestV1, now: number = Date.now()): 
   return `A ${width}${TIMES}${height} draft from ${formatDraftAge(m.updatedAt, now)} (${formatDraftClock(m.updatedAt, now)}), ${draftSourceLabel(m.project.source)}, is saved on this device.`;
 }
 
+/** The Editor's heading for its newest draft (George's copy, HQ
+ *  2026-10-30-001): a draft whose session ended the way the user chose (a
+ *  Save, a Leave, a Back) is one to continue; one a reload or a crash
+ *  interrupted, or one from before sessions were closed, is one to recover.
+ *  Generate offers only the second kind, under "Recover your last edit?". */
+export function draftHeading(m: Pick<RecoveryManifestV1, 'closedAt'>): string {
+  return m.closedAt === undefined ? 'Recover your last edit?' : 'Continue your last edit?';
+}
+
 /** One line of the Editor's older drafts: "512 x 512 . from a Slicer frame .
  *  2 days ago" (with the multiplication sign and middle dots). */
 export function draftListLine(m: RecoveryManifestV1, now: number = Date.now()): string {

@@ -128,12 +128,15 @@ export function useEditorRecovery({
   // have loaded while it is open: at its start if Clerk had loaded by then,
   // else at the first render after. A sign-out or another account later in
   // the session never moves its draft (Second 121). undefined: not known.
-  const sessionRef = useRef<{ owner: string | null | undefined } | null>(null);
+  // Only the session of this render's key is pinned: in a render that both
+  // ends a session (a new key) and first knows the account, the ending
+  // session keeps what it knew (Second 122).
+  const sessionRef = useRef<{ key: string; owner: string | null | undefined } | null>(null);
   useLayoutEffect(() => {
     getPaletteRef.current = getPalette;
     authRef.current = { isLoaded, userId };
     const session = sessionRef.current;
-    if (session && session.owner === undefined && isLoaded) session.owner = userId ?? null;
+    if (session && session.key === projectKey && session.owner === undefined && isLoaded) session.owner = userId ?? null;
   });
 
   useEffect(() => {
@@ -143,7 +146,8 @@ export function useEditorRecovery({
     let disposed = false;
     let available = false;
     let persistRequested = false;
-    const session: { owner: string | null | undefined } = {
+    const session: { key: string; owner: string | null | undefined } = {
+      key: projectKey,
       owner: authRef.current.isLoaded ? (authRef.current.userId ?? null) : undefined,
     };
     sessionRef.current = session;

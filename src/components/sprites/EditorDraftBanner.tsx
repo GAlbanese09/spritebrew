@@ -23,18 +23,34 @@ import { discardEditorDraft, editorDraftStore, editorWritesSettled, isEditorSess
  *
  * The offer belongs to the account it was found for: it is hidden the
  * moment the account changes, and Restore and Discard check the draft's
- * owner against the account at the time of the click (Second 121).
+ * owner against the account at the time of the click (Second 121). A
+ * Restore or a Discard acts only within the banner's visit, which ends when
+ * the account changes or the banner goes (Second 122).
  */
 export default function EditorDraftBanner() {
   const router = useRouter();
   const { isLoaded, userId } = useAuth();
   const account = isLoaded ? (userId ?? null) : undefined;
   const [offer, setOffer] = useState<{ account: string | null; draft: RecoveryManifestV1 } | null>(null);
-  // The account as of the latest render, for the click handlers.
+  // The account as of the latest render, for the click handlers; the
+  // account's visit, which moves on when the account changes; and whether
+  // the banner is on screen, which turns false in the commit that removes
+  // it (a sign-out takes it away with Generate's signed-in view, without
+  // rendering it again). A Restore or a Discard that answers after either
+  // changed does nothing.
   const accountRef = useRef(account);
+  const visitRef = useRef(0);
+  const liveRef = useRef(false);
   useLayoutEffect(() => {
-    accountRef.current = account;
+    if (accountRef.current !== account) {
+      accountRef.current = account;
+      visitRef.current++;
+    }
   });
+  useLayoutEffect(() => {
+    liveRef.current = true;
+    return () => { liveRef.current = false; };
+  }, []);
 
   useEffect(() => {
     if (account === undefined) return;
@@ -63,7 +79,12 @@ export default function EditorDraftBanner() {
 
   const restore = async () => {
     const who = accountRef.current;
-    if (who === undefined || !(await visibleDraft(draft.draftId, who)) || accountRef.current !== who) {
+    const visit = visitRef.current;
+    if (who === undefined) return;
+    const visible = await visibleDraft(draft.draftId, who);
+    // Stale: the offer on screen, if any, is a newer one; leave it (audit r5).
+    if (!liveRef.current || visitRef.current !== visit) return;
+    if (!visible) {
       setOffer(null);
       return;
     }
@@ -72,8 +93,9 @@ export default function EditorDraftBanner() {
   };
   const discard = async () => {
     const who = accountRef.current;
+    const visit = visitRef.current;
     setOffer(null);
-    if (who === undefined || !(await visibleDraft(draft.draftId, who)) || accountRef.current !== who) return;
+    if (who === undefined || !(await visibleDraft(draft.draftId, who)) || !liveRef.current || visitRef.current !== visit) return;
     void discardEditorDraft(draft.draftId);
   };
 

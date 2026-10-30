@@ -514,6 +514,32 @@ for (const existing of [false, true]) {
     same(order, ['save:explicit:40', 'close:']) && m && m.closedAt === 1 && (existing ? m.owner === 'user_a' : m.owner === undefined), { order, m });
 }
 
+// 22. Second 122 follow-up: in a render that both ends a session (its key
+// changes) and first knows the account, the account is not given to the
+// ending session: it saves with no owner of its own, so a draft that
+// belongs to A stays A's; the new session takes the account.
+{
+  const { c } = await session({ key: 'modal:old22', loaded: false, user: undefined });
+  db.manifests.set('modal:old22', { draftId: 'modal:old22', owner: 'user_a' });
+  c.unmount();
+  db.log.length = 0;
+  const props = { key: 'modal:old22' };
+  const d = R.mount(() => R.useEditorRecovery({ enabled: true, getPalette: () => ['#ffffff'], projectKey: props.key, surface: 'modal' }));
+  await drain();
+  edit();
+  await advance(300);
+  globalThis.__auth = { isLoaded: true, userId: 'user_b' };
+  props.key = 'modal:new22';
+  d.render();
+  await advance(2000);
+  const oldSaves = saves().filter((e) => e[1] === 'modal:old22').map((e) => e[3]);
+  const newSaves = saves().filter((e) => e[1] === 'modal:new22').map((e) => e[3]);
+  const old = db.manifests.get('modal:old22');
+  check("a render that ends a session and first knows the account: the ending session saves with no owner (A's draft stays A's), the new session saves as the account",
+    oldSaves.length === 1 && oldSaves[0] === undefined && old.owner === 'user_a' && newSaves.length >= 1 && newSaves.every((o) => o === 'user_b'), { oldSaves, newSaves, old });
+  d.unmount();
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
 console.log('all pass');

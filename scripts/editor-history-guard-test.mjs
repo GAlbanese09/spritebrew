@@ -262,12 +262,18 @@ function guard(active = true) {
 
 // 10. Leave by Back (useLeaveByBack): it leaves when there is a page to go
 // back to, falls back when there is not (or the entry below is this same
-// page), and its wait dies with the editor that started it (Second 121).
+// page), and its wait dies with the session that started it: when its
+// editor goes (Second 121), or when another draft takes its place in the
+// same editor (Second 122).
 const waitOut = () => new Promise((r) => setTimeout(r, LEAVE_BACK_WAIT_MS + 150));
-function leaver() {
-  const calls = { fallback: 0 };
-  const c = mount(() => useLeaveByBack(() => { calls.fallback++; }));
-  return { c, calls, leave: () => c.value() };
+function leaver(key = 'page:a') {
+  const calls = { fallback: 0, later: 0 };
+  const props = { key, fallback: () => { calls.fallback++; } };
+  const c = mount(() => useLeaveByBack(props.fallback, props.key));
+  return {
+    c, calls, leave: () => c.value(), show: (k) => { props.key = k; c.render(); },
+    newClose: () => { props.fallback = () => { calls.later++; }; c.render(); },
+  };
 }
 {
   hist.entries = [{ path: '/generate' }, { path: '/editor' }];
@@ -314,6 +320,41 @@ function leaver() {
   check('an old Leave by Back never acts after its editor went, even back on the same page with a new editor',
     a.calls.fallback === 0 && b.calls.fallback === 0, { a: a.calls, b: b.calls });
   b.c.unmount();
+}
+{
+  // Second 122 P2-D: on the tab's first page, A's Leave falls back after the
+  // wait; before it is over, draft B takes A's place in the same editor.
+  hist.entries = [{ path: '/editor' }];
+  hist.index = 0;
+  const a = leaver('page:a');
+  a.leave();
+  await tick();
+  a.show('page:b');
+  await waitOut();
+  const replaced = a.calls.fallback;
+  a.c.unmount();
+  // The control: the same session rendered again keeps its wait.
+  const c = leaver('page:a');
+  c.leave();
+  await tick();
+  c.show('page:a');
+  await waitOut();
+  check("an old Leave by Back never closes the draft that took its session's place in the same editor; a render of the same session keeps the wait",
+    replaced === 0 && c.calls.fallback === 1, { replaced, same: c.calls });
+  c.c.unmount();
+}
+{
+  // The wait runs the close as it was when the Leave was chosen, not one a
+  // later render brought.
+  hist.entries = [{ path: '/editor' }];
+  hist.index = 0;
+  const a = leaver('page:a');
+  a.leave();
+  await tick();
+  a.newClose();
+  await waitOut();
+  check('a Leave by Back runs the close of the moment it was chosen', a.calls.fallback === 1 && a.calls.later === 0, a.calls);
+  a.c.unmount();
 }
 
 console.log(`${pass} passed, ${fail} failed`);

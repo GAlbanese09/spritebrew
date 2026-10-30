@@ -1111,7 +1111,7 @@ export default function PixelEditorBody({
     return () => document.removeEventListener('click', onClick, true);
   }, [guardPage]);
 
-  const leaveByBack = useLeaveByBack(onDismiss);
+  const leaveByBack = useLeaveByBack(onDismiss, draftKey);
 
   const stayInEditor = useCallback(() => {
     // A Back already took the editor's history entry; put it back.

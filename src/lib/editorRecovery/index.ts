@@ -36,6 +36,7 @@ export {
   formatDraftClock,
   draftSentence,
   draftListLine,
+  draftHeading,
   type DraftSurface,
 } from './drafts';
 

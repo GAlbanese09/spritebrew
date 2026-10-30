@@ -6,20 +6,25 @@
 // account it was listed for, hide it the moment the account changes, and
 // check the draft's owner in the store, against the account at the time,
 // before a Restore or a Discard acts; a restore that finishes after an
-// account change or a newer choice does nothing. Run from the repo root:
+// account change or a newer choice does nothing. And (Second 122) every
+// action belongs to its visit: a Restore, a Discard or a close that answers
+// after its banner or page went (a sign-out removes the banner with
+// Generate's signed-in view), or after another draft took its place, does
+// nothing; the landing's latest choice wins. Run from the repo root:
 // `node scripts/editor-draft-access-test.mjs`. Prints only case names and
 // pass or fail.
 //
-// The real page and banner, with the real draft rules, the real
+// The real page, banner and landing, with the real draft rules, the real
 // useEditorRecovery module and the real stores, are bundled with esbuild
 // into local/.editor-draft-access-test/ (gitignored) with react, its JSX
-// runtime, @clerk/react, next/navigation, the editor body, the landing,
-// react-hotkeys-hook, lucide-react, the Button and @/lib/editorRecovery's
-// IndexedDB store swapped for stand-ins written there too. The stand-in
-// store keeps drafts in memory and can hold a list, an owner lookup or a
-// load until the case lets it go. The stand-in React (as in
-// gallery-ownership-test) runs render, layout and passive effects, and
-// re-renders in a later task.
+// runtime, @clerk/react, next/navigation, the editor body, the page's
+// landing, the upload zone, react-hotkeys-hook, lucide-react, the Button
+// and @/lib/editorRecovery's IndexedDB store swapped for stand-ins written
+// there too. The stand-in store keeps drafts in memory and can hold a list,
+// an owner lookup or a load until the case lets it go. The stand-in React
+// (as in gallery-ownership-test) runs render, layout and passive effects,
+// and re-renders in a later task; removing a component runs its layout
+// cleanups first, as React's commit does.
 
 import { build } from 'esbuild';
 import fs from 'node:fs';
@@ -164,7 +169,8 @@ const FAKE_STORE = lines(
   'export class IndexedDbDraftStore {',
   '  async listDrafts() { await gate("list"); return [...db.manifests.values()].sort((a, b) => b.updatedAt - a.updatedAt).map((m) => ({ manifest: m })); }',
   '  async getLatest(id) { await gate("latest"); const m = db.manifests.get(id); return m ? { manifest: m } : null; }',
-  '  async loadDraft(id) { await gate("load"); const m = db.manifests.get(id); if (!m) throw new Error("gone"); db.log.push(["load", id]); return { project: m.project, bytes: new Uint8ClampedArray(4) }; }',
+  '  // The real store reads the manifest, then the payload: a held load has its manifest already.',
+  '  async loadDraft(id) { const m = db.manifests.get(id); await gate("load"); if (!m) throw new Error("gone"); db.log.push(["load", id]); return { project: m.project, bytes: new Uint8ClampedArray(4) }; }',
   '  async deleteDraft(id) { db.log.push(["delete", id]); db.manifests.delete(id); }',
   '  async markClosed(id) { db.log.push(["close", id]); }',
   '  async saveDraft(input) { db.log.push(["save", input.projectKey]); return { manifest: {} }; }',
@@ -175,14 +181,15 @@ const FAKE_STORE = lines(
 );
 const files = {
   'fake-react.mjs': FAKE_REACT,
-  'jsx-runtime.mjs': lines('export function jsx(type, props) { return { type, props }; }', 'export const jsxs = jsx;', "export const Fragment = 'Fragment';"),
+  'jsx-runtime.mjs': lines('export function jsx(type, props, key) { return { type, props, key }; }', 'export const jsxs = jsx;', "export const Fragment = 'Fragment';"),
   'clerk.mjs': lines('export function useAuth() { return globalThis.__auth; }'),
   'navigation.mjs': lines('export function useRouter() { return globalThis.__router; }'),
   'hotkeys.mjs': lines('export function HotkeysProvider(props) { return props.children; }'),
-  'icons.mjs': lines('export function RotateCcw() { return null; }'),
+  'icons.mjs': lines(...['RotateCcw', 'UploadCloud', 'FilePlus', 'FolderOpen', 'Image', 'AlertCircle'].map((n) => `export function ${n}() { return null; }`)),
   'button.mjs': lines('export default function Button() { return null; }'),
   'landing.mjs': lines('export default function EditorLanding() { return null; }'),
   'body.mjs': lines('export default function PixelEditorBody() { return null; }'),
+  'upload.mjs': lines('export default function UploadZone() { return null; }'),
   'recovery.mjs': FAKE_STORE,
   'entry.mjs': lines(
     `export { default as EditorPage } from ${JSON.stringify(path.join(ROOT, 'src/app/editor/page.tsx'))};`,
@@ -190,6 +197,9 @@ const files = {
     `export { useSpriteStore } from ${JSON.stringify(path.join(ROOT, 'src/stores/spriteStore.ts'))};`,
     `export { default as EditorLanding } from ${JSON.stringify(path.join(DIR, 'landing.mjs'))};`,
     `export { default as PixelEditorBody } from ${JSON.stringify(path.join(DIR, 'body.mjs'))};`,
+    `export { default as RealLanding } from ${JSON.stringify(path.join(ROOT, 'src/components/sprites/EditorLanding.tsx'))};`,
+    `export { default as UploadZone } from ${JSON.stringify(path.join(DIR, 'upload.mjs'))};`,
+    `export { useEditorStore } from ${JSON.stringify(path.join(ROOT, 'src/components/sprites/editorStore.ts'))};`,
     `export { default as Button } from ${JSON.stringify(path.join(DIR, 'button.mjs'))};`,
     `export { mount } from ${JSON.stringify(path.join(DIR, 'fake-react.mjs'))};`,
   ),
@@ -199,10 +209,13 @@ const stubs = {
   react: 'fake-react.mjs', 'react/jsx-runtime': 'jsx-runtime.mjs', 'react/jsx-dev-runtime': 'jsx-runtime.mjs',
   '@clerk/react': 'clerk.mjs', 'next/navigation': 'navigation.mjs', 'react-hotkeys-hook': 'hotkeys.mjs',
   'lucide-react': 'icons.mjs', '@/components/ui/Button': 'button.mjs', '@/components/sprites/EditorLanding': 'landing.mjs',
-  '@/components/sprites/PixelEditorBody': 'body.mjs', '@/lib/editorRecovery': 'recovery.mjs',
+  '@/components/sprites/PixelEditorBody': 'body.mjs', '@/lib/editorRecovery': 'recovery.mjs', './UploadZone': 'upload.mjs',
 };
 globalThis.window = globalThis;
 globalThis.location = { hostname: 'localhost', pathname: '/editor' };
+globalThis.ImageData ??= class ImageData {
+  constructor(data, width, height) { this.data = data; this.width = width; this.height = height; }
+};
 const OUT = path.join(DIR, 'bundle.mjs');
 await build({
   entryPoints: [path.join(DIR, 'entry.mjs')],
@@ -415,6 +428,347 @@ const discardButton = (c) => (find(c.value, 'button')[0] || { props: {} }).props
   check("for A, the banner's Restore hands A's draft to the Editor for A, and Discard deletes it",
     same(intent, { draftId: 'modal:a1', account: 'user_a' }) && !db.manifests.has('modal:a1'), { intent, log: db.log });
   d.unmountLayout(); d.unmountPassive();
+}
+
+// Second 122 P2-B: an action belongs to its visit. A sign-out takes the
+// banner away with Generate's signed-in view (<Show when="signed-in">)
+// without rendering it again, so the banner never sees the signed-out
+// account; its going must end what it started.
+const removeSignedOut = (c, passiveLater) => {
+  c.unmountLayout();
+  signIn(null);
+  if (!passiveLater) c.unmountPassive();
+};
+for (const passiveLater of [false, true]) {
+  const when = passiveLater ? ', the commit done and its passive cleanups not yet run' : '';
+  world();
+  const c = await banner('user_a');
+  db.hold.latest = true;
+  discardButton(c)();
+  await settle();
+  removeSignedOut(c, passiveLater);
+  await release('latest');
+  const discardLeft = db.manifests.has('modal:a1') && !db.log.some((e) => e[0] === 'delete');
+  if (passiveLater) c.unmountPassive();
+  world();
+  const d = await banner('user_a');
+  db.hold.latest = true;
+  restoreButton(d)();
+  await settle();
+  removeSignedOut(d, passiveLater);
+  await release('latest');
+  const restoreLeft = R.useSpriteStore.getState().pendingEditorRestore === null && same(router.pushes, []);
+  if (passiveLater) d.unmountPassive();
+  check(`a banner Discard or Restore still waiting on its owner check when a sign-out removes the banner${when} does nothing`,
+    discardLeft && restoreLeft, { discardLeft, restoreLeft, pushes: router.pushes, log: db.log });
+}
+{
+  // The banner stays up while the account changes under a held check.
+  world();
+  const c = await banner('user_a');
+  db.hold.latest = true;
+  discardButton(c)();
+  restoreButton(c)();
+  await settle();
+  await switchTo(c, 'user_b');
+  await release('latest');
+  check("a banner Discard or Restore still waiting on its owner check when the account changes does nothing",
+    db.manifests.has('modal:a1') && R.useSpriteStore.getState().pendingEditorRestore === null && same(router.pushes, []), { pushes: router.pushes, log: db.log });
+  c.unmountLayout(); c.unmountPassive();
+}
+{
+  // The same on the Editor page, which stays up while the account changes.
+  world();
+  const c = await page('user_a');
+  db.hold.latest = true;
+  landing(c).onDiscardDraft('modal:a1');
+  await settle();
+  await switchTo(c, 'user_b');
+  await release('latest');
+  check("a page Discard still waiting on its owner check when the account changes deletes nothing",
+    db.manifests.has('modal:a1') && !db.log.some((e) => e[0] === 'delete'), db.log);
+  c.unmountLayout(); c.unmountPassive();
+}
+{
+  // The control: the same held checks, with the banner still up, act.
+  world();
+  const c = await banner('user_a');
+  db.hold.latest = true;
+  restoreButton(c)();
+  await settle();
+  await release('latest');
+  const intent = R.useSpriteStore.getState().pendingEditorRestore;
+  const pushes = [...router.pushes];
+  c.unmountLayout(); c.unmountPassive();
+  world();
+  const d = await banner('user_a');
+  db.hold.latest = true;
+  discardButton(d)();
+  await settle();
+  await release('latest');
+  check("with the banner still up, A's held Restore hands A's draft on and A's held Discard deletes it",
+    same(intent, { draftId: 'modal:a1', account: 'user_a' }) && same(pushes, ['/editor']) && !db.manifests.has('modal:a1'), { intent, pushes, log: db.log });
+  d.unmountLayout(); d.unmountPassive();
+}
+
+// The Editor page goes too (the Sidebar's sign-out navigates away): a
+// Discard, a Restore or a restored draft's own Discard that answers after
+// the page went does nothing, and never resets the editor store another
+// editor may be using by then.
+const loadOther = () => {
+  const px = new Uint8ClampedArray(16).fill(200);
+  R.useEditorStore.getState().loadFrame('other', px, 2, 2, { kind: 'blank' });
+};
+{
+  world();
+  const c = await page('user_a');
+  db.hold.latest = true;
+  landing(c).onDiscardDraft('modal:a1');
+  await settle();
+  removeSignedOut(c, false);
+  await release('latest');
+  const discardLeft = db.manifests.has('modal:a1') && !db.log.some((e) => e[0] === 'delete');
+  world();
+  const d = await page('user_a');
+  db.hold.latest = true;
+  landing(d).onRestoreDraft('modal:a1');
+  await settle();
+  removeSignedOut(d, false);
+  await release('latest');
+  const restoreLoaded = loads().length > 0;
+  world();
+  const e = await page('user_a');
+  landing(e).onRestoreDraft('modal:a1');
+  await settle();
+  const restored = body(e);
+  db.hold.latest = true;
+  const own = restored.onDiscardDraft();
+  await settle();
+  removeSignedOut(e, false);
+  loadOther();
+  await release('latest');
+  await own;
+  const store = R.useEditorStore.getState();
+  const kept = db.manifests.has('modal:a1') && store.pixels !== null && store.width === 2;
+  check("a page Discard, Restore or restored draft's Discard still waiting when the page goes does nothing (no delete, no load, no reset)",
+    discardLeft && !restoreLoaded && kept, { discardLeft, restoreLoaded, kept, log: db.log });
+  R.useEditorStore.getState().reset();
+}
+
+// Second 122 P2-D: each draft gets its own editor body, and a close for one
+// draft never closes another that took its place.
+{
+  world();
+  const c = await page('user_a');
+  landing(c).onRestoreDraft('modal:a1');
+  await settle();
+  const node = find(c.value, R.PixelEditorBody)[0];
+  const restoreKeyed = !!node && node.key === 'modal:a1' && node.props.draftKey === 'modal:a1';
+  c.unmountLayout(); c.unmountPassive();
+  world();
+  const d = await page('user_a');
+  const lateReady = landing(d).onProjectReady;
+  lateReady('data:image/png;base64,AA', 8, 8, { kind: 'blank' });
+  await settle();
+  const a = find(d.value, R.PixelEditorBody)[0];
+  const imageKeyed = !!a && a.key === a.props.draftKey && a.props.draftKey.startsWith('page:');
+  // A late callback brings B while A is open; A's close (its Leave's
+  // fallback, say) runs before React has rendered B.
+  lateReady('data:image/png;base64,BB', 8, 8, { kind: 'blank' });
+  a.props.onDismiss();
+  await settle();
+  const b = find(d.value, R.PixelEditorBody)[0];
+  const bStays = !!b && b.props.frameDataUrl === 'data:image/png;base64,BB' && b.key !== a.key;
+  // B's own close still closes B.
+  if (b) b.props.onDismiss();
+  await settle();
+  const closed = !!b && body(d) === null && landing(d) !== null;
+  check("the page keys the editor body by its draft, and A's close never closes the draft B that took its place; B's own close does",
+    restoreKeyed && imageKeyed && bStays && closed, { restoreKeyed, imageKeyed, bStays, closed });
+  d.unmountLayout(); d.unmountPassive();
+}
+
+// George's copy (HQ 2026-10-30-001): the real landing heads its newest
+// draft by how its session ended.
+{
+  const heading = (drafts) => {
+    const c = R.mount(() => R.RealLanding({ onProjectReady() {}, drafts, onRestoreDraft() {}, onDiscardDraft() {} }));
+    const text = find(c.value, 'p').map((n) => n.props.children).find((t) => typeof t === 'string' && t.endsWith('your last edit?'));
+    c.unmountLayout(); c.unmountPassive();
+    return text;
+  };
+  const open = heading([draft('modal:a1', 'user_a', 3)]);
+  const closed = heading([{ ...draft('page:c1', 'user_a', 4), closedAt: 5 }]);
+  check('the Editor landing heads an interrupted draft "Recover your last edit?" and one that ended normally "Continue your last edit?"',
+    open === 'Recover your last edit?' && closed === 'Continue your last edit?', { open, closed });
+}
+
+// The landing's latest choice wins: an upload that finishes decoding after
+// a later choice, or after the landing went, opens nothing.
+function realLanding() {
+  const calls = { ready: [], chose: 0, restore: [] };
+  const c = R.mount(() => R.RealLanding({
+    onProjectReady: (url) => calls.ready.push(url),
+    onChoose: () => { calls.chose++; },
+    drafts: [draft('modal:a1', 'user_a', 3)],
+    onRestoreDraft: (id) => calls.restore.push(id),
+    onDiscardDraft: () => {},
+  }));
+  const zone = () => find(c.value, R.UploadZone)[0].props;
+  const restore = () => find(c.value, R.Button).find((n) => n.props.children === 'Restore').props.onClick();
+  const blank = () => find(c.value, R.Button).find((n) => Array.isArray(n.props.children) && n.props.children[0] === 'Start blank ').props.onClick();
+  return { c, calls, zone, restore, blank };
+}
+const fileOf = (name) => ({ name });
+{
+  const revoked = [];
+  const realRevoke = URL.revokeObjectURL;
+  URL.revokeObjectURL = (u) => revoked.push(u);
+  try {
+    const l = realLanding();
+    const f = fileOf('b.png');
+    l.zone().onLoadStart?.(f);
+    l.zone().onImageLoaded(f, 'blob:b', 8, 8);
+    const control = same(l.calls.ready, ['blob:b']) && l.calls.chose === 1;
+    l.c.unmountLayout(); l.c.unmountPassive();
+
+    const m = realLanding();
+    const g = fileOf('b.png');
+    m.zone().onLoadStart?.(g);
+    const loaded = m.zone().onImageLoaded;
+    m.c.unmountLayout(); m.c.unmountPassive();
+    loaded(g, 'blob:gone', 8, 8);
+    const afterGone = m.calls.ready.length === 0 && revoked.includes('blob:gone');
+
+    const n = realLanding();
+    const h = fileOf('b.png');
+    n.zone().onLoadStart?.(h);
+    n.restore();
+    n.zone().onImageLoaded(h, 'blob:late', 8, 8);
+    const afterRestore = n.calls.ready.length === 0 && same(n.calls.restore, ['modal:a1']) && revoked.includes('blob:late');
+    n.c.unmountLayout(); n.c.unmountPassive();
+
+    const o = realLanding();
+    const first = fileOf('first.png');
+    const second = fileOf('second.png');
+    o.zone().onLoadStart?.(first);
+    o.zone().onLoadStart?.(second);
+    o.zone().onImageLoaded(first, 'blob:first', 8, 8);
+    o.zone().onImageLoaded(second, 'blob:second', 8, 8);
+    const latestUpload = same(o.calls.ready, ['blob:second']) && o.calls.chose === 2;
+    o.c.unmountLayout(); o.c.unmountPassive();
+
+    const q = realLanding();
+    const k = fileOf('b.png');
+    q.zone().onLoadStart?.(k);
+    const realDocument = globalThis.document;
+    globalThis.document = { createElement: () => ({ width: 0, height: 0, toDataURL: () => 'data:blank' }) };
+    try { q.blank(); } finally { globalThis.document = realDocument; }
+    q.zone().onImageLoaded(k, 'blob:afterBlank', 8, 8);
+    const afterBlank = same(q.calls.ready, ['data:blank']) && revoked.includes('blob:afterBlank');
+    q.c.unmountLayout(); q.c.unmountPassive();
+    check("the landing's latest choice wins: an upload decoded after the landing went, after a Restore, a blank canvas or a newer upload opens nothing (its blob URL is let go); one decoded in time opens",
+      control && afterGone && afterRestore && latestUpload && afterBlank, { control, afterGone, afterRestore, latestUpload, afterBlank, calls: [l.calls, m.calls, n.calls, o.calls, q.calls] });
+  } finally {
+    URL.revokeObjectURL = realRevoke;
+  }
+}
+{
+  // StrictMode in development runs every effect a second time right after
+  // the first mount; that is not the page, the banner or the landing going.
+  world();
+  R.useSpriteStore.getState().setPendingEditorRestore({ draftId: 'modal:a1', account: 'user_a' });
+  signIn('user_a');
+  const c = R.mount(() => R.EditorPage());
+  c.strictReplay();
+  await settle();
+  const oneShot = !!(body(c) && body(c).draftKey === 'modal:a1');
+  c.unmountLayout(); c.unmountPassive();
+  world();
+  const d = await banner('user_a');
+  d.strictReplay();
+  await settle();
+  discardButton(d)();
+  await settle();
+  const bannerDiscard = !db.manifests.has('modal:a1');
+  d.unmountLayout(); d.unmountPassive();
+  const l = realLanding();
+  l.c.strictReplay();
+  const f = fileOf('b.png');
+  l.zone().onLoadStart?.(f);
+  l.zone().onImageLoaded(f, 'blob:strict', 8, 8);
+  const upload = same(l.calls.ready, ['blob:strict']);
+  l.c.unmountLayout(); l.c.unmountPassive();
+  check("under StrictMode's second run of effects, Generate's one-shot Restore still opens, and the banner's Discard and the landing's upload still act",
+    oneShot && bannerDiscard && upload, { oneShot, bannerDiscard, upload });
+}
+{
+  // Audit r5: a Discard of the draft a Restore is loading cancels the
+  // Restore, so the editor never opens on a deleted draft; a Discard of
+  // another draft does not.
+  world();
+  const c = await page('user_a');
+  db.hold.load = true;
+  landing(c).onRestoreDraft('modal:a1');
+  await settle();
+  landing(c).onDiscardDraft('modal:a1');
+  await settle();
+  await release('load');
+  const same_ = body(c) === null && !db.manifests.has('modal:a1');
+  c.unmountLayout(); c.unmountPassive();
+  world();
+  const d = await page('user_a');
+  db.hold.load = true;
+  landing(d).onRestoreDraft('modal:a1');
+  await settle();
+  landing(d).onDiscardDraft('page:scratch');
+  await settle();
+  await release('load');
+  const other = !!(body(d) && body(d).draftKey === 'modal:a1') && !db.manifests.has('page:scratch');
+  d.unmountLayout(); d.unmountPassive();
+  check('a Discard of the draft a Restore is loading cancels the Restore (no editor on a deleted draft); a Discard of another draft does not',
+    same_ && other, { same: same_, other });
+}
+{
+  // Audit r5: a stale action that is refused leaves what the newer account
+  // sees alone: Generate's offer for B, and the Editor's list for B.
+  world();
+  db.manifests.set('modal:b1', draft('modal:b1', 'user_b', 2));
+  const c = await banner('user_a');
+  db.hold.latest = true;
+  restoreButton(c)();
+  await settle();
+  await switchTo(c, 'user_b');
+  await settle();
+  const bShown = c.value !== null;
+  await release('latest');
+  const bKept = c.value !== null && R.useSpriteStore.getState().pendingEditorRestore === null && same(router.pushes, []);
+  c.unmountLayout(); c.unmountPassive();
+  world();
+  const d = await page('user_a');
+  db.hold.latest = true;
+  landing(d).onDiscardDraft('page:scratch');
+  await settle();
+  await switchTo(d, 'user_b');
+  await settle();
+  const bList = listed(d);
+  await release('latest');
+  const bListAfter = listed(d);
+  d.unmountLayout(); d.unmountPassive();
+  check("a stale banner Restore or page Discard that is refused leaves B's offer and B's list alone",
+    bShown && bKept && same(bList, ['page:scratch']) && same(bListAfter, ['page:scratch']) && db.manifests.has('page:scratch'), { bShown, bKept, bList, bListAfter });
+}
+{
+  // The page drops a restore still loading when an upload starts.
+  world();
+  const c = await page('user_a');
+  db.hold.load = true;
+  landing(c).onRestoreDraft('modal:a1');
+  await settle();
+  landing(c).onChoose?.();
+  await release('load');
+  check('an upload started while a Restore loads cancels the Restore', body(c) === null && landing(c) !== null, { body: !!body(c) });
+  c.unmountLayout(); c.unmountPassive();
 }
 
 console.log(`${pass} passed, ${fail} failed`);

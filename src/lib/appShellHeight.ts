@@ -43,13 +43,13 @@ export function isTextEntry(el: TextEntryLike | null | undefined): boolean {
 }
 
 /**
- * The visual viewport's height at scale 1, in whole CSS pixels, or null when
- * the inputs give no positive finite height. Rounds down, after a 0.01 px
- * allowance so a product such as 738.9999 at a zoom still gives 739.
+ * The visual viewport's height at scale 1 in CSS pixels, to 0.01 px (CSS
+ * takes fractional pixels), or null when the inputs give no positive finite
+ * height.
  */
 export function visibleHeight(vvHeight: number, scale: number): number | null {
   const s = Number.isFinite(scale) && scale > 0 ? scale : 1;
-  const h = Math.floor(vvHeight * s + 0.01);
+  const h = Math.round(vvHeight * s * 100) / 100;
   return Number.isFinite(h) && h > 0 ? h : null;
 }
 
@@ -131,9 +131,10 @@ export function createShellTracker(now: () => number): ShellTracker {
     read(r) {
       const typing = r.touch && isTextEntry(r.active);
       // Focus left a text field with no focusout to say so (the field was
-      // removed from the page): hold from now, as a focusout would have.
-      if (wasTyping && !typing && r.touch && now() >= holdUntil) {
-        holdUntil = now() + BLUR_HOLD_MS;
+      // removed from the page): hold from now, as a focusout would have (a
+      // focusout clears wasTyping, so this never repeats one).
+      if (wasTyping && !typing && r.touch) {
+        holdUntil = Math.max(holdUntil, now() + BLUR_HOLD_MS);
       }
       wasTyping = typing;
       const visible = visibleHeight(r.vvHeight, r.scale);
@@ -141,20 +142,28 @@ export function createShellTracker(now: () => number): ShellTracker {
       if (visible === null && layout === 0) return last;
       // The layout's own height is a floor: the keyboard and zoom do not
       // change it, so neither can cut the shell short, nor can a visual
-      // viewport left a little short after the keyboard closes (iOS 26.0) or
-      // a fractional height.
-      const cover = Math.max(layout, visible ?? 0);
+      // viewport left short after the keyboard closes (iOS 26.0). A layout
+      // within 1 px of the visual height is that height rounded to whole
+      // pixels (a fractional zoom or display scale): take the exact visual
+      // height, so the shell neither overflows by the fraction (which shows
+      // a scrollbar) nor falls short of it (a hairline).
+      const cover = visible !== null && layout > 0 && Math.abs(layout - visible) < 1
+        ? visible
+        : Math.max(layout, visible ?? 0);
       const hold = typing || (r.touch && now() < holdUntil);
       if (hold && base !== null) {
         if (layout > 0 && layout < baseLayout) {
           // The layout itself got shorter while holding (a rotation to
           // landscape, a keyboard that resizes the page, a shorter window):
           // follow it on every read rather than overflow the page. Nothing
-          // is kept, so a read taken mid-rotation cannot stick. A taller
-          // layout needs no rule: the cover grows the held height below.
+          // is kept, so a read taken mid-rotation cannot stick.
           last = cover;
           return last;
         }
+        // A taller layout raises the stored one too, so a return to the
+        // shorter one is followed (a double rotation; a window made taller,
+        // then shorter, while a field has focus).
+        if (layout > baseLayout) baseLayout = layout;
         if (cover > base) base = cover;
         last = base;
         return last;

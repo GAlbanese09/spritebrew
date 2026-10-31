@@ -90,7 +90,7 @@ check('body, null and undefined are not', !isTextEntry(BODY) && !isTextEntry(nul
 
 // visibleHeight.
 check('height x scale', visibleHeight(369.5, 2) === 739);
-check('rounds down', visibleHeight(653.8, 1) === 653);
+check('keeps fractions, to 0.01 px', visibleHeight(653.8, 1) === 653.8 && visibleHeight(403.123, 1) === 403.12);
 check('a product just under a whole pixel still counts it', visibleHeight(492.66666, 1.5) === 739);
 for (const s of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, undefined]) {
   check(`a scale of ${String(s)} counts as 1`, visibleHeight(800, s) === 800);
@@ -109,7 +109,9 @@ check('no height gives null', visibleHeight(Number.NaN, 1) === null && visibleHe
   p.vv(739 - 24); p.t = 20;
   check('a visual viewport left 24 px short after the keyboard closes (iOS 26.0) cannot cut the shell', p.read() === 739);
   p.vv(738.6); p.t = 30;
-  check('a fractional visual viewport leaves no hairline', p.read() === 739);
+  check('a visual viewport within 1 px of the layout: its exact height (no hairline)', p.read() === 738.6);
+  p.vv(738); p.t = 35;
+  check('a visual viewport 1 px or more under the layout: the layout height', p.read() === 739);
 }
 {
   // The hold's own job: the toolbars were collapsed at the last free read, so
@@ -302,6 +304,65 @@ for (const dw of [6, 40, 200]) {
   check('shellReading: layoutHeight is clientHeight and vvHeight the visual viewport', r.layoutHeight === 739 && r.vvHeight === 739);
   p.win.visualViewport = null;
   check('shellReading without a visual viewport: vvHeight is innerHeight', S.shellReading(p.win, p.doc).vvHeight === 900);
+}
+{
+  // Desktop at a fractional zoom or display scale: clientHeight rounds 801.6 up
+  // to 802. The shell takes 801.6, so it never overflows by the fraction.
+  const p = page({ touch: false, w: 1280, h: 802 });
+  p.vv(801.6);
+  check('a layout that is the visual height rounded up (802 for 801.6): the exact 801.6, no overflow', p.read() === 801.6);
+  p.layout(1280, 801); p.vv(801.4); p.t = 10;
+  check('rounded down (801 for 801.4): the exact 801.4, no hairline', p.read() === 801.4);
+}
+{
+  // iPad with a hardware keyboard: rotate while a field has focus, then back.
+  const p = page({ w: 1194, h: 834 });
+  p.read(); p.focus(TEXTAREA); p.read();
+  p.resize(834, 1194); p.t = 10;
+  check('iPad, typing, rotated to portrait: 1194', p.read() === 1194);
+  p.resize(1194, 834); p.t = 20;
+  check('and back to landscape while still typing: 834, not the held 1194', p.read() === 834);
+}
+{
+  // A window made taller, then shorter again, while a field has focus.
+  const p = page({ w: 800, h: 700 });
+  p.read(); p.focus(TEXTAREA); p.read();
+  p.resize(800, 1000); p.t = 10;
+  check('typing, the window made taller: 1000', p.read() === 1000);
+  p.resize(800, 800); p.t = 20;
+  check('then shorter again: 800, not the held 1000', p.read() === 800);
+}
+{
+  // The toolbar-grown hold survives a rotation round trip while typing: a
+  // followed shorter layout is never stored.
+  const p = page();
+  p.vv(780); p.read(); p.focus(TEXTAREA); p.read(); p.vv(739 - KB); p.t = 10; p.read();
+  p.resize(739, 390); p.vv(190); p.t = 20;
+  check('rotated to landscape while typing: 390', p.read() === 390);
+  p.resize(430, 739); p.vv(739 - KB); p.t = 30;
+  check('back to portrait, still typing: the held 780 again', p.read() === 780);
+}
+{
+  // Field A's focusout starts a hold; field B then gets focus and is removed
+  // with no focusout while A's hold runs: the hold runs on from B's removal.
+  const p = page();
+  p.vv(780); p.read(); p.focus(TEXTAREA); p.read(); p.vv(739 - KB); p.t = 50; p.read();
+  p.t = 1000; p.blur(BODY); p.read();
+  const B = el('INPUT', 'number');
+  p.t = 1100; p.focus(B); p.read();
+  p.t = 1200; p.doc.activeElement = BODY; p.read();
+  p.t = 1000 + BLUR_HOLD_MS + 50;
+  check('a field removed during an earlier hold extends it from the removal', p.read() === 780);
+  p.t = 1200 + BLUR_HOLD_MS;
+  check('and it ends BLUR_HOLD_MS after the removal', p.read() === 739);
+}
+{
+  // The window got shorter between the last free read and the first read
+  // while typing: followed (the stored layout is the free read's).
+  const p = page();
+  p.read();
+  p.resize(430, 600); p.focus(TEXTAREA); p.t = 10;
+  check('a shorter layout at the first read while typing: followed (600)', p.read() === 600);
 }
 // installShellHeight's listeners.
 {

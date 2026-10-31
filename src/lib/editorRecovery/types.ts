@@ -47,6 +47,19 @@ export interface RecoveryManifestV1 {
   previousCompression?: 'gzip' | 'none';
   // Lets the restore banner render without unpacking the payload.
   summary: { width: number; height: number; frameCount: number };
+  /** The account that made the draft (its Clerk user id), or null when no one
+   *  was signed in. Drafts are offered only to their owner, so a shared
+   *  browser never shows one account's work to another. Absent on drafts
+   *  saved before owners were recorded; those are offered on the Editor only,
+   *  as before (BUILD 2026-10-29). */
+  owner?: string | null;
+  /** The editor surface that saved it: the modal over another page, or the
+   *  full-page editor. */
+  surface?: 'modal' | 'page';
+  /** Set when the session ended the way the user chose (Save, Back, or a
+   *  confirmed Leave). Absent while the session is open, and after a reload
+   *  or a crash, which is when Generate offers it. A later save clears it. */
+  closedAt?: number;
 }
 
 export interface SaveDraftInput {
@@ -54,6 +67,9 @@ export interface SaveDraftInput {
   project: SpriteProjectV1;   // from editorStore.toProject()
   bytes: Uint8ClampedArray;   // from editorStore.getFramePixels(frameId)
   reason: SaveReason;
+  /** See RecoveryManifestV1.owner. Omitted: the draft keeps the owner it has. */
+  owner?: string | null;
+  surface?: 'modal' | 'page';
 }
 
 export interface RecoveryCandidate { manifest: RecoveryManifestV1; }
@@ -70,6 +86,13 @@ export interface EditorDraftStore {
   getLatest(projectKey: string): Promise<RecoveryCandidate | null>;
   listDrafts(): Promise<RecoveryCandidate[]>;
   deleteDraft(draftId: string): Promise<void>;
+  /** Marks a draft's session as ended by the user's choice (closedAt). */
+  markClosed(draftId: string): Promise<void>;
+  /** Keeps at most `keep` drafts (counting `protectDraftId`, which is always
+   *  kept) and deletes the rest with their payloads, in the order of
+   *  drafts.ts draftsToPrune: closed and older-format drafts first, the
+   *  work a crash left behind last. */
+  prune(keep: number, protectDraftId?: string): Promise<void>;
   cleanup(): Promise<void>;
 }
 

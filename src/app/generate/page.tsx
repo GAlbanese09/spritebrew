@@ -8,6 +8,7 @@ import GenerationForm from '@/components/sprites/GenerationForm';
 import AnimateForm from '@/components/sprites/AnimateForm';
 import GenerationResult from '@/components/sprites/GenerationResult';
 import LowBalanceBanner from '@/components/sprites/LowBalanceBanner';
+import EditorDraftBanner from '@/components/sprites/EditorDraftBanner';
 import { addToHistory, type SlicerHints } from '@/lib/generationHistory';
 import { useSpriteStore } from '@/stores/spriteStore';
 import type { AnimateGeneratedContext } from '@/components/sprites/AnimateForm';
@@ -369,6 +370,8 @@ export default function GeneratePage() {
       {/* Keep every use of `tab` inside this Show: its first value reads
           localStorage, and Show renders nothing on the server. */}
       <Show when="signed-in">
+      {/* Editor work a reload or a crash interrupted (BUILD 2026-10-29). */}
+      <EditorDraftBanner />
       <Suspense fallback={null}>
         <PurchaseStatusContent />
       </Suspense>

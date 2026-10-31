@@ -39,7 +39,10 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 import { useSpriteStore } from '@/stores/spriteStore';
 import { extractPaletteFromImageData } from '@/lib/imagePalette';
-import { useEditorRecovery } from './useEditorRecovery';
+import { useEditorRecovery, closeEditorDraft } from './useEditorRecovery';
+import { useEditorHistoryGuard } from './useEditorHistoryGuard';
+import { useLeaveByBack } from './useLeaveByBack';
+import EditorLeaveDialog from './EditorLeaveDialog';
 import { isDevHost } from '@/lib/isDevHost';
 import { devRecoverySelfTest } from '@/lib/editorRecovery';
 import { pixelsToPngDataUrl } from '@/lib/editorImage';
@@ -105,6 +108,12 @@ interface PixelEditorBodyProps {
    * prefers it; falls back to onDismiss when omitted (page mode, etc).
    */
   onSaveClose?: () => void;
+  /**
+   * This editor session's draft key (newDraftKey), or a restored draft's key.
+   * The session's work is saved under it as the user edits, on both layouts
+   * (useEditorRecovery; BUILD 2026-10-29).
+   */
+  draftKey: string;
 }
 
 export default function PixelEditorBody({
@@ -118,14 +127,19 @@ export default function PixelEditorBody({
   restore,
   onDiscardDraft,
   onSaveClose,
+  draftKey,
 }: PixelEditorBodyProps) {
   const editorCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
-  // Display-resolution overlay canvas — hosts ONLY the grid (Wave 1c). DPR-
-  // aware so 1px strokes stay crisp on HiDPI. Redrawn on zoom / dims / window
-  // resize; never touched during paint. Sits between the image canvas and the
-  // cursor footprint div in the DOM (paint-order stacking).
-  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  // Grid overlay: a div whose CSS background draws the grid, sized to the
+  // zoomed image. It used to be a canvas at device resolution times the zoom,
+  // which on a phone asked for 144 MB for a 512 px sheet at 4x, 655 MB at
+  // 8.5x and 1.3 GB at 12x, reallocated after every pinch: the likely reason
+  // iOS killed and reloaded the tab mid-session (BUILD 2026-10-29). The
+  // browser paints a background at device resolution itself, so it stays
+  // crisp and its memory does not grow with the zoom. Sits between the image
+  // canvas and the cursor footprint div in the DOM (paint-order stacking).
+  const overlayRef = useRef<HTMLDivElement>(null);
   // Tracks the last pointer cell of the active stroke so handleMouseMove can
   // interpolate via Bresenham (paintLine) instead of just stamping discrete
   // points (which left gaps at high pointer speeds).
@@ -216,10 +230,11 @@ export default function PixelEditorBody({
   const [isDrawing, setIsDrawing] = useState(false);
   const [palette, setPalette] = useState<string[]>([]);
 
-  // Stage 2 crash-recovery capture. Active in page mode only; modal mount
-  // path is Stage 3+. Reads the live palette at save time via the closure so
-  // the saved envelope includes it (toProject emits an empty palette).
-  useEditorRecovery({ enabled: layout === 'page', getPalette: () => palette });
+  // Crash-recovery capture, on both layouts: the modal used to save nothing,
+  // and an iPhone reload in the middle of a modal session lost all of it
+  // (BUILD 2026-10-29). Reads the live palette at save time via the closure
+  // so the saved envelope includes it (toProject emits an empty palette).
+  useEditorRecovery({ enabled: true, getPalette: () => palette, projectKey: draftKey, surface: layout });
 
   // Mobile-only Colors sheet (Wave 2b-2). Hosts the color picker + palette
   // on phones; never opens at md+ (the close-on-md effect dismisses if the
@@ -408,52 +423,25 @@ export default function PixelEditorBody({
     }
   }, [renderCanvasesFull]);
 
-  // Grid overlay — stroked on a separate DPR-aware canvas (Wave 1c). Crisp
-  // 1 device px on HiDPI, never touched during paint. Called on mount, zoom
-  // change, dims/frame-load change, and window resize (DPR may have changed
-  // if the window moved to another monitor).
+  // Grid overlay geometry. Called on mount, zoom change and dims/frame-load
+  // change. Lines are 1 CSS px at every pixel boundary from x = 0 to
+  // x = width - 1 (and the same for y), as the canvas drew them; below 4x
+  // there is no grid, since it would only gray the image.
   const drawGridOverlay = useCallback(() => {
     const { width, height } = useEditorStore.getState();
-    const oc = overlayCanvasRef.current;
-    if (!oc || width === 0 || height === 0) return;
-
-    const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
-    const cssW = width * zoom;
-    const cssH = height * zoom;
-
-    // Backing store at device res for crisp 1px lines. Assigning width/height
-    // resets the transform too, so reapply scale immediately after.
-    const bsW = Math.round(cssW * dpr);
-    const bsH = Math.round(cssH * dpr);
-    if (oc.width !== bsW || oc.height !== bsH) {
-      oc.width = bsW;
-      oc.height = bsH;
+    const ov = overlayRef.current;
+    if (!ov || width === 0 || height === 0) return;
+    ov.style.width = `${width * zoom}px`;
+    ov.style.height = `${height * zoom}px`;
+    if (zoom < 4) {
+      ov.style.backgroundImage = 'none';
+      return;
     }
-    oc.style.width = `${cssW}px`;
-    oc.style.height = `${cssH}px`;
-
-    const ctx = oc.getContext('2d')!;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, cssW, cssH);
-    // Wave 2a: sub-4x grids render as gray mush — skip the loop and leave
-    // the overlay cleared. The image itself is the visual reference at low
-    // zoom; the grid only earns its keep at pixel-art-editing zooms.
-    if (zoom < 4) return;
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-    ctx.lineWidth = 1;
-    // CSS-logical space (the DPR transform handles HiDPI).
-    for (let x = 0; x <= width; x++) {
-      ctx.beginPath();
-      ctx.moveTo(x * zoom + 0.5, 0);
-      ctx.lineTo(x * zoom + 0.5, cssH);
-      ctx.stroke();
-    }
-    for (let y = 0; y <= height; y++) {
-      ctx.beginPath();
-      ctx.moveTo(0, y * zoom + 0.5);
-      ctx.lineTo(cssW, y * zoom + 0.5);
-      ctx.stroke();
-    }
+    const line = 'rgba(255, 255, 255, 0.08)';
+    ov.style.backgroundImage =
+      `linear-gradient(to right, ${line} 1px, transparent 1px), ` +
+      `linear-gradient(to bottom, ${line} 1px, transparent 1px)`;
+    ov.style.backgroundSize = `${zoom}px ${zoom}px`;
   }, [zoom]);
 
   // Pixel subscription — fires outside React reconciliation, no re-render.
@@ -491,14 +479,6 @@ export default function PixelEditorBody({
     renderCanvasesFull();
     drawGridOverlay();
   }, [zoom, renderCanvasesFull, drawGridOverlay]);
-
-  // Window resize — DPR may have changed (e.g., window dragged to another
-  // monitor). Overlay-only; the image canvas is DPR-agnostic.
-  useEffect(() => {
-    const handler = () => drawGridOverlay();
-    window.addEventListener('resize', handler);
-    return () => window.removeEventListener('resize', handler);
-  }, [drawGridOverlay]);
 
   // Close the mobile Colors sheet if the viewport grows to md+ (e.g. rotate
   // to landscape), where the desktop sidepanel takes over and an open sheet
@@ -985,6 +965,10 @@ export default function PixelEditorBody({
   // Fallback to onDismiss when the wrapper omits onSaveClose — page mode's
   // Save button doesn't exist today, but the fallback keeps the contract safe.
   const doSaveAndDismiss = useCallback(() => {
+    // The session ends by the user's choice: its newest state goes into the
+    // draft (read now, before the close resets the store), which is then
+    // marked closed so Generate does not offer it.
+    void closeEditorDraft(draftKey);
     // Skip onSave when there are no committed edits (historyIndex === 0): the
     // pixels are byte-identical to load (e.g. a pinch-cancelled stroke left the
     // session dirty only via hasAttemptedEdit), and pushing them downstream
@@ -994,7 +978,22 @@ export default function PixelEditorBody({
       if (dataUrl) onSave(dataUrl);
     }
     (onSaveClose ?? onDismiss)();
-  }, [renderToDataUrl, onSave, onSaveClose, onDismiss]);
+  }, [renderToDataUrl, onSave, onSaveClose, onDismiss, draftKey]);
+
+  // Leaving the full-page editor with edits asks first (BUILD 2026-10-29):
+  // its Back, any in-app link, and the browser's Back (an edge swipe on
+  // iOS). The modal asks through its wrapper's confirm instead. The work is
+  // already in the draft either way; this makes leaving a choice.
+  const [leaveAsk, setLeaveAsk] = useState<null | { kind: 'back' } | { kind: 'dismiss' } | { kind: 'href'; href: string }>(null);
+  const guardPage = layout === 'page' && isDirtyForGuard;
+  const { rearm: rearmPageGuard, ownsTop: pageGuardOnTop } = useEditorHistoryGuard(guardPage, () => setLeaveAsk({ kind: 'back' }));
+  // Going to another page: while the editor's own history entry is the
+  // current one, replace it rather than push past it, so Back from there
+  // comes straight back here instead of landing on that entry first.
+  const goTo = useCallback((href: string) => {
+    if (pageGuardOnTop()) router.replace(href);
+    else router.push(href);
+  }, [pageGuardOnTop, router]);
 
   // Send-to-Animator (page-mode only). Snapshot the canvas synchronously
   // BEFORE any state change or navigation. The dataUrl is a JS string copy
@@ -1013,8 +1012,10 @@ export default function PixelEditorBody({
     setPendingAnimatorSkipBgRemoval(true);         // user just edited; respect what they made
     setPendingAnimatorHandoff(true);
 
-    router.push('/generate');
-  }, [renderToDataUrl, setGeneratedImage, setCurrentSheetMetadata, setGenerationStyle, setOriginalCharacter, setPendingAnimatorSkipBgRemoval, setPendingAnimatorHandoff, router]);
+    // The edit goes on to the Animator: the session ended by choice.
+    void closeEditorDraft(draftKey);
+    goTo('/generate');
+  }, [renderToDataUrl, setGeneratedImage, setCurrentSheetMetadata, setGenerationStyle, setOriginalCharacter, setPendingAnimatorSkipBgRemoval, setPendingAnimatorHandoff, goTo, draftKey]);
 
   // PNG download via <a download>. Editor stays open. Backs page-mode Save
   // and the modal header's Download ("keep a copy") action.
@@ -1043,6 +1044,105 @@ export default function PixelEditorBody({
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
   }, [isDirtyForGuard]);
+
+  // No gesture inside the editor may act on the page or its controls (BUILD
+  // 2026-10-29). While the editor is open:
+  //   - Safari's own pinch-zoom of the page is cancelled (gesturestart);
+  //     every editor surface also has touch-action set below.
+  //   - A tap that ends a two-finger gesture is not a tap: a second finger
+  //     landing on Save, Close or a zoom preset mid-pinch would otherwise
+  //     press it. Clicks are ignored from the moment a second finger lands
+  //     until 400 ms after the last finger lifts.
+  useEffect(() => {
+    const QUIET_MS = 400;
+    let multiTouch = false;
+    let quietUntil = 0;
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length >= 2) multiTouch = true;
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      if (multiTouch && e.touches.length === 0) {
+        multiTouch = false;
+        quietUntil = performance.now() + QUIET_MS;
+      }
+    };
+    const onClick = (e: MouseEvent) => {
+      if (!e.isTrusted) return;
+      if (multiTouch || performance.now() < quietUntil) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    const onGesture = (e: Event) => e.preventDefault();
+    const passive = { capture: true, passive: true } as const;
+    window.addEventListener('touchstart', onTouchStart, passive);
+    window.addEventListener('touchend', onTouchEnd, passive);
+    window.addEventListener('touchcancel', onTouchEnd, passive);
+    window.addEventListener('click', onClick, true);
+    window.addEventListener('gesturestart', onGesture, { passive: false });
+    window.addEventListener('gesturechange', onGesture, { passive: false });
+    return () => {
+      window.removeEventListener('touchstart', onTouchStart, passive);
+      window.removeEventListener('touchend', onTouchEnd, passive);
+      window.removeEventListener('touchcancel', onTouchEnd, passive);
+      window.removeEventListener('click', onClick, true);
+      window.removeEventListener('gesturestart', onGesture);
+      window.removeEventListener('gesturechange', onGesture);
+    };
+  }, []);
+
+  // In-app links from the full-page editor with edits ask first (see
+  // leaveAsk above).
+  useEffect(() => {
+    if (!guardPage) return;
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!a || a.hasAttribute('download') || (a.target && a.target !== '_self')) return;
+      const url = new URL(a.href, window.location.href);
+      // Another site, or this page itself (the header's Back decides that
+      // one through its own handler).
+      if (url.origin !== window.location.origin || url.pathname === window.location.pathname) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setLeaveAsk({ kind: 'href', href: url.pathname + url.search + url.hash });
+    };
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, [guardPage]);
+
+  const leaveByBack = useLeaveByBack(onDismiss, draftKey);
+
+  const stayInEditor = useCallback(() => {
+    // A Back already took the editor's history entry; put it back.
+    if (leaveAsk?.kind === 'back') rearmPageGuard();
+    setLeaveAsk(null);
+  }, [leaveAsk, rearmPageGuard]);
+
+  const leaveEditor = useCallback(() => {
+    const ask = leaveAsk;
+    setLeaveAsk(null);
+    if (!ask) return;
+    void closeEditorDraft(draftKey);
+    // The user's Back already took the editor's own entry; this one leaves
+    // the page, or goes to the landing when there is nowhere to go back to
+    // (useLeaveByBack).
+    if (ask.kind === 'back') leaveByBack();
+    else if (ask.kind === 'href') goTo(ask.href);
+    else onDismiss();
+  }, [leaveAsk, draftKey, goTo, onDismiss, leaveByBack]);
+
+  // The page header's Back: straight to the landing when there is nothing
+  // to lose, else ask.
+  const handlePageBack = useCallback((e: React.MouseEvent) => {
+    if (selectIsDirty(useEditorStore.getState())) {
+      e.preventDefault();
+      setLeaveAsk({ kind: 'dismiss' });
+      return;
+    }
+    void closeEditorDraft(draftKey);
+    onDismiss();
+  }, [draftKey, onDismiss]);
 
   // Hotkeys — same Wave 1 + Day-9 useKey/splitKey fixes.
   const cycleBrushSize = useCallback(
@@ -1110,6 +1210,10 @@ export default function PixelEditorBody({
   return (
     <>
     <div
+      // The whole editor takes every touch: no page scroll or pinch-zoom
+      // from anywhere in it (BUILD 2026-10-29). The toolbar and the side
+      // panel scroll, so they allow panning (and still no pinch-zoom).
+      style={{ touchAction: 'none' }}
       className="h-full grid bg-bg-primary grid-rows-[auto_minmax(0,1fr)_auto] grid-cols-1 [grid-template-areas:'header''canvas''bottombar'] md:grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[56px_1fr_280px] md:[grid-template-areas:'header_header_header''toolbar_canvas_sidepanel']"
     >
       {/* Header */}
@@ -1155,7 +1259,7 @@ export default function PixelEditorBody({
           </div>
         ) : (
           <div className="flex items-center gap-2 shrink-0">
-            <Link href="/editor" onClick={onDismiss}>
+            <Link href="/editor" onClick={handlePageBack}>
               <Button variant="ghost" size="sm">
                 <ArrowLeft size={14} />
                 <span className="sr-only md:not-sr-only">Back</span>
@@ -1179,7 +1283,7 @@ export default function PixelEditorBody({
       {/* Toolbar — vertical rail on md+ (its original placement); horizontal
           bottom bar on mobile (overflow-x scrolls if needed). Buttons grow to
           a 44×44 touch target on mobile and revert to compact sizing on md. */}
-      <aside className="[grid-area:bottombar] flex flex-row items-center gap-2 overflow-x-auto border-t border-border-default bg-bg-secondary p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:[grid-area:toolbar] md:flex-col md:items-stretch md:overflow-x-visible md:overflow-y-auto md:[scrollbar-gutter:stable] md:border-t-0 md:border-r md:pb-2">
+      <aside style={{ touchAction: 'pan-x pan-y' }} className="[grid-area:bottombar] flex flex-row items-center gap-2 overflow-x-auto border-t border-border-default bg-bg-secondary p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:[grid-area:toolbar] md:flex-col md:items-stretch md:overflow-x-visible md:overflow-y-auto md:[scrollbar-gutter:stable] md:border-t-0 md:border-r md:pb-2">
         {toolButtons.map(({ id, icon: Icon, label }) => (
           <button
             key={id}
@@ -1391,10 +1495,10 @@ export default function PixelEditorBody({
                 backgroundPosition: '0 0, 8px 8px',
               }}
             />
-            <canvas
-              ref={overlayCanvasRef}
+            <div
+              ref={overlayRef}
               aria-hidden="true"
-              className="absolute top-0 left-0 pointer-events-none block"
+              className="absolute top-0 left-0 pointer-events-none"
             />
             <div
               aria-hidden="true"
@@ -1427,7 +1531,7 @@ export default function PixelEditorBody({
       {/* Sidepanel (right): color + palette + future preview. Hidden on
           mobile (palette returns as the Wave 2b-2 slide-up sheet; color is
           surfaced inline in the mobile bottom bar). */}
-      <aside className="[grid-area:sidepanel] hidden md:flex flex-col gap-4 border-l border-border-default bg-bg-secondary overflow-y-auto [scrollbar-gutter:stable] p-3">
+      <aside style={{ touchAction: 'pan-x pan-y' }} className="[grid-area:sidepanel] hidden md:flex flex-col gap-4 border-l border-border-default bg-bg-secondary overflow-y-auto [scrollbar-gutter:stable] p-3">
         {/* Current color — single styled input acts as both swatch and picker. */}
         <div className="flex flex-col gap-2">
           <div className="text-[9px] font-mono text-text-muted uppercase tracking-wider">
@@ -1519,6 +1623,7 @@ export default function PixelEditorBody({
     <div
       aria-hidden={!sheetOpen}
       onClick={() => setSheetOpen(false)}
+      style={{ touchAction: 'none' }}
       className={`fixed inset-0 z-[105] bg-black/50 transition-opacity duration-200 md:hidden ${
         sheetOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
       }`}
@@ -1527,6 +1632,7 @@ export default function PixelEditorBody({
       role="dialog"
       aria-label="Colors"
       aria-hidden={!sheetOpen}
+      style={{ touchAction: 'none' }}
       className={`fixed inset-x-0 bottom-0 z-[106] md:hidden flex flex-col gap-4 bg-bg-secondary border-t border-border-default rounded-t-2xl shadow-2xl px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] transition-transform duration-200 ease-out ${
         sheetOpen ? 'translate-y-0' : 'translate-y-full pointer-events-none'
       }`}
@@ -1582,6 +1688,9 @@ export default function PixelEditorBody({
         )}
       </div>
     </div>
+    {layout === 'page' && (
+      <EditorLeaveDialog open={leaveAsk !== null} onStay={stayInEditor} onLeave={leaveEditor} />
+    )}
     </>
   );
 }

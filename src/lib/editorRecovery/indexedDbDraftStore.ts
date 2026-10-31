@@ -49,6 +49,7 @@ import {
   type SaveDraftInput,
 } from './types';
 import { gunzipToBytes, gzipBytes, sha256Hex, summarizeProject } from './pack';
+import { draftsToPrune } from './drafts';
 
 const DB_NAME = 'spritebrew-editor-recovery';
 const DB_VERSION = 1;
@@ -178,6 +179,9 @@ export class IndexedDbDraftStore implements EditorDraftStore {
         previousPayloadSha256: existing?.payloadSha256,
         previousCompression: existing?.compression,
         summary,
+        owner: input.owner !== undefined ? input.owner : existing?.owner,
+        surface: input.surface ?? existing?.surface,
+        // A save means the session is open again: no closedAt.
       };
 
       // Two-phase: payload FIRST, manifest LAST. A crash between these two
@@ -308,6 +312,27 @@ export class IndexedDbDraftStore implements EditorDraftStore {
     await tx.done;
   }
 
+  async markClosed(draftId: string): Promise<void> {
+    const db = await this.getDb();
+    const tx = db.transaction(MANIFEST_STORE, 'readwrite');
+    const manifest = await tx.store.get(draftId);
+    if (manifest) await tx.store.put({ ...manifest, closedAt: Date.now() });
+    await tx.done;
+  }
+
+  async prune(keep: number, protectDraftId?: string): Promise<void> {
+    const db = await this.getDb();
+    const tx = db.transaction([MANIFEST_STORE, PAYLOAD_STORE], 'readwrite');
+    const manifests = await tx.objectStore(MANIFEST_STORE).getAll();
+    // Which ones go is the pure, tested rule in drafts.ts.
+    for (const m of draftsToPrune(manifests, keep, protectDraftId)) {
+      await tx.objectStore(PAYLOAD_STORE).delete(m.payloadKey);
+      if (m.previousPayloadKey) await tx.objectStore(PAYLOAD_STORE).delete(m.previousPayloadKey);
+      await tx.objectStore(MANIFEST_STORE).delete(m.draftId);
+    }
+    await tx.done;
+  }
+
   async cleanup(): Promise<void> {
     // Dedup concurrent cleanups. The post-save fire-and-forget in saveDraft
     // means many cleanups can be requested in quick succession; joining a
@@ -372,8 +397,10 @@ export async function requestPersistentStorage(): Promise<boolean> {
  * key; any throw → false.
  */
 export async function isRecoveryAvailable(): Promise<boolean> {
-  if (typeof indexedDB === 'undefined') return false;
   try {
+    // Inside the try: reading indexedDB itself throws in some sandboxed
+    // contexts, and this probe must answer false there, never reject.
+    if (typeof indexedDB === 'undefined') return false;
     const db = await openDB<RecoveryDbV1>(DB_NAME, DB_VERSION, { upgrade });
     const probeKey = `__probe__::${Date.now()}::${crypto.randomUUID()}`;
     const probeBlob = new Blob([new Uint8Array([0])]);

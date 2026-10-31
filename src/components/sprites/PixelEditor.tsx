@@ -5,8 +5,11 @@ import { Dialog } from '@headlessui/react';
 import { HotkeysProvider } from 'react-hotkeys-hook';
 import PixelEditorBody from './PixelEditorBody';
 import { useEditorStore, selectIsDirty } from './editorStore';
+import { closeEditorDraft, discardEditorDraft } from './useEditorRecovery';
+import { useEditorHistoryGuard } from './useEditorHistoryGuard';
 import type { SpriteProjectSource } from '@/lib/spriteProject';
 import { pixelsToPngDataUrl } from '@/lib/editorImage';
+import { newDraftKey } from '@/lib/editorRecovery';
 
 /**
  * Modal-mode wrapper around <PixelEditorBody>. Preserves the existing
@@ -35,6 +38,18 @@ export default function PixelEditor({
   source,
 }: PixelEditorProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // This session's own draft: its edits are saved under it as the user
+  // works, so a reload or a crash loses nothing (BUILD 2026-10-29).
+  const [draftKey] = useState(() => newDraftKey('modal'));
+  // True while the confirm is open because of a Back.
+  const [confirmFromBack, setConfirmFromBack] = useState(false);
+
+  // A close the user chose: the draft is marked closed (Generate no longer
+  // offers it; the Editor still lists it).
+  const closeChosen = useCallback(() => {
+    void closeEditorDraft(draftKey);
+    onClose();
+  }, [draftKey, onClose]);
 
   // Central close gating — every close path the body emits routes through
   // attemptDismiss so isDirty can short-circuit to the confirm dialog.
@@ -42,9 +57,27 @@ export default function PixelEditor({
     if (selectIsDirty(useEditorStore.getState())) {
       setConfirmOpen(true);
     } else {
-      onClose();
+      closeChosen();
     }
-  }, [onClose]);
+  }, [closeChosen]);
+
+  // The browser's Back (an edge swipe on iOS) closes the modal instead of
+  // leaving the page, and asks first when there are edits, as Close does.
+  const { rearm } = useEditorHistoryGuard(true, () => {
+    if (selectIsDirty(useEditorStore.getState())) {
+      setConfirmFromBack(true);
+      setConfirmOpen(true);
+    } else {
+      closeChosen();
+    }
+  });
+
+  const keepEditing = useCallback(() => {
+    setConfirmOpen(false);
+    // The Back took the modal's history entry; put it back.
+    if (confirmFromBack) rearm();
+    setConfirmFromBack(false);
+  }, [confirmFromBack, rearm]);
 
   // Save-and-close from the confirm dialog: serialize current store pixels
   // to a PNG dataURL, fire onSave, then onClose. Shares the pixelsToPngDataUrl
@@ -54,12 +87,13 @@ export default function PixelEditor({
   // byte-identical pixels, and pushing them downstream falsely trips "Edited"
   // state. Still close in that case.
   const saveAndCloseFromConfirm = useCallback(() => {
+    void closeEditorDraft(draftKey);
     const { pixels, width, height, historyIndex } = useEditorStore.getState();
     if (historyIndex > 0 && pixels) {
       onSave(pixelsToPngDataUrl(pixels, width, height));
     }
     onClose();
-  }, [onSave, onClose]);
+  }, [onSave, onClose, draftKey]);
 
   return (
     // HotkeysProvider scopes the editor's brush-size / undo / redo hotkeys
@@ -93,6 +127,7 @@ export default function PixelEditor({
               onSaveClose={onClose}
               layout="modal"
               source={source}
+              draftKey={draftKey}
             />
           </Dialog.Panel>
         </div>
@@ -103,7 +138,7 @@ export default function PixelEditor({
           not the outer one. */}
       <Dialog
         open={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
+        onClose={keepEditing}
         className="relative z-[110]"
       >
         <div className="fixed inset-0 bg-black/60" aria-hidden="true" />
@@ -120,7 +155,7 @@ export default function PixelEditor({
             <div className="flex items-center justify-end gap-2 flex-wrap">
               <button
                 autoFocus
-                onClick={() => setConfirmOpen(false)}
+                onClick={keepEditing}
                 className="px-3 py-1.5 rounded text-xs font-mono cursor-pointer
                   bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle"
               >
@@ -129,6 +164,7 @@ export default function PixelEditor({
               <button
                 onClick={() => {
                   setConfirmOpen(false);
+                  void discardEditorDraft(draftKey);
                   onClose();
                 }}
                 className="px-3 py-1.5 rounded text-xs font-mono cursor-pointer

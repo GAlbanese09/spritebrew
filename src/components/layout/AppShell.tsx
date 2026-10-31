@@ -32,8 +32,13 @@ export default function AppShell({ children }: AppShellProps) {
     );
   }
 
+  // Fix note 15: every route but /editor takes h-app-shell, which ignores zoom
+  // and does not shrink for the on-screen keyboard (src/lib/appShellHeight.ts).
+  // A shell that shrank to the area above the keyboard left the rest of the
+  // screen blank once iOS Safari scrolled up to the focused field. /editor
+  // keeps h-app-vh, which its h-editor-page grid is sized against.
   return (
-    <div className="flex h-app-vh overflow-hidden">
+    <div className={`flex ${isEditor ? 'h-app-vh' : 'h-app-shell'} overflow-hidden`}>
       {/* Single app-wide instance of the visible-viewport publisher. Writes
           --app-vh / --app-top to document.documentElement from visualViewport
           so every fixed-positioned surface (editor modal, sticky bars, etc.)

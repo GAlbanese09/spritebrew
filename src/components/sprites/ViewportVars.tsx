@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
+import { installShellHeight } from '@/lib/appShellHeight';
 
 // Drives --app-vh from the visual viewport so the editor shell height matches
 // what's actually visible on iOS Safari. 100dvh alone is throttled and goes
@@ -23,12 +24,22 @@ export function ViewportVars() {
   useLayoutEffect(() => {
     let raf = 0;
     let timers: number[] = [];
+    // Fix note 15: --app-shell-h, AppShell's height on every route but
+    // /editor, from src/lib/appShellHeight.ts. It ignores zoom, and on a
+    // touch screen it does not shrink while a text field has focus, or for a
+    // moment after, while the on-screen keyboard opens and closes. Its focus
+    // listeners re-read through resync (declared below, called later).
+    // --app-vh and --app-top are unchanged.
+    const shell = installShellHeight(window, document, () => performance.now(), () => resync());
     const setVar = () => {
       const vv = window.visualViewport;
       const h = Math.floor(vv?.height ?? window.innerHeight);
       const top = Math.floor(vv?.offsetTop ?? 0);
+      // Every read before the first write, so no read forces a layout.
+      const shellH = shell.measure();
       document.documentElement.style.setProperty('--app-vh', `${h}px`);
       document.documentElement.style.setProperty('--app-top', `${top}px`);
+      shell.publish(shellH);
     };
     const schedule = () => {
       cancelAnimationFrame(raf);
@@ -62,6 +73,7 @@ export function ViewportVars() {
     return () => {
       cancelAnimationFrame(raf);
       timers.forEach(clearTimeout);
+      shell.dispose();
       window.removeEventListener('resize', resync);
       window.removeEventListener('orientationchange', resync);
       window.removeEventListener('pageshow', resync);

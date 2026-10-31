@@ -22,6 +22,14 @@
   height: var(--app-vh, 100dvh);
 }
 
+/* AppShell's root on every route but /editor (fix note 15). <ViewportVars />
+   publishes --app-shell-h: the visible height at zoom 1, held while a text
+   field has focus on a touch screen so the shell does not shrink for the
+   on-screen keyboard (src/lib/appShellHeight.ts). Falls back to --app-vh. */
+@utility h-app-shell {
+  height: var(--app-shell-h, var(--app-vh, 100dvh));
+}
+
 /* Visible viewport minus the app Header. Used by the full-page /editor route
    so its h-full grid fills exactly the area below the Header — without this,
    h-app-vh + the Header would total > viewport, AppShell's <main> would scroll,

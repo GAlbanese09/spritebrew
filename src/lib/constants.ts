@@ -54,7 +54,7 @@ export const ENGINE_TARGETS = [
   { id: 'texturepacker', label: 'TexturePacker JSON', engines: ['Unity', 'Godot', 'Phaser', 'PixiJS'] },
   { id: 'gamemaker', label: 'GameMaker Strip', engines: ['GameMaker Studio 2'] },
   { id: 'rpgmaker', label: 'RPG Maker MV/MZ', engines: ['RPG Maker MV', 'RPG Maker MZ'] },
-  { id: 'aseprite', label: 'Aseprite (.aseprite + JSON)', engines: ['Aseprite', 'Phaser 3'] },
+  { id: 'aseprite', label: 'Aseprite (.aseprite + JSON)', engines: ['Aseprite', 'Phaser 3', 'Unity (Aseprite Importer)'] },
   { id: 'godot-tres', label: 'Godot SpriteFrames', engines: ['Godot 4'] },
   { id: 'raw-frames', label: 'Individual Frames (PNG)', engines: ['Any'] },
 ] as const;

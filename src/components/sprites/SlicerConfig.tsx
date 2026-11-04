@@ -8,6 +8,7 @@ import { sheetGeometry, galleryFrameSizeGuess, type SheetGeometry } from '@/lib/
 import { useSpriteStore } from '@/stores/spriteStore';
 import { useCanvasFitScale } from '@/lib/useCanvasFitScale';
 import Button from '@/components/ui/Button';
+import { wholeNumberIn } from '@/lib/exportPresets';
 
 interface SanityWarning {
   message: string;
@@ -323,7 +324,7 @@ export default function SlicerConfig({
               min={1}
               max={imageWidth}
               value={frameWidth}
-              onChange={(e) => setSizeAndClearWarning(() => setFrameWidth(Math.max(1, Number(e.target.value))))}
+              onChange={(e) => setSizeAndClearWarning(() => setFrameWidth(wholeNumberIn(e.target.value, 1)))}
               className="w-full rounded bg-bg-elevated border border-border-default px-3 py-2
                 text-sm font-mono text-text-primary focus:outline-none focus:border-accent-amber"
             />
@@ -335,7 +336,7 @@ export default function SlicerConfig({
               min={1}
               max={imageHeight}
               value={frameHeight}
-              onChange={(e) => setSizeAndClearWarning(() => setFrameHeight(Math.max(1, Number(e.target.value))))}
+              onChange={(e) => setSizeAndClearWarning(() => setFrameHeight(wholeNumberIn(e.target.value, 1)))}
               className="w-full rounded bg-bg-elevated border border-border-default px-3 py-2
                 text-sm font-mono text-text-primary focus:outline-none focus:border-accent-amber"
             />

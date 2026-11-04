@@ -8,7 +8,7 @@ import {
   CheckCircle,
 } from 'lucide-react';
 import { ENGINE_TARGETS } from '@/lib/constants';
-import { ENGINE_PRESETS, wholeNumberIn, type EnginePresetId } from '@/lib/exportPresets';
+import { ENGINE_PRESETS, nextPresetId, wholeNumberIn, wholePx, type EnginePresetId, type PresetEvent } from '@/lib/exportPresets';
 import { useSpriteStore } from '@/stores/spriteStore';
 import {
   exportTexturePacker,
@@ -113,6 +113,7 @@ export default function ExportConfig() {
   // The engine preset last picked (exportPresets.ts); cleared when another
   // format is picked by hand.
   const [presetId, setPresetId] = useState<EnginePresetId | null>(null);
+  const presetEvent = useCallback((event: PresetEvent) => setPresetId((cur) => nextPresetId(cur, event)), []);
   const [selectedAnims, setSelectedAnims] = useState<Set<string>>(new Set());
   const [padding, setPadding] = useState(1);
   const [powerOfTwo, setPowerOfTwo] = useState(false);
@@ -136,8 +137,10 @@ export default function ExportConfig() {
   const previewWrapperRef = useRef<HTMLDivElement>(null);
   const containerWidth = useContainerWidth(previewWrapperRef);
 
-  const fw = spriteSheet?.frameWidth ?? 32;
-  const fh = spriteSheet?.frameHeight ?? 32;
+  // Whole pixels, as the frame canvases hold them (a size typed on /upload
+  // can be fractional; audit r1, finding 2).
+  const fw = wholePx(spriteSheet?.frameWidth ?? 32);
+  const fh = wholePx(spriteSheet?.frameHeight ?? 32);
 
   // Initialize resize to current frame size
   useEffect(() => {
@@ -347,7 +350,7 @@ export default function ExportConfig() {
   const pickPreset = (id: EnginePresetId) => {
     const preset = ENGINE_PRESETS.find((p) => p.id === id);
     if (!preset) return;
-    setPresetId(preset.id);
+    presetEvent({ type: 'pickPreset', id: preset.id });
     setSelectedEngine(preset.target);
     setPadding(preset.padding);
     setPowerOfTwo(preset.powerOfTwo);
@@ -390,15 +393,15 @@ export default function ExportConfig() {
             );
           })}
         </div>
-        {activePreset ? (
-          <p className="mt-3 text-[11px] font-mono text-text-secondary leading-relaxed max-w-2xl" aria-live="polite">
-            {activePreset.note}
-          </p>
-        ) : (
-          <p className="mt-3 text-[11px] font-mono text-text-muted leading-relaxed">
-            Pick your engine to choose the format and settings for it, or pick a format below.
-          </p>
-        )}
+        {/* One live region, always rendered, so the first pick's note is announced too. */}
+        <p
+          className={`mt-3 text-[11px] font-mono leading-relaxed max-w-2xl ${activePreset ? 'text-text-secondary' : 'text-text-muted'}`}
+          aria-live="polite"
+        >
+          {activePreset
+            ? activePreset.note
+            : 'Pick your engine to choose the format and settings for it, or pick a format below.'}
+        </p>
       </div>
 
       {/* Engine selector */}
@@ -412,9 +415,11 @@ export default function ExportConfig() {
             return (
               <button
                 key={engine.id}
+                type="button"
+                aria-pressed={active}
                 onClick={() => {
                   setSelectedEngine(engine.id as EngineId);
-                  setPresetId(null);
+                  presetEvent({ type: 'pickFormat' });
                 }}
                 className={`
                   text-left rounded-lg border p-4 transition-all duration-150 cursor-pointer
@@ -528,7 +533,10 @@ export default function ExportConfig() {
                   min={0}
                   max={4}
                   value={padding}
-                  onChange={(e) => setPadding(wholeNumberIn(e.target.value, 0, 4))}
+                  onChange={(e) => {
+                    setPadding(wholeNumberIn(e.target.value, 0, 4));
+                    presetEvent({ type: 'changeSetting' });
+                  }}
                   className="w-16 rounded bg-bg-elevated border border-border-default px-2 py-1
                     text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
                 />
@@ -538,7 +546,10 @@ export default function ExportConfig() {
               <input
                 type="checkbox"
                 checked={powerOfTwo}
-                onChange={(e) => setPowerOfTwo(e.target.checked)}
+                onChange={(e) => {
+                  setPowerOfTwo(e.target.checked);
+                  presetEvent({ type: 'changeSetting' });
+                }}
                 className="accent-[var(--accent-amber)] cursor-pointer"
               />
               Power-of-two texture
@@ -547,7 +558,10 @@ export default function ExportConfig() {
               <input
                 type="checkbox"
                 checked={includeMetadata}
-                onChange={(e) => setIncludeMetadata(e.target.checked)}
+                onChange={(e) => {
+                  setIncludeMetadata(e.target.checked);
+                  presetEvent({ type: 'changeSetting' });
+                }}
                 className="accent-[var(--accent-amber)] cursor-pointer"
               />
               Include metadata ({selectedEngine === 'godot-tres' ? '.tres' : '.json'})

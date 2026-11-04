@@ -10,7 +10,7 @@ import {
 } from '@/lib/downloadUtils';
 import { loadImage } from '@/lib/spriteUtils';
 import { exportNames } from '@/lib/exportNames';
-import { tagRanges } from '@/lib/exportPresets';
+import { godotFloat, godotString, tagRanges, wholePx } from '@/lib/exportPresets';
 import { asepriteDocumentFrom, encodeAseprite, type AseAnimationInput } from '@/lib/asepriteWriter';
 
 export interface ExportOptions {
@@ -64,8 +64,8 @@ function optimalColumns(totalFrames: number): number {
 
 export async function exportTexturePacker(opts: ExportOptions): Promise<void> {
   const { animations, frameDataUrls, padding, powerOfTwo, includeMetadata, sheetName } = opts;
-  const fw = opts.resizeWidth ?? opts.frameWidth;
-  const fh = opts.resizeHeight ?? opts.frameHeight;
+  const fw = wholePx(opts.resizeWidth ?? opts.frameWidth);
+  const fh = wholePx(opts.resizeHeight ?? opts.frameHeight);
 
   // Collect all frames across animations. Group names are made unique per
   // export (exportNames) so same-named groups keep separate frame keys.
@@ -151,8 +151,8 @@ export async function exportTexturePacker(opts: ExportOptions): Promise<void> {
 
 export async function exportAseprite(opts: ExportOptions): Promise<void> {
   const { animations, frameDataUrls, padding, powerOfTwo, includeMetadata, sheetName } = opts;
-  const fw = opts.resizeWidth ?? opts.frameWidth;
-  const fh = opts.resizeHeight ?? opts.frameHeight;
+  const fw = wholePx(opts.resizeWidth ?? opts.frameWidth);
+  const fh = wholePx(opts.resizeHeight ?? opts.frameHeight);
 
   const names = exportNames(animations.map((a) => a.name), (i) => animations[i].frames.length === 0);
   const allFrames: { anim: SpriteAnimation; frameIdx: number; canvas: HTMLCanvasElement; name: string }[] = [];
@@ -292,8 +292,8 @@ function asepriteInputs(
 
 export async function exportGameMaker(opts: ExportOptions): Promise<void> {
   const { animations, frameDataUrls } = opts;
-  const fw = opts.resizeWidth ?? opts.frameWidth;
-  const fh = opts.resizeHeight ?? opts.frameHeight;
+  const fw = wholePx(opts.resizeWidth ?? opts.frameWidth);
+  const fh = wholePx(opts.resizeHeight ?? opts.frameHeight);
 
   const files: { name: string; data: Blob }[] = [];
   const names = exportNames(animations.map((a) => a.name), (i) => animations[i].frames.length === 0);
@@ -371,19 +371,19 @@ export async function exportRPGMaker(opts: RPGMakerOptions): Promise<{ warnings:
 
 export async function exportGodot(opts: ExportOptions): Promise<void> {
   const { animations, frameDataUrls, padding, powerOfTwo, includeMetadata, sheetName } = opts;
-  const fw = opts.resizeWidth ?? opts.frameWidth;
-  const fh = opts.resizeHeight ?? opts.frameHeight;
+  const fw = wholePx(opts.resizeWidth ?? opts.frameWidth);
+  const fh = wholePx(opts.resizeHeight ?? opts.frameHeight);
 
   // Build combined sheet
   const allCanvases: HTMLCanvasElement[] = [];
-  const animMeta: { name: string; startIdx: number; count: number; fps: number }[] = [];
+  const animMeta: { name: string; startIdx: number; count: number; fps: number; loop: boolean }[] = [];
   // SpriteFrames animation names must be unique.
   const names = exportNames(animations.map((a) => a.name), (i) => animations[i].frames.length === 0);
 
   for (const [animIdx, anim] of animations.entries()) {
     if (anim.frames.length === 0) continue;
     const canvases = await loadFrameCanvases(anim.frames, frameDataUrls, fw, fh);
-    animMeta.push({ name: names[animIdx].label, startIdx: allCanvases.length, count: canvases.length, fps: anim.fps });
+    animMeta.push({ name: names[animIdx].label, startIdx: allCanvases.length, count: canvases.length, fps: anim.fps, loop: anim.loop !== false });
     allCanvases.push(...canvases);
   }
 
@@ -416,9 +416,9 @@ export async function exportGodot(opts: ExportOptions): Promise<void> {
 
     return `{
     "frames": [${frameEntries.join(', ')}],
-    "loop": true,
-    "name": "${am.name}",
-    "speed": ${am.fps}.0
+    "loop": ${am.loop},
+    "name": "${godotString(am.name)}",
+    "speed": ${godotFloat(am.fps)}
   }`;
   });
 
@@ -465,8 +465,8 @@ animations = [${animEntries.join(', ')}]
 
 export async function exportRawFrames(opts: ExportOptions & { includeManifest: boolean }): Promise<void> {
   const { animations, frameDataUrls, includeManifest } = opts;
-  const fw = opts.resizeWidth ?? opts.frameWidth;
-  const fh = opts.resizeHeight ?? opts.frameHeight;
+  const fw = wholePx(opts.resizeWidth ?? opts.frameWidth);
+  const fh = wholePx(opts.resizeHeight ?? opts.frameHeight);
 
   const files: { name: string; data: Blob | string }[] = [];
   const manifestAnimations: unknown[] = [];

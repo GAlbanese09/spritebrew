@@ -27,7 +27,7 @@ async function load(entry, name) {
   return import(pathToFileURL(outfile).href);
 }
 
-const { ENGINE_PRESETS, enginePreset, wholeNumberIn, tagRanges } = await load('src/lib/exportPresets.ts', 'exportPresets');
+const { ENGINE_PRESETS, enginePreset, wholeNumberIn, tagRanges, wholePx, godotFloat, godotString, nextPresetId } = await load('src/lib/exportPresets.ts', 'exportPresets');
 const { ENGINE_TARGETS } = await load('src/lib/constants.ts', 'constants');
 
 let failed = 0;
@@ -79,7 +79,18 @@ check('no frames at all, no tags', same(tagRanges([]), []) && same(tagRanges([0,
 check('the last tag ends on the last frame written',
   (() => { const c = [5, 1, 7]; const t = tagRanges(c); return t[t.length - 1].to === c.reduce((a, b) => a + b, 0) - 1; })());
 
-// 4. Wiring, read from the sources.
+// 4. Whole pixels, Godot literals, the preset that stays chosen.
+check('wholePx truncates like a canvas (32.5 to 32, 32.9 to 32)', wholePx(32.5) === 32 && wholePx(32.9) === 32 && wholePx(48) === 48);
+check('wholePx is at least 1, and 1 for nonsense', wholePx(0.4) === 1 && wholePx(-5) === 1 && wholePx(Number.NaN) === 1);
+check('godotFloat: 8 is 8.0, 12.5 is 12.5', godotFloat(8) === '8.0' && godotFloat(12.5) === '12.5' && godotFloat(30) === '30.0');
+check('godotString escapes backslash, quote and line breaks',
+  godotString('a"b\\c') === 'a\\"b\\\\c' && godotString('x\ny') === 'x\\ny' && godotString('Walk') === 'Walk');
+check('a preset pick chooses it', nextPresetId(null, { type: 'pickPreset', id: 'unity' }) === 'unity');
+check('an unknown preset pick changes nothing', nextPresetId('godot', { type: 'pickPreset', id: 'rpgmaker' }) === 'godot');
+check('a format picked by hand clears the preset', nextPresetId('godot', { type: 'pickFormat' }) === null);
+check('a setting changed by hand clears the preset', nextPresetId('unity', { type: 'changeSetting' }) === null);
+
+// 5. Wiring, read from the sources.
 const exportConfig = fs.readFileSync(path.join(ROOT, 'src/components/sprites/ExportConfig.tsx'), 'utf8');
 const exportEngine = fs.readFileSync(path.join(ROOT, 'src/lib/exportEngine.ts'), 'utf8');
 check('no number field on Export keeps a raw Number() of its input',
@@ -88,6 +99,15 @@ check('the five number fields use wholeNumberIn',
   (exportConfig.match(/wholeNumberIn\(e\.target\.value/g) ?? []).length === 5);
 check('TexturePacker tags come from tagRanges, not anim.frames.length',
   /tagRanges\(written\)/.test(exportEngine) && !/const count = anim\.frames\.length;/.test(exportEngine));
+const slicerConfig = fs.readFileSync(path.join(ROOT, 'src/components/sprites/SlicerConfig.tsx'), 'utf8');
+check('the slicer\'s frame width and height take whole numbers',
+  (slicerConfig.match(/wholeNumberIn\(e\.target\.value, 1\)/g) ?? []).length === 2 && !/setFrame(Width|Height)\(Math\.max\(1, Number\(/.test(slicerConfig));
+check('a format card click and the three settings clear the preset',
+  (exportConfig.match(/presetEvent\(\{ type: 'pickFormat' \}\)/g) ?? []).length === 1 &&
+  (exportConfig.match(/presetEvent\(\{ type: 'changeSetting' \}\)/g) ?? []).length === 3);
+check('the format cards say which one is chosen (aria-pressed, type button)', /type="button"\s+aria-pressed=\{active\}/.test(exportConfig));
+check('the note is one live region that is always rendered', (exportConfig.match(/aria-live="polite"/g) ?? []).length === 1 && !/activePreset \? \(/.test(exportConfig));
+check('every exporter draws whole-pixel frame sizes', (exportEngine.match(/= wholePx\(opts\.resize(Width|Height) \?\? opts\.frame(Width|Height)\)/g) ?? []).length === 10);
 check('the presets row is on the Export page', /ENGINE_PRESETS\.map/.test(exportConfig) && /Your Engine/.test(exportConfig));
 
 if (failed > 0) {

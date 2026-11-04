@@ -45,7 +45,7 @@ export const ENGINE_PRESETS: readonly EnginePreset[] = [
     powerOfTwo: false,
     includeMetadata: true,
     note:
-      'You get a PNG and a SpriteFrames .tres in one zip. Put both in your project folder, then choose the .tres as the Sprite Frames of an AnimatedSprite2D. Each animation keeps its name and speed.',
+      'You get a PNG and a SpriteFrames .tres in one zip. Put both in the top folder of your project (res://), then choose the .tres as the Sprite Frames of an AnimatedSprite2D. Each animation keeps its name, speed and loop setting.',
   },
   {
     id: 'unity',
@@ -55,7 +55,7 @@ export const ENGINE_PRESETS: readonly EnginePreset[] = [
     powerOfTwo: false,
     includeMetadata: true,
     note:
-      "You get an .aseprite file with its PNG and JSON. In Unity's Package Manager, add the free 2D Aseprite Importer (com.unity.2d.aseprite), then drop the .aseprite file into Assets: each animation becomes a clip. Without the package, slice the PNG by cell size in the Sprite Editor.",
+      "You get an .aseprite file with its PNG and JSON. In Unity's Package Manager (Unity 2021.3.15f1 or newer), add the free 2D Aseprite Importer (com.unity.2d.aseprite), then drop the .aseprite file into Assets: each animation becomes a clip. Without the package, slice the PNG by cell size in the Sprite Editor.",
   },
   {
     id: 'gamemaker',
@@ -85,6 +85,46 @@ export function wholeNumberIn(raw: string | number, min: number, max = Number.MA
   const n = Math.round(Number(raw));
   if (!Number.isFinite(n)) return min;
   return Math.min(max, Math.max(min, n));
+}
+
+/**
+ * A frame size as the exporters draw it: canvases have whole-pixel sizes and
+ * truncate a fraction (a 32.5 wide canvas is 32), so every rect is written
+ * with the same truncated size, at least 1. A size typed on /upload can still
+ * be fractional (audit r1, finding 2); this keeps the metadata on the pixels.
+ */
+export function wholePx(n: number): number {
+  return Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1;
+}
+
+/** A number as a Godot float literal: 8 as 8.0, 12.5 as 12.5 (audit r1,
+ *  finding 1: "12.5.0" failed to parse and the whole SpriteFrames with it). */
+export function godotFloat(n: number): string {
+  if (!Number.isFinite(n)) return '1.0';
+  return Number.isInteger(n) ? `${n}.0` : String(n);
+}
+
+/** A string as a Godot string literal's contents: backslash, double quote
+ *  and line breaks escaped, so any animation name parses. */
+export function godotString(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+}
+
+/** What happened on the Export page, for the preset that stays chosen. */
+export type PresetEvent =
+  | { type: 'pickPreset'; id: EnginePresetId }
+  | { type: 'pickFormat' }
+  | { type: 'changeSetting' };
+
+/**
+ * The chosen preset after an event: a preset pick chooses it; a format
+ * picked by hand, or a padding, power-of-two or metadata change made by hand
+ * after the pick, clears it, so the row and its note never claim settings
+ * the download no longer has (audit r1, finding 5).
+ */
+export function nextPresetId(current: EnginePresetId | null, event: PresetEvent): EnginePresetId | null {
+  if (event.type === 'pickPreset') return enginePreset(event.id) ? event.id : current;
+  return null;
 }
 
 export interface TagRange {

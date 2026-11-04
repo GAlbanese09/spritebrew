@@ -8,6 +8,7 @@ import {
   CheckCircle,
 } from 'lucide-react';
 import { ENGINE_TARGETS } from '@/lib/constants';
+import { ENGINE_PRESETS, nextPresetId, wholeNumberIn, wholePx, type EnginePresetId, type PresetEvent } from '@/lib/exportPresets';
 import { useSpriteStore } from '@/stores/spriteStore';
 import {
   exportTexturePacker,
@@ -109,6 +110,10 @@ export default function ExportConfig() {
   const frameDataUrls = useSpriteStore((s) => s.frameDataUrls);
 
   const [selectedEngine, setSelectedEngine] = useState<EngineId>('texturepacker');
+  // The engine preset last picked (exportPresets.ts); cleared when another
+  // format is picked by hand.
+  const [presetId, setPresetId] = useState<EnginePresetId | null>(null);
+  const presetEvent = useCallback((event: PresetEvent) => setPresetId((cur) => nextPresetId(cur, event)), []);
   const [selectedAnims, setSelectedAnims] = useState<Set<string>>(new Set());
   const [padding, setPadding] = useState(1);
   const [powerOfTwo, setPowerOfTwo] = useState(false);
@@ -132,8 +137,10 @@ export default function ExportConfig() {
   const previewWrapperRef = useRef<HTMLDivElement>(null);
   const containerWidth = useContainerWidth(previewWrapperRef);
 
-  const fw = spriteSheet?.frameWidth ?? 32;
-  const fh = spriteSheet?.frameHeight ?? 32;
+  // Whole pixels, as the frame canvases hold them (a size typed on /upload
+  // can be fractional; audit r1, finding 2).
+  const fw = wholePx(spriteSheet?.frameWidth ?? 32);
+  const fh = wholePx(spriteSheet?.frameHeight ?? 32);
 
   // Initialize resize to current frame size
   useEffect(() => {
@@ -338,6 +345,17 @@ export default function ExportConfig() {
   ]);
 
   const engineInfo = TARGETS.find((e) => e.id === selectedEngine)!;
+  const activePreset = ENGINE_PRESETS.find((p) => p.id === presetId && p.target === selectedEngine) ?? null;
+
+  const pickPreset = (id: EnginePresetId) => {
+    const preset = ENGINE_PRESETS.find((p) => p.id === id);
+    if (!preset) return;
+    presetEvent({ type: 'pickPreset', id: preset.id });
+    setSelectedEngine(preset.target);
+    setPadding(preset.padding);
+    setPowerOfTwo(preset.powerOfTwo);
+    setIncludeMetadata(preset.includeMetadata);
+  };
 
   return (
     <div className="space-y-8">
@@ -346,6 +364,44 @@ export default function ExportConfig() {
         <Badge variant="amber">{activeAnimations.length} animation{activeAnimations.length !== 1 ? 's' : ''}</Badge>
         <Badge variant="default">{totalFrames} frames</Badge>
         <Badge variant="default">{fw}x{fh} px</Badge>
+      </div>
+
+      {/* Engine presets (W3): one pick per engine sets the format and its settings */}
+      <div>
+        <label id="engine-preset-label" className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-3">
+          Your Engine
+        </label>
+        <div className="flex flex-wrap gap-2" role="group" aria-labelledby="engine-preset-label">
+          {ENGINE_PRESETS.map((preset) => {
+            const active = activePreset?.id === preset.id;
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => pickPreset(preset.id)}
+                aria-pressed={active}
+                className={`
+                  min-h-11 px-4 py-2 rounded-lg border text-sm font-mono font-semibold transition-colors cursor-pointer
+                  ${active
+                    ? 'border-accent-amber bg-accent-amber-glow text-accent-amber'
+                    : 'border-border-default bg-bg-surface text-text-primary hover:border-border-strong hover:bg-bg-elevated'
+                  }
+                `}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+        </div>
+        {/* One live region, always rendered, so the first pick's note is announced too. */}
+        <p
+          className={`mt-3 text-[11px] font-mono leading-relaxed max-w-2xl ${activePreset ? 'text-text-secondary' : 'text-text-muted'}`}
+          aria-live="polite"
+        >
+          {activePreset
+            ? activePreset.note
+            : 'Pick your engine to choose the format and settings for it, or pick a format below.'}
+        </p>
       </div>
 
       {/* Engine selector */}
@@ -359,7 +415,12 @@ export default function ExportConfig() {
             return (
               <button
                 key={engine.id}
-                onClick={() => setSelectedEngine(engine.id as EngineId)}
+                type="button"
+                aria-pressed={active}
+                onClick={() => {
+                  setSelectedEngine(engine.id as EngineId);
+                  presetEvent({ type: 'pickFormat' });
+                }}
                 className={`
                   text-left rounded-lg border p-4 transition-all duration-150 cursor-pointer
                   ${active
@@ -442,7 +503,7 @@ export default function ExportConfig() {
                 type="number"
                 min={1}
                 value={resizeW}
-                onChange={(e) => setResizeW(Math.max(1, Number(e.target.value)))}
+                onChange={(e) => setResizeW(wholeNumberIn(e.target.value, 1))}
                 className="w-20 rounded bg-bg-elevated border border-border-default px-2 py-1
                   text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
               />
@@ -453,7 +514,7 @@ export default function ExportConfig() {
                 type="number"
                 min={1}
                 value={resizeH}
-                onChange={(e) => setResizeH(Math.max(1, Number(e.target.value)))}
+                onChange={(e) => setResizeH(wholeNumberIn(e.target.value, 1))}
                 className="w-20 rounded bg-bg-elevated border border-border-default px-2 py-1
                   text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
               />
@@ -472,7 +533,10 @@ export default function ExportConfig() {
                   min={0}
                   max={4}
                   value={padding}
-                  onChange={(e) => setPadding(Math.min(4, Math.max(0, Number(e.target.value))))}
+                  onChange={(e) => {
+                    setPadding(wholeNumberIn(e.target.value, 0, 4));
+                    presetEvent({ type: 'changeSetting' });
+                  }}
                   className="w-16 rounded bg-bg-elevated border border-border-default px-2 py-1
                     text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
                 />
@@ -482,7 +546,10 @@ export default function ExportConfig() {
               <input
                 type="checkbox"
                 checked={powerOfTwo}
-                onChange={(e) => setPowerOfTwo(e.target.checked)}
+                onChange={(e) => {
+                  setPowerOfTwo(e.target.checked);
+                  presetEvent({ type: 'changeSetting' });
+                }}
                 className="accent-[var(--accent-amber)] cursor-pointer"
               />
               Power-of-two texture
@@ -491,7 +558,10 @@ export default function ExportConfig() {
               <input
                 type="checkbox"
                 checked={includeMetadata}
-                onChange={(e) => setIncludeMetadata(e.target.checked)}
+                onChange={(e) => {
+                  setIncludeMetadata(e.target.checked);
+                  presetEvent({ type: 'changeSetting' });
+                }}
                 className="accent-[var(--accent-amber)] cursor-pointer"
               />
               Include metadata ({selectedEngine === 'godot-tres' ? '.tres' : '.json'})
@@ -509,7 +579,7 @@ export default function ExportConfig() {
                   type="number"
                   min={1}
                   value={rpgFrameW}
-                  onChange={(e) => setRpgFrameW(Math.max(1, Number(e.target.value)))}
+                  onChange={(e) => setRpgFrameW(wholeNumberIn(e.target.value, 1))}
                   className="w-20 rounded bg-bg-elevated border border-border-default px-2 py-1
                     text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
                 />
@@ -520,7 +590,7 @@ export default function ExportConfig() {
                   type="number"
                   min={1}
                   value={rpgFrameH}
-                  onChange={(e) => setRpgFrameH(Math.max(1, Number(e.target.value)))}
+                  onChange={(e) => setRpgFrameH(wholeNumberIn(e.target.value, 1))}
                   className="w-20 rounded bg-bg-elevated border border-border-default px-2 py-1
                     text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
                 />

@@ -10,6 +10,7 @@
 import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { hexToRgb } from '@/lib/colorUtils';
+import { cleanResidue as cleanResiduePixels } from '@/lib/residueCleanup';
 import {
   EDITOR_MAX_DIMENSION,
   EDITOR_MAX_PIXELS,
@@ -240,6 +241,11 @@ export interface PixelEditorState {
    * No-ops with no pixels or when the flip changes nothing (symmetric image).
    */
   flipHorizontal: () => void;
+  /**
+   * Clean the purple residue (src/lib/residueCleanup.ts) as one undoable
+   * history entry and return what changed. No entry when nothing did.
+   */
+  cleanResidue: () => { cleared: number; despilled: number };
   /** Discard an in-progress stroke: restore the pre-stroke snapshot.
    *  A partial stroke's pixels are live in `pixels` but not yet in history
    *  (endStroke hasn't fired), so restoring historyStack[historyIndex]
@@ -682,6 +688,29 @@ export const useEditorStore = create<PixelEditorState>()(
         // Same baseline rule as undo: clean only on a byte match to the load.
         hasAttemptedEdit: !pixelsMatchOriginal(flipped, originalPixels),
       });
+    },
+
+    cleanResidue: () => {
+      const { pixels, width, height, originalPixels, historyStack, historyIndex } = get();
+      if (!pixels || width <= 0 || height <= 0) return { cleared: 0, despilled: 0 };
+      const cleaned = new Uint8ClampedArray(pixels);
+      const { cleared, despilled } = cleanResiduePixels(cleaned, width, height);
+      if (cleared + despilled === 0) return { cleared: 0, despilled: 0 };
+      // Same shape as flipHorizontal: drop any redo branch, push, cap.
+      const truncated = historyIndex < historyStack.length - 1
+        ? historyStack.slice(0, historyIndex + 1)
+        : historyStack;
+      const nextStack = [...truncated, new Uint8ClampedArray(cleaned)];
+      while (nextStack.length > MAX_HISTORY) nextStack.shift();
+      set({
+        pixels: cleaned,
+        historyStack: nextStack,
+        historyIndex: nextStack.length - 1,
+        revision: get().revision + 1,
+        lastDirtyRect: null, // wholesale replacement, full repaint
+        hasAttemptedEdit: !pixelsMatchOriginal(cleaned, originalPixels),
+      });
+      return { cleared, despilled };
     },
 
     cancelStroke: () => {

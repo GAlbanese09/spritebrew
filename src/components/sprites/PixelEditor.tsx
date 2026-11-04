@@ -3,7 +3,9 @@
 import { useState, useCallback } from 'react';
 import { Dialog } from '@headlessui/react';
 import { HotkeysProvider } from 'react-hotkeys-hook';
-import PixelEditorBody from './PixelEditorBody';
+import PixelEditorBody, { type OnionSources } from './PixelEditorBody';
+
+export type { OnionSources };
 import { useEditorStore, selectIsDirty } from './editorStore';
 import { closeEditorDraft, discardEditorDraft } from './useEditorRecovery';
 import { useEditorHistoryGuard } from './useEditorHistoryGuard';
@@ -27,6 +29,10 @@ interface PixelEditorProps {
   /** Origin lineage forwarded to the SpriteProjectV1 document model
    *  (Wave 1b). Optional — omit when origin is unknown. */
   source?: SpriteProjectSource;
+  /** Onion skin (W2): data URLs of the frames before and after this one in
+   *  its animation, nearest first (null where a frame has no image). Only
+   *  FrameGrid on /upload knows them today. */
+  onion?: OnionSources;
 }
 
 export default function PixelEditor({
@@ -36,6 +42,7 @@ export default function PixelEditor({
   onSave,
   onClose,
   source,
+  onion,
 }: PixelEditorProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   // This session's own draft: its edits are saved under it as the user
@@ -128,6 +135,7 @@ export default function PixelEditor({
               layout="modal"
               source={source}
               draftKey={draftKey}
+              onion={onion}
             />
           </Dialog.Panel>
         </div>

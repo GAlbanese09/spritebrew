@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Pencil, Eraser, Pipette, Undo2, Redo2, FlipHorizontal, History, Save, X, ArrowLeft, Film, AlertCircle, Download } from 'lucide-react';
+import { Pencil, Eraser, Pipette, Undo2, Redo2, FlipHorizontal, History, Save, X, ArrowLeft, Film, AlertCircle, Download, ScanEye, Sparkles } from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import Button from '@/components/ui/Button';
 import {
@@ -18,6 +18,14 @@ import {
   type DirtyRect,
 } from './editorStore';
 import type { SpriteProjectSource, SpriteProjectV1 } from '@/lib/spriteProject';
+import { scanResidue, residueOverlay } from '@/lib/residueCleanup';
+
+/** How long after the last stroke change "Show residue" scans again. A
+ *  scan at the editor's 1024 x 1024 cap takes about 5 to 25 ms (up to about
+ *  110 ms on synthetic worst cases), so it never runs per stroke event, only
+ *  once the edits pause. A wholesale change (flip, undo, redo, revert, clean,
+ *  a new image) rescans at once, so old marks never sit on moved pixels. */
+const RESIDUE_RESCAN_MS = 150;
 
 /** Scope key for editor hotkeys — keeps brush-size / undo / redo bindings
  *  isolated to the editor subtree so they don't fire when a text input
@@ -185,6 +193,7 @@ export default function PixelEditorBody({
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
   const flipHorizontal = useEditorStore((s) => s.flipHorizontal);
+  const cleanResidue = useEditorStore((s) => s.cleanResidue);
   const hasPixels = useEditorStore((s) => s.pixels != null);
   const revertToOriginal = useEditorStore((s) => s.revertToOriginal);
   const reset = useEditorStore((s) => s.reset);
@@ -244,6 +253,14 @@ export default function PixelEditorBody({
   // Transient toast for keyboard-driven brush-size changes.
   const [brushToast, setBrushToast] = useState<string | null>(null);
   const brushToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // "Show residue" (George, Oct 31; HQ 2026-11-03-007): a layer above the
+  // image that marks what "Clean residue" would change. The ref mirrors the
+  // state for the pixel subscription, which lives outside React's render.
+  const [showResidue, setShowResidue] = useState(false);
+  const showResidueRef = useRef(false);
+  const residueCanvasRef = useRef<HTMLCanvasElement>(null);
+  const residueTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Cursor overlay (mirrors brush footprint at canvas-pixel coords).
   const [cursorX, setCursorX] = useState(0);
@@ -367,6 +384,14 @@ export default function PixelEditorBody({
       ctx.putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0);
     }
 
+    // The residue layer sits exactly over the image: same CSS size. Its
+    // backing store is sized when it is drawn (drawResidueOverlay).
+    const rc = residueCanvasRef.current;
+    if (rc) {
+      rc.style.width = `${width * zoom}px`;
+      rc.style.height = `${height * zoom}px`;
+    }
+
     const pc = previewCanvasRef.current;
     if (pc && ec) {
       pc.width = width;
@@ -444,6 +469,56 @@ export default function PixelEditorBody({
     ov.style.backgroundSize = `${zoom}px ${zoom}px`;
   }, [zoom]);
 
+  // "Show residue": scan the pixels as they are now and mark what a clean
+  // would change. Reads the store at call time, so a scan that runs after
+  // more edits marks the newest pixels, never an older copy.
+  const drawResidueOverlay = useCallback(() => {
+    const rc = residueCanvasRef.current;
+    if (!rc) return;
+    const { pixels, width, height } = useEditorStore.getState();
+    if (!pixels || width === 0 || height === 0) {
+      rc.getContext('2d')?.clearRect(0, 0, rc.width, rc.height);
+      return;
+    }
+    if (rc.width !== width || rc.height !== height) {
+      rc.width = width;
+      rc.height = height;
+    }
+    const { kinds } = scanResidue(pixels, width, height);
+    rc.getContext('2d')!.putImageData(new ImageData(residueOverlay(kinds, width, height), width, height), 0, 0);
+  }, []);
+
+  // After any pixel change while the layer is on, scan once the edits pause.
+  const scheduleResidueOverlay = useCallback(() => {
+    if (!showResidueRef.current) return;
+    if (residueTimerRef.current !== null) clearTimeout(residueTimerRef.current);
+    residueTimerRef.current = setTimeout(() => {
+      residueTimerRef.current = null;
+      if (showResidueRef.current) drawResidueOverlay();
+    }, RESIDUE_RESCAN_MS);
+  }, [drawResidueOverlay]);
+
+  // A wholesale change: drop any pending scan and mark the new pixels now.
+  const redrawResidueOverlayNow = useCallback(() => {
+    if (!showResidueRef.current) return;
+    if (residueTimerRef.current !== null) {
+      clearTimeout(residueTimerRef.current);
+      residueTimerRef.current = null;
+    }
+    drawResidueOverlay();
+  }, [drawResidueOverlay]);
+
+  const toggleShowResidue = useCallback(() => {
+    const next = !showResidueRef.current;
+    showResidueRef.current = next;
+    if (residueTimerRef.current !== null) {
+      clearTimeout(residueTimerRef.current);
+      residueTimerRef.current = null;
+    }
+    if (next) drawResidueOverlay();
+    setShowResidue(next);
+  }, [drawResidueOverlay]);
+
   // Pixel subscription — fires outside React reconciliation, no re-render.
   // Subscribes to `pixels` (always changes reference on any pixel mutation),
   // then reads `lastDirtyRect` via getState to decide between full vs patch.
@@ -464,10 +539,12 @@ export default function PixelEditorBody({
         } else {
           patchDirtyRect(rect);
         }
+        if (rect === null) redrawResidueOverlayNow();
+        else scheduleResidueOverlay();
       }
     );
     return unsub;
-  }, [renderCanvasesFull, patchDirtyRect, drawGridOverlay]);
+  }, [renderCanvasesFull, patchDirtyRect, drawGridOverlay, scheduleResidueOverlay, redrawResidueOverlayNow]);
 
   // Re-render on zoom change (image canvas's CSS size + overlay's full
   // geometry). Wave 2a: this MUST be a layout effect so the canvas CSS size
@@ -1161,6 +1238,16 @@ export default function PixelEditorBody({
     [setBrushSize]
   );
 
+  // "Clean residue": one undo step, then say how many pixels changed. The
+  // overlay, when on, rescans through the pixel subscription.
+  const handleCleanResidue = useCallback(() => {
+    const { cleared, despilled } = cleanResidue();
+    const n = cleared + despilled;
+    if (brushToastTimerRef.current) clearTimeout(brushToastTimerRef.current);
+    setBrushToast(`Cleaned ${n} ${n === 1 ? 'pixel' : 'pixels'}`);
+    brushToastTimerRef.current = setTimeout(() => setBrushToast(null), 2000);
+  }, [cleanResidue]);
+
   // Fix #3: scope every editor hotkey to the 'editor' scope so they don't
   // fire while a text input (e.g., the future project-name prompt or a
   // gallery search) is focused. The matching <HotkeysProvider initiallyActive
@@ -1184,6 +1271,11 @@ export default function PixelEditorBody({
       if (brushToastTimerRef.current !== null) {
         clearTimeout(brushToastTimerRef.current);
         brushToastTimerRef.current = null;
+      }
+      // A residue rescan scheduled just before the editor closed never runs.
+      if (residueTimerRef.current !== null) {
+        clearTimeout(residueTimerRef.current);
+        residueTimerRef.current = null;
       }
     };
   }, []);
@@ -1362,6 +1454,29 @@ export default function PixelEditorBody({
         >
           <FlipHorizontal size={16} />
         </button>
+        <button
+          onClick={toggleShowResidue}
+          title="Show residue"
+          aria-label="Show residue"
+          aria-pressed={showResidue}
+          disabled={!hasPixels}
+          className={`p-2 rounded cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0
+            ${showResidue
+              ? 'bg-accent-amber text-bg-primary'
+              : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'
+            }`}
+        >
+          <ScanEye size={16} />
+        </button>
+        <button
+          onClick={handleCleanResidue}
+          title="Clean residue"
+          aria-label="Clean residue"
+          disabled={!hasPixels}
+          className="p-2 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0"
+        >
+          <Sparkles size={16} />
+        </button>
 
         <div className="w-full h-px bg-border-subtle my-1 hidden md:block" />
 
@@ -1494,6 +1609,15 @@ export default function PixelEditorBody({
                 backgroundSize: '16px 16px',
                 backgroundPosition: '0 0, 8px 8px',
               }}
+            />
+            {/* "Show residue" marks, over the image and under the grid. It
+                never takes input (the gestures live on the container). */}
+            <canvas
+              ref={residueCanvasRef}
+              aria-hidden="true"
+              data-residue-overlay=""
+              className="absolute top-0 left-0 pointer-events-none"
+              style={{ imageRendering: 'pixelated', display: showResidue ? 'block' : 'none' }}
             />
             <div
               ref={overlayRef}

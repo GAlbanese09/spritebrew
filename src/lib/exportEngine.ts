@@ -10,6 +10,7 @@ import {
 } from '@/lib/downloadUtils';
 import { loadImage } from '@/lib/spriteUtils';
 import { exportNames } from '@/lib/exportNames';
+import { asepriteDocumentFrom, encodeAseprite, type AseAnimationInput } from '@/lib/asepriteWriter';
 
 export interface ExportOptions {
   animations: SpriteAnimation[];
@@ -204,7 +205,10 @@ export async function exportAseprite(opts: ExportOptions): Promise<void> {
   const tagColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800', '#88ff00'];
   let frameOffset = 0;
   animations.forEach((anim, idx) => {
-    const count = anim.frames.length;
+    // The frames actually on the sheet: a frame with no image is skipped by
+    // loadFrameCanvases, so counting anim.frames would run past the sheet
+    // (and disagree with the .aseprite file's tags).
+    const count = allFrames.filter((f) => f.anim === anim).length;
     if (count === 0) return;
     frameTags.push({
       name: names[idx].label,
@@ -230,17 +234,61 @@ export async function exportAseprite(opts: ExportOptions): Promise<void> {
   const jsonData = JSON.stringify({ frames: framesArr, meta }, null, 2);
   const pngBlob = await canvasToBlob(sheet);
 
-  if (includeMetadata) {
-    await downloadAsZip(
-      [
-        { name: pngFilename, data: pngBlob },
-        { name: jsonFilename, data: jsonData },
-      ],
-      `spritebrew_export_aseprite.zip`
-    );
+  // The .aseprite file itself (W2; HQ 2026-11-03-021): one layer, each frame
+  // with the duration playback shows, one tag per animation, from the same
+  // frames the sheet uses. A failure here never costs the PNG and JSON.
+  const files: { name: string; data: Blob | string }[] = [{ name: pngFilename, data: pngBlob }];
+  if (includeMetadata) files.push({ name: jsonFilename, data: jsonData });
+  try {
+    // Whole pixels, as a canvas holds them: a typed 32.5 makes 32 px frames.
+    const aw = Math.max(1, Math.floor(fw));
+    const ah = Math.max(1, Math.floor(fh));
+    const aseBytes = await encodeAseprite(asepriteDocumentFrom(asepriteInputs(allFrames, animations, names, aw, ah), aw, ah));
+    files.push({ name: `${sanitizeFilename(sheetName)}.aseprite`, data: new Blob([aseBytes as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' }) });
+  } catch (err) {
+    console.warn('[exportAseprite] .aseprite file skipped:', err);
+  }
+
+  if (files.length > 1) {
+    await downloadAsZip(files, `spritebrew_export_aseprite.zip`);
   } else {
     downloadFile(pngBlob, pngFilename);
   }
+}
+
+/** Groups the exported frames by animation for the .aseprite file, each
+ *  frame as fw x fh RGBA (a frame of another size is drawn at the top left
+ *  of an fw x fh canvas, as the sheet would hold it). */
+function asepriteInputs(
+  allFrames: { anim: SpriteAnimation; canvas: HTMLCanvasElement }[],
+  animations: SpriteAnimation[],
+  names: { label: string }[],
+  fw: number,
+  fh: number
+): AseAnimationInput[] {
+  const colors: [number, number, number][] = [
+    [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [255, 0, 255], [0, 255, 255], [255, 136, 0], [136, 255, 0],
+  ];
+  return animations.map((anim, idx) => ({
+    name: names[idx].label,
+    fps: anim.fps,
+    loop: anim.loop,
+    color: colors[idx % colors.length],
+    frames: allFrames
+      .filter((f) => f.anim === anim)
+      .map(({ canvas }) => {
+        let c = canvas;
+        if (c.width !== fw || c.height !== fh) {
+          c = document.createElement('canvas');
+          c.width = fw;
+          c.height = fh;
+          const ctx = c.getContext('2d')!;
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(canvas, 0, 0);
+        }
+        return c.getContext('2d')!.getImageData(0, 0, fw, fh).data;
+      }),
+  }));
 }
 
 // ─── GameMaker Strip ───

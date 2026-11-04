@@ -10,6 +10,7 @@ import {
 } from '@/lib/downloadUtils';
 import { loadImage } from '@/lib/spriteUtils';
 import { exportNames } from '@/lib/exportNames';
+import { tagRanges } from '@/lib/exportPresets';
 import { asepriteDocumentFrom, encodeAseprite, type AseAnimationInput } from '@/lib/asepriteWriter';
 
 export interface ExportOptions {
@@ -109,20 +110,16 @@ export async function exportTexturePacker(opts: ExportOptions): Promise<void> {
     };
   }
 
-  // Build frameTags
-  const frameTags: unknown[] = [];
-  let frameOffset = 0;
-  for (const [animIdx, anim] of animations.entries()) {
-    const count = anim.frames.length;
-    if (count === 0) continue;
-    frameTags.push({
-      name: names[animIdx].label,
-      from: frameOffset,
-      to: frameOffset + count - 1,
-      direction: 'forward',
-    });
-    frameOffset += count;
-  }
+  // Build frameTags from the frames actually on the sheet: a frame with no
+  // image is skipped by loadFrameCanvases, so counting anim.frames would
+  // shift every later tag (BUILD-2's audit, HQ 2026-11-04-004).
+  const written = animations.map((anim) => allFrames.filter((f) => f.anim === anim).length);
+  const frameTags: unknown[] = tagRanges(written).map((t) => ({
+    name: names[t.index].label,
+    from: t.from,
+    to: t.to,
+    direction: 'forward',
+  }));
 
   const meta = {
     app: 'SpriteBrew',

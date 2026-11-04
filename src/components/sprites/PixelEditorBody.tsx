@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Pencil, Eraser, Pipette, Undo2, Redo2, FlipHorizontal, History, Save, X, ArrowLeft, Film, AlertCircle, Download } from 'lucide-react';
+import { Pencil, Eraser, Pipette, Undo2, Redo2, FlipHorizontal, History, Save, X, ArrowLeft, Film, AlertCircle, Download, Layers, Minus, Plus } from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import Button from '@/components/ui/Button';
 import {
@@ -18,6 +18,33 @@ import {
   type DirtyRect,
 } from './editorStore';
 import type { SpriteProjectSource, SpriteProjectV1 } from '@/lib/spriteProject';
+import { loadImage } from '@/lib/spriteUtils';
+import {
+  ONION_MAX,
+  ONION_DEFAULT_BACK,
+  ONION_DEFAULT_AHEAD,
+  ONION_DEFAULT_OPACITY,
+  onionLayer,
+  type OnionFrame,
+  type OnionNeighbours,
+  decodeOnionSources,
+} from '@/lib/onionSkin';
+
+/** Onion skin sources: data URLs of the frames before and after the edited
+ *  one, nearest first; null where a frame has no image (W2). */
+export type OnionSources = OnionNeighbours<string | null>;
+
+/** The transparency checkerboard behind the image (Wave 1c): a fixed 16px
+ *  screen tile. With onion skin on it moves to the onion layer, which sits
+ *  under the image, so the checkerboard stays at the bottom. */
+const CHECKERBOARD_STYLE = {
+  backgroundColor: '#1e1b18',
+  backgroundImage:
+    'linear-gradient(45deg, #2a2725 25%, transparent 25%, transparent 75%, #2a2725 75%, #2a2725), ' +
+    'linear-gradient(45deg, #2a2725 25%, transparent 25%, transparent 75%, #2a2725 75%, #2a2725)',
+  backgroundSize: '16px 16px',
+  backgroundPosition: '0 0, 8px 8px',
+} as const;
 
 /** Scope key for editor hotkeys — keeps brush-size / undo / redo bindings
  *  isolated to the editor subtree so they don't fire when a text input
@@ -33,6 +60,18 @@ const EDITOR_HOTKEY_SCOPE = 'editor';
 // non-integer values.
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 32;
+
+/** The browser's decode for onion skin frames: a data URL to RGBA bytes. */
+async function decodeImageToFrame(url: string): Promise<OnionFrame> {
+  const img = await loadImage(url);
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  const ctx = c.getContext('2d')!;
+  ctx.drawImage(img, 0, 0);
+  const data = ctx.getImageData(0, 0, c.width, c.height);
+  return { pixels: data.data, width: c.width, height: c.height };
+}
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -114,6 +153,12 @@ interface PixelEditorBodyProps {
    * (useEditorRecovery; BUILD 2026-10-29).
    */
   draftKey: string;
+  /**
+   * Onion skin (W2, HQ 2026-11-03-021): the neighbouring frames' images,
+   * nearest first. Given only where the caller knows the animation
+   * (FrameGrid on /upload); omitted, the editor shows no onion controls.
+   */
+  onion?: OnionSources;
 }
 
 export default function PixelEditorBody({
@@ -128,6 +173,7 @@ export default function PixelEditorBody({
   onDiscardDraft,
   onSaveClose,
   draftKey,
+  onion,
 }: PixelEditorBodyProps) {
   const editorCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -244,6 +290,30 @@ export default function PixelEditorBody({
   // Transient toast for keyboard-driven brush-size changes.
   const [brushToast, setBrushToast] = useState<string | null>(null);
   const brushToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Onion skin (W2): off until the person turns it on; available only when
+  // the caller passed neighbours. The decoded neighbours belong to the
+  // `onion` sources they were decoded from, so a stale set is never drawn.
+  const onionAvailable = !!onion && onion.back.length + onion.ahead.length > 0;
+  const [onionOn, setOnionOn] = useState(false);
+  // Neighbours are decoded only once the person first turns onion skin on,
+  // so an editor that never uses it holds no extra images.
+  const [onionRequested, setOnionRequested] = useState(false);
+  const toggleOnion = useCallback(() => {
+    setOnionRequested(true);
+    setOnionOn((v) => !v);
+  }, []);
+  const [onionBack, setOnionBack] = useState(ONION_DEFAULT_BACK);
+  const [onionAhead, setOnionAhead] = useState(ONION_DEFAULT_AHEAD);
+  const [onionOpacity, setOnionOpacity] = useState(ONION_DEFAULT_OPACITY);
+  const [onionDecoded, setOnionDecoded] = useState<{
+    sources: OnionSources;
+    frames: OnionNeighbours<OnionFrame | null>;
+  } | null>(null);
+  const onionCanvasRef = useRef<HTMLCanvasElement>(null);
+  const editorWidth = useEditorStore((s) => s.width);
+  const editorHeight = useEditorStore((s) => s.height);
+  const onionShown = onionAvailable && onionOn;
 
   // Cursor overlay (mirrors brush footprint at canvas-pixel coords).
   const [cursorX, setCursorX] = useState(0);
@@ -367,6 +437,14 @@ export default function PixelEditorBody({
       ctx.putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0);
     }
 
+    // The onion layer sits exactly under the image: same CSS size. Its
+    // backing store is sized when it is drawn.
+    const oc = onionCanvasRef.current;
+    if (oc) {
+      oc.style.width = `${width * zoom}px`;
+      oc.style.height = `${height * zoom}px`;
+    }
+
     const pc = previewCanvasRef.current;
     if (pc && ec) {
       pc.width = width;
@@ -443,6 +521,39 @@ export default function PixelEditorBody({
       `linear-gradient(to bottom, ${line} 1px, transparent 1px)`;
     ov.style.backgroundSize = `${zoom}px ${zoom}px`;
   }, [zoom]);
+
+  // Onion skin: decode the neighbours once per set of sources. A decode
+  // that finishes after the sources changed or the editor closed is
+  // dropped (decodeOnionSources asks isCurrent at the end).
+  useEffect(() => {
+    if (!onionRequested || !onion || onion.back.length + onion.ahead.length === 0) return;
+    let current = true;
+    void decodeOnionSources(onion, decodeImageToFrame, () => current).then((frames) => {
+      if (frames && current) setOnionDecoded({ sources: onion, frames });
+    });
+    return () => {
+      current = false;
+    };
+  }, [onion, onionRequested]);
+
+  // Draw the onion layer whenever what it shows changes. Neighbours never
+  // change while a frame is edited, so strokes do not redraw it, and zoom
+  // does not either: renderCanvasesFull sets the layer's CSS size.
+  useEffect(() => {
+    const oc = onionCanvasRef.current;
+    if (!oc) return;
+    const frames = onionDecoded && onionDecoded.sources === onion ? onionDecoded.frames : null;
+    if (!onionShown || !frames || editorWidth <= 0 || editorHeight <= 0) {
+      oc.getContext('2d')?.clearRect(0, 0, oc.width, oc.height);
+      return;
+    }
+    if (oc.width !== editorWidth || oc.height !== editorHeight) {
+      oc.width = editorWidth;
+      oc.height = editorHeight;
+    }
+    const layer = onionLayer(frames, editorWidth, editorHeight, { back: onionBack, ahead: onionAhead, opacity: onionOpacity });
+    oc.getContext('2d')!.putImageData(new ImageData(layer, editorWidth, editorHeight), 0, 0);
+  }, [onion, onionDecoded, onionShown, onionBack, onionAhead, onionOpacity, editorWidth, editorHeight]);
 
   // Pixel subscription — fires outside React reconciliation, no re-render.
   // Subscribes to `pixels` (always changes reference on any pixel mutation),
@@ -1171,6 +1282,13 @@ export default function PixelEditorBody({
   useHotkeys(['=', '+'], () => cycleBrushSize(+1), { useKey: true, splitKey: '_', scopes: [EDITOR_HOTKEY_SCOPE] });
   useHotkeys('mod+z', (e) => { e.preventDefault(); undo(); }, { scopes: [EDITOR_HOTKEY_SCOPE] });
   useHotkeys('mod+shift+z', (e) => { e.preventDefault(); redo(); }, { scopes: [EDITOR_HOTKEY_SCOPE] });
+  // Onion skin: O (Aseprite uses F3, which is the browser's Find Next).
+  // Plain O only: not with a modifier (Ctrl/Cmd+O is the browser's Open) and
+  // not on a held key's repeats.
+  useHotkeys('o', (e) => {
+    if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (onionAvailable) toggleOnion();
+  }, { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] }, [onionAvailable, toggleOnion]);
 
   // Fix #4: cancel pending RAF + brush-toast timer on unmount. They're
   // otherwise no-ops if the component is gone (React 19 swallows setState),
@@ -1362,6 +1480,21 @@ export default function PixelEditorBody({
         >
           <FlipHorizontal size={16} />
         </button>
+        {onionAvailable && (
+          <button
+            onClick={toggleOnion}
+            title="Onion skin (O)"
+            aria-label="Onion skin"
+            aria-pressed={onionOn}
+            className={`p-2 rounded cursor-pointer transition-colors min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0
+              ${onionOn
+                ? 'bg-accent-amber text-bg-primary'
+                : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'
+              }`}
+          >
+            <Layers size={16} />
+          </button>
+        )}
 
         <div className="w-full h-px bg-border-subtle my-1 hidden md:block" />
 
@@ -1475,9 +1608,19 @@ export default function PixelEditorBody({
               The wrapper carries the pan/pinch transform (transform-origin
               0 0 — see commit contract in the layout effect). */}
           <div ref={stackRef} className="relative" style={{ transformOrigin: '0 0' }}>
+            {/* Onion skin layer: under the image (the image canvas is
+                positioned, so DOM order sets the paint order), carrying the
+                checkerboard while it shows. Never takes input. */}
+            <canvas
+              ref={onionCanvasRef}
+              aria-hidden="true"
+              data-onion-layer=""
+              className="absolute top-0 left-0 pointer-events-none"
+              style={{ imageRendering: 'pixelated', display: onionShown ? 'block' : 'none', ...CHECKERBOARD_STYLE }}
+            />
             <canvas
               ref={editorCanvasRef}
-              className="block"
+              className="block relative"
               style={{
                 imageRendering: 'pixelated',
                 // Eyedropper tool gets its own cursor (lucide pipette SVG,
@@ -1487,12 +1630,9 @@ export default function PixelEditorBody({
                 // Wave 1c CSS checkerboard. Fixed 16px screen tile (8px
                 // squares) — intentional look change from the prior zoom-
                 // scaled in-canvas fill.
-                backgroundColor: '#1e1b18',
-                backgroundImage:
-                  'linear-gradient(45deg, #2a2725 25%, transparent 25%, transparent 75%, #2a2725 75%, #2a2725), ' +
-                  'linear-gradient(45deg, #2a2725 25%, transparent 25%, transparent 75%, #2a2725 75%, #2a2725)',
-                backgroundSize: '16px 16px',
-                backgroundPosition: '0 0, 8px 8px',
+                // With onion skin showing, the checkerboard is on the onion
+                // layer underneath and the image is see-through.
+                ...(onionShown ? { backgroundColor: 'transparent' } : CHECKERBOARD_STYLE),
               }}
             />
             <div
@@ -1578,6 +1718,60 @@ export default function PixelEditorBody({
             </div>
           )}
         </div>
+
+        {/* Onion skin settings (desktop; phones use the defaults). */}
+        {onionAvailable && (
+          <div className="flex flex-col gap-2">
+            <div className="text-[9px] font-mono text-text-muted uppercase tracking-wider">
+              Onion skin
+            </div>
+            {([
+              { label: 'Back', side: 'back', value: onionBack, set: setOnionBack },
+              { label: 'Ahead', side: 'ahead', value: onionAhead, set: setOnionAhead },
+            ] as const).map(({ label, side, value, set }) => (
+              <div key={side} className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-mono text-text-secondary">{label}</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => set((v) => Math.max(0, v - 1))}
+                    disabled={value <= 0}
+                    aria-label={`Fewer frames ${side}`}
+                    className="h-7 w-7 flex items-center justify-center rounded border border-border-subtle bg-bg-elevated text-text-secondary hover:bg-bg-hover cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <Minus size={12} />
+                  </button>
+                  <output aria-label={`Frames ${side}`} aria-live="off" className="w-5 text-center text-[11px] font-mono text-text-primary tabular-nums">
+                    {value}
+                  </output>
+                  <button
+                    type="button"
+                    onClick={() => set((v) => Math.min(ONION_MAX, v + 1))}
+                    disabled={value >= ONION_MAX}
+                    aria-label={`More frames ${side}`}
+                    className="h-7 w-7 flex items-center justify-center rounded border border-border-subtle bg-bg-elevated text-text-secondary hover:bg-bg-hover cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <Plus size={12} />
+                  </button>
+                </div>
+              </div>
+            ))}
+            <label className="flex items-center justify-between gap-2 text-[11px] font-mono text-text-secondary">
+              <span>Opacity</span>
+              <input
+                type="range"
+                min={10}
+                max={100}
+                step={10}
+                value={Math.round(onionOpacity * 100)}
+                onChange={(e) => setOnionOpacity(Number(e.target.value) / 100)}
+                aria-label="Onion skin opacity"
+                className="w-28 accent-accent-amber"
+              />
+              <span className="w-9 text-right tabular-nums text-text-primary">{Math.round(onionOpacity * 100)}%</span>
+            </label>
+          </div>
+        )}
 
         {/* 1× preview — sidepanel placement (Phase 1.5: was below the canvas
             grid, now lives alongside the palette so it's visible without

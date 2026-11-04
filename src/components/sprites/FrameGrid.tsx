@@ -3,8 +3,9 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Pencil } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
-import PixelEditor from './PixelEditor';
+import PixelEditor, { type OnionSources } from './PixelEditor';
 import { DRAG_TILE_STYLE, startFrameDrag, useFrameDrag, useLastFrameDrop, useLastMissedFrameDrop } from './frameDrag';
+import { onionFrameList, onionNeighbours } from '@/lib/onionSkin';
 
 interface FrameGridProps {
   /** Map from frame ID → data URL for display */
@@ -60,6 +61,22 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
 
   const editingFrame = editingFrameId ? allFrames.find((f) => f.id === editingFrameId) : null;
   const editingDataUrl = editingFrameId ? frameDataUrls.get(editingFrameId) : null;
+
+  // Onion skin (W2): the frames before and after the edited one, nearest
+  // first, no wrap. Its own animation group when it sits exactly once in
+  // exactly one group (a direction row of a 4-direction sheet, say);
+  // otherwise the sheet's order. A frame with no image yet keeps its place
+  // as null, so distances stay right. Undefined when it has none.
+  const groups = useSpriteStore((s) => s.animations);
+  const editingOnion = useMemo<OnionSources | undefined>(() => {
+    if (!editingFrameId || !spriteSheet) return undefined;
+    const list = onionFrameList(groups, spriteSheet.animations, editingFrameId);
+    if (!list) return undefined;
+    const { back, ahead } = onionNeighbours(list, editingFrameId);
+    if (back.length + ahead.length === 0) return undefined;
+    const url = (f: { id: string }) => frameDataUrls.get(f.id) ?? null;
+    return { back: back.map(url), ahead: ahead.map(url) };
+  }, [editingFrameId, spriteSheet, groups, frameDataUrls]);
 
   if (allFrames.length === 0) return null;
 
@@ -194,6 +211,7 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
           onSave={handleEditSave}
           onClose={() => setEditingFrameId(null)}
           source={{ kind: 'sheet-import' }}
+          onion={editingOnion}
         />
       )}
     </div>

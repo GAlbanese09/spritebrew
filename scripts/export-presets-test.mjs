@@ -108,7 +108,8 @@ check('a format card click and the three settings clear the preset',
 check('the format cards say which one is chosen (aria-pressed, type button)', /type="button"\s+aria-pressed=\{active\}/.test(exportConfig));
 check('the note is one live region that is always rendered', (exportConfig.match(/aria-live="polite"/g) ?? []).length === 1 && !/activePreset \? \(/.test(exportConfig));
 check('every exporter draws whole-pixel frame sizes', (exportEngine.match(/= wholePx\(opts\.resize(Width|Height) \?\? opts\.frame(Width|Height)\)/g) ?? []).length === 10);
-check('the presets row is on the Export page', /ENGINE_PRESETS\.map/.test(exportConfig) && /Your Engine/.test(exportConfig));
+check('the presets row is on the Export page', /ENGINE_PRESETS\.map/.test(exportConfig) && /Quick setup: pick your engine/.test(exportConfig));
+check('the format cards read as the other way in (George, Nov 4)', /Or pick a format yourself/.test(exportConfig) && !/>\s*Export Format\s*</.test(exportConfig));
 
 if (failed > 0) {
   console.log(`\n${failed} failed`);

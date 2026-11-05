@@ -369,7 +369,7 @@ export default function ExportConfig() {
       {/* Engine presets (W3): one pick per engine sets the format and its settings */}
       <div>
         <label id="engine-preset-label" className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-3">
-          Your Engine
+          Quick setup: pick your engine
         </label>
         <div className="flex flex-wrap gap-2" role="group" aria-labelledby="engine-preset-label">
           {ENGINE_PRESETS.map((preset) => {
@@ -407,7 +407,7 @@ export default function ExportConfig() {
       {/* Engine selector */}
       <div>
         <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-3">
-          Export Format
+          Or pick a format yourself
         </label>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {TARGETS.map((engine) => {

@@ -6,6 +6,7 @@
 // playback() from src/lib/loopSequence.ts through Remove, Duplicate and
 // ping-pong. Also runs framesFromSheet on a stand-in canvas, and pins what
 // the card must keep in GenerationResult.tsx, which has no browser test here.
+// Also covers src/lib/sheetAlpha.ts, the card's test for a transparent sheet.
 // Run from the repo root: `node scripts/played-sheet-test.mjs`. Bundles with
 // esbuild into local/.played-sheet-test/ (gitignored). Prints only case names
 // and pass or fail.
@@ -19,13 +20,14 @@ const ROOT = process.cwd();
 const OUT_DIR = path.join(ROOT, 'local', '.played-sheet-test');
 
 await build({
-  entryPoints: ['playedSheet', 'loopSequence', 'gifExport'].map((n) => path.join(ROOT, 'src/lib', `${n}.ts`)),
+  entryPoints: ['playedSheet', 'sheetAlpha', 'loopSequence', 'gifExport'].map((n) => path.join(ROOT, 'src/lib', `${n}.ts`)),
   bundle: true, format: 'esm', platform: 'node', outdir: OUT_DIR, outExtension: { '.js': '.mjs' }, logLevel: 'silent',
   alias: { '@': path.join(ROOT, 'src') },
 });
 const load = (n) => import(pathToFileURL(path.join(OUT_DIR, `${n}.mjs`)).href);
-const { playedSheetSize, framePosition, assemblePlayedSheet } = await load('playedSheet');
-const { createSequence, playback, remove, duplicate, togglePingPong } = await load('loopSequence');
+const { playedSheetSize, framePosition, assemblePlayedSheet, playedIsIdentity } = await load('playedSheet');
+const { borderMostlyTransparent } = await load('sheetAlpha');
+const { createSequence, playback, move, remove, duplicate, togglePingPong } = await load('loopSequence');
 const { framesFromSheet } = await load('gifExport');
 
 let failed = 0;
@@ -114,18 +116,93 @@ check('0 columns stack the frames', same(framePosition(2, 0, 32, 32), { x: 0, y:
   check('each cut lands at its played position', same(placed, [[32, 0, 0, 0], [32, 0, 32, 0], [0, 32, 0, 32], [32, 32, 32, 32]]), placed);
 }
 
-// 6. What the result card must keep.
+// 6. The border test for a transparent sheet.
+{
+  // RGBA pixels, with alpha from alphaAt(x, y).
+  const sheet = (W, H, alphaAt) => {
+    const px = new Uint8ClampedArray(W * H * 4);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) px[(y * W + x) * 4 + 3] = alphaAt(x, y);
+    return px;
+  };
+  const reads = (W, H, alphaAt) => borderMostlyTransparent(sheet(W, H, alphaAt), W, H);
+  const opaque = () => 255;
+  const clear = () => 0;
+  const onRing = (W, H, x, y) => x === 0 || y === 0 || x === W - 1 || y === H - 1;
+  check('an opaque sheet reads opaque', !reads(16, 16, opaque));
+  check('an opaque sheet with one corner erased reads opaque', !reads(16, 16, (x, y) => (x === 0 && y === 0 ? 0 : 255)));
+  check('a transparent sheet with art in all four corners reads transparent', reads(16, 16, (x, y) => ((x === 0 || x === 15) && (y === 0 || y === 15) ? 255 : 0)));
+  check('a fully transparent sheet reads transparent', reads(16, 16, clear));
+  check('art inside an opaque ring does not count', !reads(8, 8, (x, y) => (onRing(8, 8, x, y) ? 255 : 0)));
+  check('a clear middle inside a clear ring needs only the ring', reads(8, 8, (x, y) => (onRing(8, 8, x, y) ? 0 : 255)));
+  check('half alpha is not clear', !reads(8, 8, () => 128));
+  check('corners count once: 4 clear corners are 4 of a 4 x 4 ring of 12', !reads(4, 4, (x, y) => ((x === 0 || x === 3) && (y === 0 || y === 3) ? 0 : 255)));
+  const firstClear = (n) => { let left = n; return (x, y) => (onRing(4, 4, x, y) && left-- > 0 ? 0 : 255); };
+  check('exactly half the ring reads transparent', reads(4, 4, firstClear(6)));
+  check('one short of half reads opaque', !reads(4, 4, firstClear(5)));
+  check('1 x 1 opaque reads opaque', !reads(1, 1, opaque));
+  check('1 x 1 transparent reads transparent', reads(1, 1, clear));
+  check('W x 1 counts each pixel once: 2 of 3 clear reads transparent', reads(3, 1, (x) => (x === 1 ? 255 : 0)));
+  check('W x 1 counts each pixel once: 1 of 3 clear reads opaque', !reads(3, 1, (x) => (x === 1 ? 0 : 255)));
+  check('1 x H counts each pixel once: 1 of 3 clear reads opaque', !reads(1, 3, (_x, y) => (y === 1 ? 0 : 255)));
+  check('0 x 0 is not transparent', !borderMostlyTransparent(new Uint8ClampedArray(0), 0, 0));
+  check('0 wide or 0 tall is not transparent', !borderMostlyTransparent(new Uint8ClampedArray(0), 0, 4) && !borderMostlyTransparent(new Uint8ClampedArray(0), 4, 0));
+}
+
+// 7. Whether the loop is the sheet as delivered.
+{
+  const seq = createSequence(4);
+  check('an unedited loop is the identity', playedIsIdentity(playback(seq), 4));
+  check('a Remove is not', !playedIsIdentity(playback(remove(seq, 1)), 4));
+  check('a Remove of the last frame, a clean prefix, is not', !playedIsIdentity(playback(remove(seq, 3)), 4));
+  check('a Duplicate is not', !playedIsIdentity(playback(duplicate(seq, 1)), 4));
+  check('a Remove then a Duplicate, same length, is not', !playedIsIdentity(playback(duplicate(remove(seq, 1), 2)), 4));
+  check('a reorder, same length, is not', !playedIsIdentity(playback(move(seq, 0, 1)), 4));
+  check('ping-pong is not', !playedIsIdentity(playback(togglePingPong(seq)), 4));
+  check('ping-pong on 2 frames adds none, so it is', playedIsIdentity(playback(togglePingPong(createSequence(2))), 2));
+  check('no frames is not', !playedIsIdentity(playback(createSequence(0)), 0));
+  check('an empty loop of a 4-frame sheet is not', !playedIsIdentity([], 4));
+  check('more frames than the sheet has is not', !playedIsIdentity([0, 1, 2, 3, 4], 4));
+}
+
+// 8. What the result card must keep.
 {
   const card = fs.readFileSync(path.join(ROOT, 'src/components/sprites/GenerationResult.tsx'), 'utf8');
+  // The text from one marker to the next, so a pin reads one handler or element.
+  const slice = (from, to) => {
+    const start = card.indexOf(from);
+    const end = card.indexOf(to, start + from.length);
+    return start < 0 || end < 0 ? '' : card.slice(start, end);
+  };
+  const played = slice('const handleDownloadPlayed = useCallback(', '// The sheet as delivered');
+  const borderRead = slice("// Read the sheet's border.", '// Recompute background removal');
+  const pngButton = slice('<Button\n          variant="secondary"\n          size="md"\n          className="aria-disabled:', '</Button>');
+  const toggle = slice('<button\n            type="button"\n            id={bgToggleId}', '</button>');
+  // A native disabled, not the end of aria-disabled.
+  const nativeDisabled = /(?<![-\w])disabled\b/;
+
   check('a transparent sheet turns background removal off', /const bgRemovalActive = bgRemovalWanted && sheetIsTransparent !== true;/.test(card));
-  check('transparency is read from the corners and held with its source', /transparent: !cornersOpaque\(/.test(card) && /sheetAlpha\.src === generatedImageDataUrl/.test(card));
+  check('transparency is read from the border and held with its source', /transparent: borderMostlyTransparent\(px, W, H\)/.test(borderRead) && /sheetAlpha\.src === generatedImageDataUrl/.test(card));
   check('the disabled toggle is announced with its reason', /aria-disabled=\{sheetIsTransparent === true \|\| undefined\}/.test(card) && /aria-describedby=\{sheetIsTransparent === true \? bgNoteId : undefined\}/.test(card) && /id=\{bgNoteId\}[^>]*>\s*Background already removed\./.test(card));
   check('the disabled toggle keeps a focus style and ignores a press', /focus-visible:outline-2/.test(card) && /if \(sheetIsTransparent === true\) return;/.test(card));
   check('Download goes to the played sheet only with loop geometry and a frame', /const playedSheetReady = !!loopGeometry && loopPlayback\.length > 0;/.test(card) && /onClick=\{playedSheetReady \? handleDownloadPlayed : handleDownload\}/.test(card));
   check('Download original shows in that case only and saves the delivered sheet', /\{playedSheetReady && \(\s*<Button[^>]*onClick=\{handleDownloadOriginal\}/.test(card) && /saveDataUrl\(generatedImageDataUrl, `spritebrew_animation_\$\{Date\.now\(\)\}_original\.png`\)/.test(card));
-  check('a second press while it works does nothing', /!loopGeometry \|\| sheetPreparing\) return;/.test(card) && /disabled=\{sheetPreparing\}/.test(card));
+  check('a second press while it works does nothing', /!loopGeometry \|\| sheetPreparing\) return;/.test(played) && /if \(!displayImageDataUrl \|\| sheetPreparing\) return;/.test(card) && /aria-disabled=\{sheetPreparing \|\| undefined\}/.test(pngButton) && /aria-busy=\{sheetPreparing \|\| undefined\}/.test(pngButton));
   check('the spinner stops under reduced motion and the label says Preparing', /animate-spin motion-reduce:animate-none/.test(card) && /'Preparing\.\.\.'/.test(card));
   check('a failed sheet says what to do instead', /Could not make the sheet\. Try Download original\./.test(card));
+  check('the status is one always-rendered polite line, hidden from sight', /\/\* Always rendered[^*]*\*\/\}\s*<p className="sr-only" role="status">\{sheetStatus\}<\/p>/.test(card) && /sheetPreparing\s*\? 'Preparing the sheet\.'\s*: sheetReadySrc !== null && sheetReadySrc === generatedImageDataUrl\s*\? 'Sheet ready\.'\s*: ''/.test(card));
+  check('Sheet ready follows the hand-off to the browser, on both paths', /saveDataUrl\(src, [^\n]*\n\s*setSheetReadySrc\(generatedImageDataUrl\);/.test(played) && /downloadFile\([^\n]*\n\s*setSheetReadySrc\(generatedImageDataUrl\);/.test(played));
+  check('an unedited loop saves the displayed image with no canvas', /if \(playedIsIdentity\(loopPlayback, loopFrames\)\) \{\s*saveDataUrl\(src, `spritebrew_animation_\$\{Date\.now\(\)\}\.png`\);/.test(played) && played.indexOf('playedIsIdentity(') < played.indexOf('setSheetPreparing(true)'));
+  check('the toggle is named by its title and its state', /<span id=\{bgTitleId\}[^>]*>\s*Remove background/.test(card) && /aria-labelledby=\{`\$\{bgTitleId\} \$\{bgToggleId\}`\}/.test(toggle));
+  check('the cut loads only from the displayed image', /const src = displayImageDataUrl;/.test(played) && same(played.match(/loadImage\([^)]*\)/g), ['loadImage(src)']));
+  check('framesFromSheet is given the played order', /framesFromSheet\(img, loopGeometry, loopPlayback\)/.test(played));
+  check('assemblePlayedSheet is given the source columns', /assemblePlayedSheet\(frames, loopGeometry\.frameW, loopGeometry\.frameH, loopGeometry\.cols,/.test(played));
+  check('the failure note is keyed to the generated image', /catch \{\s*setSheetFailedSrc\(generatedImageDataUrl\);/.test(played) && /sheetFailedSrc !== null && sheetFailedSrc === generatedImageDataUrl/.test(card));
+  check('the failure note clears at the start of the handler', /sheetPreparing\) return;\s*setSheetFailedSrc\(null\);/.test(played));
+  check('setSheetPreparing(false) is in a finally', /finally \{\s*setSheetPreparing\(false\);\s*\}/.test(played) && played.match(/setSheetPreparing\(false\)/g)?.length === 1);
+  check('Download PNG has no native disabled', pngButton !== '' && !nativeDisabled.test(pngButton));
+  check('the toggle has no native disabled', toggle !== '' && !nativeDisabled.test(toggle));
+  check('no native disabled anywhere is tied to the preparing or transparent state', !/(?<![-\w])disabled=\{[^}]*(sheetPreparing|sheetIsTransparent)/.test(card));
+  check('the border read drops its answer once cancelled', /await loadImage\(src\);\s*if \(cancelled\) return;/.test(borderRead) && /if \(!cancelled\) setSheetAlpha\(/.test(borderRead) && /return \(\) => \{ cancelled = true; \};/.test(borderRead));
 }
 
 if (failed > 0) {

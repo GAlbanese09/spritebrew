@@ -68,3 +68,12 @@ export function assemblePlayedSheet<C extends PlayedSheetCanvas>(
   });
   return canvas;
 }
+
+/**
+ * Whether the loop plays the sheet's frames once each, in order: nothing was
+ * edited, so the played sheet would be the sheet itself. frameCount is the
+ * number of frames the loop sequence starts with. No frames is never identity.
+ */
+export function playedIsIdentity(playback: readonly number[], frameCount: number): boolean {
+  return frameCount > 0 && playback.length === frameCount && playback.every((frame, i) => frame === i);
+}

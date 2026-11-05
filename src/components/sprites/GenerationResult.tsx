@@ -16,8 +16,8 @@ import { createSequence, playback, type LoopSequence } from '@/lib/loopSequence'
 import { loadImage, removeBackgroundColor } from '@/lib/spriteUtils';
 import { encodeGif, framesFromSheet, GIF_SCALES, GIF_SCALE_DEFAULT, type GifScale } from '@/lib/gifExport';
 import { canvasToBlob, downloadFile } from '@/lib/downloadUtils';
-import { cornersOpaque } from '@/lib/fillCleanup';
-import { assemblePlayedSheet } from '@/lib/playedSheet';
+import { assemblePlayedSheet, playedIsIdentity } from '@/lib/playedSheet';
+import { borderMostlyTransparent } from '@/lib/sheetAlpha';
 import {
   loadHistory,
   clearHistory,
@@ -110,12 +110,19 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const [gifScale, setGifScale] = useState<GifScale>(GIF_SCALE_DEFAULT);
   const [gifEncoding, setGifEncoding] = useState(false);
   const [gifError, setGifError] = useState<{ src: string; message: string } | null>(null);
-  // Download on an Animate result: an in-flight flag, and the source a sheet
-  // failed for, so a new generation drops the note the same way.
+  // Download on an Animate result: an in-flight flag, and the sources a sheet
+  // failed for and was last saved for, so a new generation drops the note and
+  // the status the same way.
   const [sheetPreparing, setSheetPreparing] = useState(false);
   const [sheetFailedSrc, setSheetFailedSrc] = useState<string | null>(null);
+  const [sheetReadySrc, setSheetReadySrc] = useState<string | null>(null);
+  const sheetStatus = sheetPreparing
+    ? 'Preparing the sheet.'
+    : sheetReadySrc !== null && sheetReadySrc === generatedImageDataUrl
+      ? 'Sheet ready.'
+      : '';
 
-  // Whether the sheet's corners are already transparent, held with the source
+  // Whether the sheet's border is already transparent, held with the source
   // it was read for, so a new generation reads as unknown (null) without
   // resetting state in an effect.
   const [sheetAlpha, setSheetAlpha] = useState<{ src: string; transparent: boolean } | null>(null);
@@ -129,6 +136,8 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const [bgRemovalWanted, setBgRemovalWanted] = useState(false);
   const bgRemovalActive = bgRemovalWanted && sheetIsTransparent !== true;
   const bgNoteId = useId();
+  const bgTitleId = useId();
+  const bgToggleId = useId();
   const [bgRemovedDataUrl, setBgRemovedDataUrl] = useState<string | null>(null);
   const [bgTolerance, setBgTolerance] = useState(10);
   const [detectedBgColor, setDetectedBgColor] = useState<{ r: number; g: number; b: number } | null>(null);
@@ -175,7 +184,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     setNaturalDims({ w: 0, h: 0 });
   }, [generatedImageDataUrl]);
 
-  // Read the sheet's corners. On any error the answer stays unknown, and the
+  // Read the sheet's border. On any error the answer stays unknown, and the
   // card behaves as it did before this check.
   useEffect(() => {
     if (!generatedImageDataUrl) return;
@@ -194,7 +203,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         if (!ctx) return;
         ctx.drawImage(img, 0, 0);
         const px = ctx.getImageData(0, 0, W, H).data;
-        if (!cancelled) setSheetAlpha({ src, transparent: !cornersOpaque(px, W, H) });
+        if (!cancelled) setSheetAlpha({ src, transparent: borderMostlyTransparent(px, W, H) });
       } catch {
         // Unknown: keep today's behaviour.
       }
@@ -267,9 +276,9 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const playedSheetReady = !!loopGeometry && loopPlayback.length > 0;
 
   const handleDownload = useCallback(() => {
-    if (!displayImageDataUrl) return;
+    if (!displayImageDataUrl || sheetPreparing) return;
     saveDataUrl(displayImageDataUrl, `spritebrew_generated_${Date.now()}.png`);
-  }, [displayImageDataUrl]);
+  }, [displayImageDataUrl, sheetPreparing]);
 
   // The loop as it plays (order after Remove and Duplicate, ping-pong
   // expanded) from the displayed image, so background removal applies, in the
@@ -277,8 +286,15 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const handleDownloadPlayed = useCallback(async () => {
     const src = displayImageDataUrl;
     if (!src || !generatedImageDataUrl || !loopGeometry || sheetPreparing) return;
-    setSheetPreparing(true);
     setSheetFailedSrc(null);
+    setSheetReadySrc(null);
+    // An unedited loop is the displayed image, so it saves with no canvas.
+    if (playedIsIdentity(loopPlayback, loopFrames)) {
+      saveDataUrl(src, `spritebrew_animation_${Date.now()}.png`);
+      setSheetReadySrc(generatedImageDataUrl);
+      return;
+    }
+    setSheetPreparing(true);
     try {
       // Cutting is synchronous; yield once so the spinner paints first.
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -291,12 +307,13 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         return canvas;
       });
       downloadFile(await canvasToBlob(sheet), `spritebrew_animation_${Date.now()}.png`);
+      setSheetReadySrc(generatedImageDataUrl);
     } catch {
       setSheetFailedSrc(generatedImageDataUrl);
     } finally {
       setSheetPreparing(false);
     }
-  }, [displayImageDataUrl, generatedImageDataUrl, loopGeometry, loopPlayback, sheetPreparing]);
+  }, [displayImageDataUrl, generatedImageDataUrl, loopGeometry, loopFrames, loopPlayback, sheetPreparing]);
 
   // The sheet as delivered, with no canvas in the way, so this one always works.
   const handleDownloadOriginal = useCallback(() => {
@@ -740,7 +757,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Eraser size={12} className="text-text-muted" />
-            <span className="text-[11px] font-mono text-text-primary">
+            <span id={bgTitleId} className="text-[11px] font-mono text-text-primary">
               Remove background
             </span>
             {bgRemovalActive && detectedBgColor && (
@@ -761,7 +778,9 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
               handler ignores the press. */}
           <button
             type="button"
+            id={bgToggleId}
             onClick={handleToggleBgRemoval}
+            aria-labelledby={`${bgTitleId} ${bgToggleId}`}
             aria-disabled={sheetIsTransparent === true || undefined}
             aria-describedby={sheetIsTransparent === true ? bgNoteId : undefined}
             className={`px-2.5 py-1 rounded text-[10px] font-mono transition-colors
@@ -850,11 +869,15 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
             Send to Animator
           </Button>
         )}
+        {/* aria-disabled, as on the toggle above: the disabled attribute would
+            drop keyboard focus while the sheet is made. The handlers ignore a
+            press while busy. */}
         <Button
           variant="secondary"
           size="md"
+          className="aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
           onClick={playedSheetReady ? handleDownloadPlayed : handleDownload}
-          disabled={sheetPreparing}
+          aria-disabled={sheetPreparing || undefined}
           aria-busy={sheetPreparing || undefined}
         >
           {sheetPreparing ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" /> : <Download size={14} />}
@@ -888,6 +911,8 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
       {sheetFailedSrc !== null && sheetFailedSrc === generatedImageDataUrl && (
         <p className="text-[10px] font-mono text-red-400" role="alert">Could not make the sheet. Try Download original.</p>
       )}
+      {/* Always rendered, so a screen reader announces each change. */}
+      <p className="sr-only" role="status">{sheetStatus}</p>
 
       {/* A Recent entry that could not be saved (localStorage full); the
           Gallery has the sheet either way, since the server writes it.

@@ -609,7 +609,7 @@ export default function ExportConfig() {
                         next[idx] = e.target.value || null;
                         setDirectionMap(next);
                       }}
-                      className="flex-1 max-w-xs rounded bg-bg-elevated border border-border-default px-2 py-1
+                      className="flex-1 min-w-0 max-w-xs rounded bg-bg-elevated border border-border-default px-2 py-1
                         text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber cursor-pointer"
                     >
                       <option value="">— none —</option>

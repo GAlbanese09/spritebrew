@@ -613,9 +613,11 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
               />
             )}
 
-            {/* Header */}
+            {/* Header. The left group wraps, so on a phone (where text fields
+                are 16 px, globals.css) the type select and the frame count
+                move to a second line instead of squeezing the name to nothing. */}
             <div className="flex items-center justify-between mb-3 gap-2">
-              <div className="flex items-center gap-2 min-w-0">
+              <div className="flex flex-1 flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
                 {isRenaming ? (
                   <input
                     type="text"
@@ -648,7 +650,7 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
                   aria-label="Animation type"
                   title="Animation type"
                   onChange={(e) => updateAnimationMeta(anim.id, { type: e.target.value })}
-                  className="rounded bg-bg-elevated border border-border-default px-1.5 py-0.5
+                  className="max-w-full rounded bg-bg-elevated border border-border-default px-1.5 py-0.5
                     text-[10px] font-mono text-text-secondary focus:outline-none focus:border-accent-amber cursor-pointer"
                 >
                   {ANIMATION_TYPES.map((t) => (

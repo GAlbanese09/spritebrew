@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useId, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Download, Scissors, RefreshCw, Archive, Trash2, ArrowRight, Eraser, Pencil, Film, Loader2 } from 'lucide-react';
@@ -15,7 +15,9 @@ import { sheetGeometry } from '@/lib/animationGeometry';
 import { createSequence, playback, type LoopSequence } from '@/lib/loopSequence';
 import { loadImage, removeBackgroundColor } from '@/lib/spriteUtils';
 import { encodeGif, framesFromSheet, GIF_SCALES, GIF_SCALE_DEFAULT, type GifScale } from '@/lib/gifExport';
-import { downloadFile } from '@/lib/downloadUtils';
+import { canvasToBlob, downloadFile } from '@/lib/downloadUtils';
+import { assemblePlayedSheet, playedIsIdentity } from '@/lib/playedSheet';
+import { borderMostlyTransparent } from '@/lib/sheetAlpha';
 import {
   loadHistory,
   clearHistory,
@@ -41,6 +43,16 @@ function computeFitZoom(naturalWidth: number, containerWidth: number): number {
     if (naturalWidth * z <= usable) return z;
   }
   return 1; // even 1x overflows — let it scroll
+}
+
+/** Saves a data URL as a file, byte for byte. */
+function saveDataUrl(url: string, filename: string) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 interface GenerationResultProps {
@@ -98,9 +110,34 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const [gifScale, setGifScale] = useState<GifScale>(GIF_SCALE_DEFAULT);
   const [gifEncoding, setGifEncoding] = useState(false);
   const [gifError, setGifError] = useState<{ src: string; message: string } | null>(null);
+  // Download on an Animate result: an in-flight flag, and the sources a sheet
+  // failed for and was last saved for, so a new generation drops the note and
+  // the status the same way.
+  const [sheetPreparing, setSheetPreparing] = useState(false);
+  const [sheetFailedSrc, setSheetFailedSrc] = useState<string | null>(null);
+  const [sheetReadySrc, setSheetReadySrc] = useState<string | null>(null);
+  const sheetStatus = sheetPreparing
+    ? 'Preparing the sheet.'
+    : sheetReadySrc !== null && sheetReadySrc === generatedImageDataUrl
+      ? 'Sheet ready.'
+      : '';
 
-  // Background removal state
-  const [bgRemovalActive, setBgRemovalActive] = useState(false);
+  // Whether the sheet's border is already transparent, held with the source
+  // it was read for, so a new generation reads as unknown (null) without
+  // resetting state in an effect.
+  const [sheetAlpha, setSheetAlpha] = useState<{ src: string; transparent: boolean } | null>(null);
+  const sheetIsTransparent =
+    sheetAlpha && sheetAlpha.src === generatedImageDataUrl ? sheetAlpha.transparent : null;
+
+  // Background removal state. removeBackgroundColor averages the corners' RGB
+  // and ignores alpha, so a transparent sheet's corners read as black and only
+  // near-black art would go. Active is derived, so a press made before the
+  // answer arrived simply stops applying, the same render the answer lands.
+  const [bgRemovalWanted, setBgRemovalWanted] = useState(false);
+  const bgRemovalActive = bgRemovalWanted && sheetIsTransparent !== true;
+  const bgNoteId = useId();
+  const bgTitleId = useId();
+  const bgToggleId = useId();
   const [bgRemovedDataUrl, setBgRemovedDataUrl] = useState<string | null>(null);
   const [bgTolerance, setBgTolerance] = useState(10);
   const [detectedBgColor, setDetectedBgColor] = useState<{ r: number; g: number; b: number } | null>(null);
@@ -140,11 +177,38 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   // the <img> style lets the browser layout-size from the source's natural
   // dims for the one frame before onLoad fires the fit-zoom recompute.
   useEffect(() => {
-    setBgRemovalActive(false);
+    setBgRemovalWanted(false);
     setBgRemovedDataUrl(null);
     setDetectedBgColor(null);
     setBgRemovalError(null);
     setNaturalDims({ w: 0, h: 0 });
+  }, [generatedImageDataUrl]);
+
+  // Read the sheet's border. On any error the answer stays unknown, and the
+  // card behaves as it did before this check.
+  useEffect(() => {
+    if (!generatedImageDataUrl) return;
+    const src = generatedImageDataUrl;
+    let cancelled = false;
+    (async () => {
+      try {
+        const img = await loadImage(src);
+        if (cancelled) return;
+        const W = img.naturalWidth;
+        const H = img.naturalHeight;
+        const canvas = document.createElement('canvas');
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0);
+        const px = ctx.getImageData(0, 0, W, H).data;
+        if (!cancelled) setSheetAlpha({ src, transparent: borderMostlyTransparent(px, W, H) });
+      } catch {
+        // Unknown: keep today's behaviour.
+      }
+    })();
+    return () => { cancelled = true; };
   }, [generatedImageDataUrl]);
 
   // Recompute background removal when tolerance changes
@@ -207,15 +271,55 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     [generatedImageDataUrl, loopFrames]
   );
 
+  // An Animate result's Download saves the frames as they play, so the file
+  // matches the loop on the card; every other result saves the image as shown.
+  const playedSheetReady = !!loopGeometry && loopPlayback.length > 0;
+
   const handleDownload = useCallback(() => {
-    if (!displayImageDataUrl) return;
-    const a = document.createElement('a');
-    a.href = displayImageDataUrl;
-    a.download = `spritebrew_generated_${Date.now()}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }, [displayImageDataUrl]);
+    if (!displayImageDataUrl || sheetPreparing) return;
+    saveDataUrl(displayImageDataUrl, `spritebrew_generated_${Date.now()}.png`);
+  }, [displayImageDataUrl, sheetPreparing]);
+
+  // The loop as it plays (order after Remove and Duplicate, ping-pong
+  // expanded) from the displayed image, so background removal applies, in the
+  // source sheet's columns. Reads the card and changes none of it.
+  const handleDownloadPlayed = useCallback(async () => {
+    const src = displayImageDataUrl;
+    if (!src || !generatedImageDataUrl || !loopGeometry || sheetPreparing) return;
+    setSheetFailedSrc(null);
+    setSheetReadySrc(null);
+    // An unedited loop is the displayed image, so it saves with no canvas.
+    if (playedIsIdentity(loopPlayback, loopFrames)) {
+      saveDataUrl(src, `spritebrew_animation_${Date.now()}.png`);
+      setSheetReadySrc(generatedImageDataUrl);
+      return;
+    }
+    setSheetPreparing(true);
+    try {
+      // Cutting is synchronous; yield once so the spinner paints first.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const img = await loadImage(src);
+      const frames = framesFromSheet(img, loopGeometry, loopPlayback);
+      const sheet = assemblePlayedSheet(frames, loopGeometry.frameW, loopGeometry.frameH, loopGeometry.cols, (width, height) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        return canvas;
+      });
+      downloadFile(await canvasToBlob(sheet), `spritebrew_animation_${Date.now()}.png`);
+      setSheetReadySrc(generatedImageDataUrl);
+    } catch {
+      setSheetFailedSrc(generatedImageDataUrl);
+    } finally {
+      setSheetPreparing(false);
+    }
+  }, [displayImageDataUrl, generatedImageDataUrl, loopGeometry, loopFrames, loopPlayback, sheetPreparing]);
+
+  // The sheet as delivered, with no canvas in the way, so this one always works.
+  const handleDownloadOriginal = useCallback(() => {
+    if (!generatedImageDataUrl) return;
+    saveDataUrl(generatedImageDataUrl, `spritebrew_animation_${Date.now()}_original.png`);
+  }, [generatedImageDataUrl]);
 
   // Encodes the loop as it plays (A1's order, ping-pong and speed) from the
   // displayed image, so background removal applies. Errors show inline.
@@ -311,8 +415,9 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   }, [router, bgRemovalActive, bgRemovedDataUrl, setGeneratedImage, setPendingAnimatorHandoff, setPendingAnimatorSkipBgRemoval]);
 
   const handleToggleBgRemoval = useCallback(() => {
-    setBgRemovalActive((v) => !v);
-  }, []);
+    if (sheetIsTransparent === true) return;
+    setBgRemovalWanted((v) => !v);
+  }, [sheetIsTransparent]);
 
   const handleGenerateAnother = useCallback(() => {
     clearGeneratedImage();
@@ -652,7 +757,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Eraser size={12} className="text-text-muted" />
-            <span className="text-[11px] font-mono text-text-primary">
+            <span id={bgTitleId} className="text-[11px] font-mono text-text-primary">
               Remove background
             </span>
             {bgRemovalActive && detectedBgColor && (
@@ -667,17 +772,34 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
               </span>
             )}
           </div>
+          {/* aria-disabled, not the disabled attribute: a disabled button
+              takes no focus, so Tab would skip it and neither its focus style
+              nor its reason would ever reach a keyboard or screen reader. The
+              handler ignores the press. */}
           <button
+            type="button"
+            id={bgToggleId}
             onClick={handleToggleBgRemoval}
-            className={`px-2.5 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
-              ${bgRemovalActive
-                ? 'bg-accent-amber text-bg-primary'
-                : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
+            aria-labelledby={`${bgTitleId} ${bgToggleId}`}
+            aria-disabled={sheetIsTransparent === true || undefined}
+            aria-describedby={sheetIsTransparent === true ? bgNoteId : undefined}
+            className={`px-2.5 py-1 rounded text-[10px] font-mono transition-colors
+              focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber
+              ${sheetIsTransparent === true
+                ? 'bg-bg-elevated text-text-muted border border-border-subtle cursor-not-allowed'
+                : bgRemovalActive
+                  ? 'bg-accent-amber text-bg-primary cursor-pointer'
+                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle cursor-pointer'
               }`}
           >
             {bgRemovalActive ? 'Active' : 'Off'}
           </button>
         </div>
+        {sheetIsTransparent === true && (
+          <p id={bgNoteId} className="text-[9px] font-mono text-text-muted">
+            Background already removed.
+          </p>
+        )}
         {bgRemovalActive && (
           <>
             <div className="flex items-center gap-2">
@@ -708,7 +830,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
       </div>
 
       {/* GIF scale, for Download GIF */}
-      {showLoop && (
+      {playedSheetReady && (
         <div className="flex items-center gap-2" role="group" aria-label="GIF scale">
           <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
             GIF scale
@@ -747,11 +869,21 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
             Send to Animator
           </Button>
         )}
-        <Button variant="secondary" size="md" onClick={handleDownload}>
-          <Download size={14} />
-          Download PNG
+        {/* aria-disabled, as on the toggle above: the disabled attribute would
+            drop keyboard focus while the sheet is made. The handlers ignore a
+            press while busy. */}
+        <Button
+          variant="secondary"
+          size="md"
+          className="aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
+          onClick={playedSheetReady ? handleDownloadPlayed : handleDownload}
+          aria-disabled={sheetPreparing || undefined}
+          aria-busy={sheetPreparing || undefined}
+        >
+          {sheetPreparing ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" /> : <Download size={14} />}
+          {sheetPreparing ? 'Preparing...' : 'Download PNG'}
         </Button>
-        {showLoop && (
+        {playedSheetReady && (
           <Button variant="secondary" size="md" onClick={handleDownloadGif} disabled={gifEncoding}>
             {gifEncoding ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
             Download GIF
@@ -768,9 +900,22 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           </Button>
         </Link>
       </div>
+      {playedSheetReady && (
+        <div className="flex">
+          <Button variant="ghost" size="sm" onClick={handleDownloadOriginal}>
+            <Download size={12} />
+            Download original
+          </Button>
+        </div>
+      )}
       {gifError && gifError.src === generatedImageDataUrl && (
         <p className="text-[10px] font-mono text-red-400" role="alert">{gifError.message}</p>
       )}
+      {sheetFailedSrc !== null && sheetFailedSrc === generatedImageDataUrl && (
+        <p className="text-[10px] font-mono text-red-400" role="alert">Could not make the sheet. Try Download original.</p>
+      )}
+      {/* Always rendered, so a screen reader announces each change. */}
+      <p className="sr-only" role="status">{sheetStatus}</p>
 
       {/* A Recent entry that could not be saved (localStorage full); the
           Gallery has the sheet either way, since the server writes it.

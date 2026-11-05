@@ -28,7 +28,7 @@ import {
   nextZoomStep,
   zoomShortcut,
   zoomNumberKey,
-  isBareKey,
+  isBrushKey,
   zoomAllowed,
   zoomMenuMaxHeight,
   ZOOM_MENU_LEVELS,
@@ -1009,13 +1009,15 @@ export default function PixelEditorBody({
       if (held.size > 0 && e.isPrimary) held.clear();
       if (held.size === 0) {
         eatClickUntil = 0;
+        eatTouchEnd = false;
         if (!zoomMenuOpenRef.current) return;
         const t = e.target as Node;
         if (zoomMenuRef.current?.contains(t) || zoomTriggerRef.current?.contains(t)) return;
         closeZoomMenu();
       }
       held.add(e.pointerId);
-      if (e.pointerType === 'touch') eatTouchEnd = true;
+      // A pen (an Apple Pencil) sends touch events too (REV on #46, P3 b).
+      if (e.pointerType !== 'mouse') eatTouchEnd = true;
       e.preventDefault();
       e.stopPropagation();
     };
@@ -1041,17 +1043,23 @@ export default function PixelEditorBody({
       e.preventDefault();
       e.stopPropagation();
     };
-    document.addEventListener('pointerdown', onDown, true);
-    document.addEventListener('pointerup', onUpOrCancel, true);
-    document.addEventListener('pointercancel', onUpOrCancel, true);
-    document.addEventListener('touchend', onTouchEnd, { capture: true, passive: false });
-    document.addEventListener('click', onClick, true);
+    // On window, in the capture phase: these run before any listener on the
+    // document (the dialog's outside-press check among them), whatever order
+    // things mounted in (REV on #46, P3 c). A touchcancel ends the eaten
+    // touch like a touchend (P3 b).
+    window.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('pointerup', onUpOrCancel, true);
+    window.addEventListener('pointercancel', onUpOrCancel, true);
+    window.addEventListener('touchend', onTouchEnd, { capture: true, passive: false });
+    window.addEventListener('touchcancel', onTouchEnd, { capture: true, passive: false });
+    window.addEventListener('click', onClick, true);
     return () => {
-      document.removeEventListener('pointerdown', onDown, true);
-      document.removeEventListener('pointerup', onUpOrCancel, true);
-      document.removeEventListener('pointercancel', onUpOrCancel, true);
-      document.removeEventListener('touchend', onTouchEnd, { capture: true });
-      document.removeEventListener('click', onClick, true);
+      window.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('pointerup', onUpOrCancel, true);
+      window.removeEventListener('pointercancel', onUpOrCancel, true);
+      window.removeEventListener('touchend', onTouchEnd, { capture: true });
+      window.removeEventListener('touchcancel', onTouchEnd, { capture: true });
+      window.removeEventListener('click', onClick, true);
     };
   }, [closeZoomMenu]);
 
@@ -1784,13 +1792,13 @@ export default function PixelEditorBody({
   // fire while a text input (e.g., the future project-name prompt or a
   // gallery search) is focused. The matching <HotkeysProvider initiallyActive
   // Scopes={['editor']}> wraps both editor mount sites (modal + page).
-  // The brush keys fire on a bare key only: useKey matches a single key
-  // whatever the modifiers, and Cmd or Ctrl with = + - is the zoom shortcut
-  // (W2 audit r2, finding 1: each zoom step also changed the brush size).
-  useHotkeys('[', (e) => { if (isBareKey(e)) cycleBrushSize(-1); }, { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
-  useHotkeys(']', (e) => { if (isBareKey(e)) cycleBrushSize(+1); }, { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
-  useHotkeys('-', (e) => { if (isBareKey(e)) cycleBrushSize(-1); }, { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
-  useHotkeys(['=', '+'], (e) => { if (isBareKey(e)) cycleBrushSize(+1); }, { useKey: true, splitKey: '_', scopes: [EDITOR_HOTKEY_SCOPE] });
+  // The brush keys fire only when the press is not a zoom shortcut: useKey
+  // matches a single key whatever the modifiers (W2 audit r2, finding 1;
+  // REV on #46, P2 a and P3 a; editorZoom.isBrushKey).
+  useHotkeys('[', (e) => { if (isBrushKey(e)) cycleBrushSize(-1); }, { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
+  useHotkeys(']', (e) => { if (isBrushKey(e)) cycleBrushSize(+1); }, { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
+  useHotkeys('-', (e) => { if (isBrushKey(e)) cycleBrushSize(-1); }, { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
+  useHotkeys(['=', '+'], (e) => { if (isBrushKey(e)) cycleBrushSize(+1); }, { useKey: true, splitKey: '_', scopes: [EDITOR_HOTKEY_SCOPE] });
   useHotkeys('mod+z', (e) => { e.preventDefault(); undo(); }, { scopes: [EDITOR_HOTKEY_SCOPE] });
   useHotkeys('mod+shift+z', (e) => { e.preventDefault(); redo(); }, { scopes: [EDITOR_HOTKEY_SCOPE] });
   // Onion skin: O (Aseprite uses F3, which is the browser's Find Next).

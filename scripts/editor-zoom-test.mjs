@@ -23,7 +23,7 @@ const {
   FIT_PAD_X, FIT_PAD_TOP, FIT_PAD_BOTTOM, MIN_ZOOM_FLOOR, ZOOM_STEPS, ZOOM_MENU_LEVELS,
   MENU_GAP, MENU_MARGIN, MENU_MIN_PX,
   fitZoom, fitPanY, minZoomFor, openingZoom, formatZoomPercent, nextZoomStep, zoomShortcut,
-  isBareKey, zoomAllowed, zoomMenuMaxHeight, ZOOM_NUMBER_KEYS, zoomNumberKey,
+  isBrushKey, zoomAllowed, zoomMenuMaxHeight, ZOOM_NUMBER_KEYS, zoomNumberKey,
 } = await import(pathToFileURL(OUT).href);
 
 let failed = 0;
@@ -132,13 +132,15 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   check('keys: without Cmd or Ctrl the brush keys are not zoom keys', ['=', '+', '-', '_', '[', ']'].every((key) => k(key) === null));
   check('keys: Alt combinations are left alone', k('0', { metaKey: true, altKey: true }) === null && k('2', { altKey: true }) === null);
   check('keys: other keys nothing', k('z', { ctrlKey: true }) === null && k('o') === null);
-  // W2 audit r2, finding 1: the brush keys fire only on a bare key, so no
-  // Cmd or Ctrl zoom shortcut also changes the brush size.
-  const m = (o = {}) => ({ metaKey: false, ctrlKey: false, altKey: false, ...o });
-  check('bare: a key alone, or with Shift only (+ on a US layout), is bare', isBareKey(m()) && isBareKey({ ...m(), shiftKey: true }));
-  check('bare: with Cmd, Ctrl or Alt it is not', !isBareKey(m({ metaKey: true })) && !isBareKey(m({ ctrlKey: true })) && !isBareKey(m({ altKey: true })));
-  const zoomKeys = ['=', '+', '-', '_', '0'];
-  check('bare: every Cmd or Ctrl zoom shortcut is a non-bare key', zoomKeys.every((key) => ['metaKey', 'ctrlKey'].every((mod) => k(key, { [mod]: true }) !== null && !isBareKey(m({ [mod]: true }))) && ['metaKey', 'ctrlKey'].every((mod) => k(key, { [mod]: true, shiftKey: true }) !== null)));
+  // W2 audit r2, finding 1, and REV on #46, P2 a and P3 a: a press that is a
+  // zoom shortcut never also changes the brush size, on any layout.
+  const e = (key, o = {}) => ({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...o });
+  check('brush: bare [ ] - = and + (Shift with = on a US layout) change the brush', ['[', ']', '-', '='].every((key) => isBrushKey(e(key))) && isBrushKey(e('+', { shiftKey: true, code: 'Equal' })) && isBrushKey(e('+', { code: 'BracketRight' })));
+  check('brush: Cmd or Ctrl with = + - is a zoom key, not a brush key', ['=', '+', '-', '_'].every((key) => ['metaKey', 'ctrlKey'].every((mod) => k(key, { [mod]: true }) !== null && !isBrushKey(e(key, { [mod]: true })))));
+  check('brush: Shift+0 where it types "=" (German and others) is 100%, not a brush key', k('=', { shiftKey: true, code: 'Digit0' }) === 1 && !isBrushKey(e('=', { shiftKey: true, code: 'Digit0' })));
+  check('brush: [ and ] with Option, or with AltGr (Ctrl and Alt), still change the brush', isBrushKey(e('[', { altKey: true })) && isBrushKey(e(']', { altKey: true, ctrlKey: true })));
+  check('brush: Cmd+[ and a plain Ctrl+[ do not', !isBrushKey(e('[', { metaKey: true })) && !isBrushKey(e('[', { ctrlKey: true })));
+  check('brush: no number key is a brush key, and no brush key a zoom key', ['1', '2', '3', '4', '5', '6'].every((n) => !isBrushKey(e(n))) && ['[', ']', '-', '='].every((key) => k(key) === null));
 }
 
 console.log(failed ? `${failed} failed` : 'all pass');

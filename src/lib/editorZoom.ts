@@ -110,14 +110,6 @@ export function nextZoomStep(current: number, dir: 1 | -1, fit: number, min: num
   return current;
 }
 
-/** A key pressed on its own: no Cmd, Ctrl or Alt (Shift is allowed, since +
- *  is Shift and = on many layouts). The editor's single-key hotkeys (the
- *  brush sizes) fire only on bare keys, so Cmd or Ctrl with = + - is only a
- *  zoom shortcut (W2 audit r2, finding 1). */
-export function isBareKey(e: { metaKey: boolean; ctrlKey: boolean; altKey: boolean }): boolean {
-  return !(e.metaKey || e.ctrlKey || e.altKey);
-}
-
 /** The number keys' zoom levels, as in Aseprite: 1 is 100%, 2 200%, 3 400%,
  *  4 800%, 5 1600%, 6 3200% (George's pick, Nov 4: Chrome keeps Cmd+1 for
  *  its first tab, so "Actual size" moved off it; HQ 2026-11-04-050). */
@@ -153,4 +145,16 @@ export function zoomShortcut(e: { key: string; code?: string; metaKey: boolean; 
   }
   if (e.shiftKey) return e.code === 'Digit0' ? 1 : null;
   return Object.prototype.hasOwnProperty.call(ZOOM_NUMBER_KEYS, e.key) ? ZOOM_NUMBER_KEYS[e.key] : null;
+}
+
+/** Whether a key press may change the brush size (the editor's [ ] - = +
+ *  hotkeys, which react-hotkeys-hook matches on the key alone, whatever the
+ *  modifiers). Not when the press is a zoom shortcut: Cmd or Ctrl with = + -
+ *  (W2 audit r2, finding 1), or Shift+0, which types "=" on German, Nordic,
+ *  Spanish, Italian and other layouts (REV, #46, P2 a). Not with Cmd (Cmd+[
+ *  is the browser's Back) or a plain Ctrl. Option, and AltGr (Windows reports
+ *  it as Ctrl with Alt), are allowed: [ and ] need them on many layouts (REV,
+ *  #46, P3 a). */
+export function isBrushKey(e: { key: string; code?: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey?: boolean }): boolean {
+  return zoomShortcut(e) === null && !e.metaKey && !(e.ctrlKey && !e.altKey);
 }

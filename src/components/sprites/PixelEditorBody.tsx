@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Pencil, Eraser, Pipette, Undo2, Redo2, FlipHorizontal, History, Save, X, ArrowLeft, Film, AlertCircle, Download, ScanEye, Sparkles, Layers, Minus, Plus } from 'lucide-react';
+import { Pencil, Eraser, Pipette, Undo2, Redo2, FlipHorizontal, History, Save, X, ArrowLeft, Film, AlertCircle, Download, ScanEye, Sparkles, Layers, Minus, Plus, ChevronDown, Check } from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import Button from '@/components/ui/Button';
 import {
@@ -19,6 +19,20 @@ import {
 } from './editorStore';
 import type { SpriteProjectSource, SpriteProjectV1 } from '@/lib/spriteProject';
 import { scanResidue, residueOverlay } from '@/lib/residueCleanup';
+import {
+  fitZoom,
+  fitPanY,
+  minZoomFor,
+  openingZoom,
+  formatZoomPercent,
+  nextZoomStep,
+  zoomShortcut,
+  zoomNumberKey,
+  isBrushKey,
+  zoomAllowed,
+  zoomMenuMaxHeight,
+  ZOOM_MENU_LEVELS,
+} from '@/lib/editorZoom';
 import { loadImage } from '@/lib/spriteUtils';
 import {
   ONION_MAX,
@@ -64,10 +78,15 @@ const CHECKERBOARD_STYLE = {
 const EDITOR_HOTKEY_SCOPE = 'editor';
 
 // Wave 2a continuous-zoom range. Buttons remain as preset shortcuts inside
-// [4, 16], but pinch/wheel can land anywhere in [MIN_ZOOM, MAX_ZOOM] including
-// non-integer values.
-const MIN_ZOOM = 1;
+// [4, 16], but pinch/wheel can land anywhere from the smallest zoom to
+// MAX_ZOOM, including non-integer values. The smallest zoom is 1x, or the
+// fitted zoom when the image is too big for 1x (editorZoom.minZoomFor, kept
+// in minZoomRef), so zooming out stops with the whole image in view.
 const MAX_ZOOM = 32;
+
+/** The zoom control animates only a stack at most this wide or tall, in CSS
+ *  px, before and after (see the zoom animation effect). */
+const ZOOM_ANIM_MAX_PX = 4096;
 
 /** The browser's decode for onion skin frames: a data URL to RGBA bytes. */
 async function decodeImageToFrame(url: string): Promise<OnionFrame> {
@@ -332,6 +351,42 @@ export default function PixelEditorBody({
   const editorHeight = useEditorStore((s) => s.height);
   const onionShown = onionAvailable && onionOn;
 
+  // Fit (W2): the zoom at which the whole image fits the canvas area, kept
+  // current as the area or the image size changes. It drives the "Fit"
+  // button and the smallest zoom pinch, wheel and buttons may reach.
+  const [fit, setFit] = useState(0);
+  const fitRef = useRef(0);
+  const minZoomRef = useRef(1);
+  // Set when an image opened before the canvas area had a size (no fit
+  // known); the first measurement then fits it if it does not fit.
+  const openedUnfittedRef = useRef(false);
+  // The fit an image opened at (0 when it opened at another zoom). The first
+  // measurement with the image's size keeps it fitted if the area changed
+  // while the image loaded (W2 audit r2, finding 4).
+  const openedFitRef = useRef(0);
+  // The device's pixels per CSS px: below one device pixel per image pixel
+  // the layers draw smoothed, since nearest-neighbour would drop whole rows.
+  const [dpr, setDpr] = useState(1);
+  // Safari's trackpad pinch (gesturestart/gesturechange): the zoom it began
+  // at and when its last event came, while one is under way. Null otherwise.
+  const safariPinchRef = useRef<{ startZoom: number; at: number } | null>(null);
+  // The zoom control (W2, George Nov 4: "more intuitive and just apple
+  // product like"): its menu, and the stack's position before a zoom the
+  // control asked for, which the layout effect below animates from.
+  const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
+  // Mirrors zoomMenuOpen for the document listeners below, which outlive a
+  // render.
+  const zoomMenuOpenRef = useRef(false);
+  const zoomMenuRef = useRef<HTMLDivElement>(null);
+  const zoomTriggerRef = useRef<HTMLButtonElement>(null);
+  // The control, and the canvas area that clips the menu (W2 audit r2,
+  // finding 3: the menu's height is capped to the room between them).
+  const zoomPillRef = useRef<HTMLDivElement>(null);
+  const canvasAreaRef = useRef<HTMLElement>(null);
+  const zoomAnimFromRef = useRef<DOMRect | null>(null);
+  const zoomAnimRef = useRef<Animation | null>(null);
+  const zoomAnimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Cursor overlay (mirrors brush footprint at canvas-pixel coords).
   const [cursorX, setCursorX] = useState(0);
   const [cursorY, setCursorY] = useState(0);
@@ -350,10 +405,27 @@ export default function PixelEditorBody({
     const idealZoom = Math.floor(maxEditorPx / Math.max(frameWidth, frameHeight));
     panRef.current = { x: 0, y: 0 };
     pendingTransformRef.current = null;
+    zoomAnimRef.current?.cancel();
+    zoomAnimRef.current = null;
     if (stackRef.current) {
       stackRef.current.style.transform = 'translate3d(0px, 0px, 0)';
     }
-    setZoom(Math.max(4, Math.min(16, idealZoom)));
+    // An image too big for that zoom (a whole sheet) opens fitted to the
+    // canvas area instead (George, Nov 4: a 1024 sheet opened 4,096 px wide).
+    const c = containerRef.current;
+    const fit = c ? fitZoom(c.clientWidth, c.clientHeight, frameWidth, frameHeight) : 0;
+    const z0 = openingZoom(Math.max(4, Math.min(16, idealZoom)), fit);
+    openedUnfittedRef.current = !(fit > 0);
+    openedFitRef.current = fit > 0 && Math.abs(z0 - fit) < 1e-9 ? fit : 0;
+    // An image that fits above the zoom control opens centred in that space,
+    // so the control never covers its bottom edge.
+    if (fit > 0 && z0 <= fit + 1e-9) {
+      panRef.current = { x: 0, y: fitPanY() };
+      if (stackRef.current) {
+        stackRef.current.style.transform = `translate3d(0px, ${fitPanY()}px, 0)`;
+      }
+    }
+    setZoom(z0);
   }, [frameWidth, frameHeight]);
 
   // Load frame pixels into the store + extract palette. Reset on unmount so
@@ -702,6 +774,54 @@ export default function PixelEditorBody({
     }
   }, [zoom]);
 
+  // The zoom control's changes animate (W2): after the new size and place are
+  // committed above, the stack is shown back where it was and eased into
+  // place (a FLIP, with the Web Animations API, so the inline transform always
+  // holds the final place). Only the control animates; the wheel and pinches
+  // cancel an animation in flight. A stack larger than ZOOM_ANIM_MAX_PX is
+  // not animated (a layer thousands of px wide may fail to composite, which
+  // left a CSS transition stuck at its start in Chromium), and whatever
+  // happens to an animation, the final place holds within 250 ms.
+  useLayoutEffect(() => {
+    const from = zoomAnimFromRef.current;
+    zoomAnimFromRef.current = null;
+    const st = stackRef.current;
+    if (!from || !st || typeof st.animate !== 'function') return;
+    const to = st.getBoundingClientRect();
+    if (from.width <= 0 || to.width <= 0) return;
+    if (Math.max(from.width, from.height, to.width, to.height) > ZOOM_ANIM_MAX_PX) return;
+    const { x, y } = panRef.current;
+    zoomAnimRef.current?.cancel();
+    const anim = st.animate(
+      [
+        { transform: `translate3d(${x + from.left - to.left}px, ${y + from.top - to.top}px, 0) scale(${from.width / to.width})` },
+        { transform: `translate3d(${x}px, ${y}px, 0)` },
+      ],
+      { duration: 160, easing: 'ease-out' }
+    );
+    zoomAnimRef.current = anim;
+    const done = () => {
+      anim.cancel();
+      if (zoomAnimRef.current === anim) zoomAnimRef.current = null;
+    };
+    anim.onfinish = done;
+    if (zoomAnimTimerRef.current !== null) clearTimeout(zoomAnimTimerRef.current);
+    zoomAnimTimerRef.current = setTimeout(() => {
+      zoomAnimTimerRef.current = null;
+      done();
+    }, 250);
+  }, [zoom]);
+
+  const cancelZoomAnimation = useCallback(() => {
+    if (zoomAnimTimerRef.current !== null) {
+      clearTimeout(zoomAnimTimerRef.current);
+      zoomAnimTimerRef.current = null;
+    }
+    zoomAnimFromRef.current = null;
+    zoomAnimRef.current?.cancel();
+    zoomAnimRef.current = null;
+  }, []);
+
   // Bound the committed pan to the viewport.
   //   Canvas LARGER than viewport on an axis: bound so the canvas still covers
   //     the viewport (edge can't pass center) — can't shove it off-screen.
@@ -725,6 +845,20 @@ export default function PixelEditorBody({
     []
   );
 
+  // The pan that keeps the image point under a screen point still while the
+  // zoom goes from z to z2 (the wheel's and Safari's pinch anchor). local is
+  // the screen point relative to the stack's top-left at zoom z. The stack
+  // is flex-centred, so its layout origin also moves by dims*(z2 - z)/2, the
+  // same correction the touch pinch's commit applies.
+  const anchoredPan = useCallback((z: number, z2: number, local: { x: number; y: number }) => {
+    const { width, height } = useEditorStore.getState();
+    const s = z2 / z;
+    return {
+      x: panRef.current.x + (1 - s) * local.x + (width * (z2 - z)) / 2,
+      y: panRef.current.y + (1 - s) * local.y + (height * (z2 - z)) / 2,
+    };
+  }, []);
+
   // Single commit point for the wrapper transform + zoom state. Every
   // committer (gesture-end, wheel zoom, zoom buttons) routes through here so
   // the commit contract is honored in one place:
@@ -738,7 +872,7 @@ export default function PixelEditorBody({
   // pick up the current committed position.
   const commitZoomPan = useCallback(
     (nextZoom: number, nextPan: { x: number; y: number }) => {
-      const clampedZoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
+      const clampedZoom = clamp(nextZoom, minZoomRef.current, MAX_ZOOM);
       const clampedPan = clampPan(nextPan, clampedZoom);
       panRef.current = clampedPan;
       const transform = `translate3d(${clampedPan.x}px, ${clampedPan.y}px, 0)`;
@@ -753,6 +887,203 @@ export default function PixelEditorBody({
     [zoom, clampPan]
   );
 
+  // Mirrors of the current zoom and commit for callbacks that outlive a
+  // render (the ResizeObserver below).
+  const zoomRef = useRef(zoom);
+  const commitRef = useRef(commitZoomPan);
+  useLayoutEffect(() => {
+    zoomRef.current = zoom;
+    commitRef.current = commitZoomPan;
+  });
+
+  // A zoom asked for by the zoom control, its menu or a shortcut: about the
+  // centre of the view (the point under the centre stays there) unless a pan
+  // is given, and animated unless the person prefers reduced motion.
+  const zoomFromControl = useCallback(
+    (nextZoom: number, nextPan?: { x: number; y: number }) => {
+      const target = clamp(nextZoom, minZoomRef.current, MAX_ZOOM);
+      const s = target / zoom;
+      const pan = nextPan ?? { x: panRef.current.x * s, y: panRef.current.y * s };
+      const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      // Where the stack is on screen now, measured before a running zoom
+      // animation is cancelled: a second press while one runs starts from
+      // there, not from where the first was heading (W2 audit r2, finding 10).
+      const from = target !== zoom && !reduce && stackRef.current ? stackRef.current.getBoundingClientRect() : null;
+      cancelZoomAnimation();
+      zoomAnimFromRef.current = from;
+      commitZoomPan(target, pan);
+    },
+    [zoom, commitZoomPan, cancelZoomAnimation]
+  );
+
+  const zoomToFit = useCallback(() => {
+    if (fit > 0) zoomFromControl(Math.min(fit, MAX_ZOOM), { x: 0, y: fitPanY() });
+  }, [fit, zoomFromControl]);
+
+  const zoomStep = useCallback(
+    (dir: 1 | -1) => zoomFromControl(nextZoomStep(zoom, dir, fit, minZoomRef.current, MAX_ZOOM)),
+    [zoom, fit, zoomFromControl]
+  );
+
+  // Zoom shortcuts while the editor is open (W2): Cmd (Mac) or Ctrl with +,
+  // - and 0 (fit), which replace the browser's page zoom only here; the
+  // number keys 1 to 6 for 100% to 3200%, as in Aseprite; Shift+0 for 100%.
+  // Outside the editor nothing listens. Not while typing in a field.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const kind = zoomShortcut(e);
+      if (kind === null) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      e.preventDefault();
+      if (kind === 'fit') zoomToFit();
+      else if (kind === 'in' || kind === 'out') zoomStep(kind === 'in' ? 1 : -1);
+      else zoomFromControl(kind);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [zoomToFit, zoomFromControl, zoomStep]);
+
+  useLayoutEffect(() => {
+    zoomMenuOpenRef.current = zoomMenuOpen;
+  }, [zoomMenuOpen]);
+
+  // Close the zoom menu and give the focus back to its button, as a menu
+  // button does (W2 audit r2, finding 5: choosing an item left the focus on
+  // the page). Tab closes the menu without this, so the focus moves on.
+  const closeZoomMenu = useCallback(() => {
+    zoomMenuOpenRef.current = false;
+    setZoomMenuOpen(false);
+    zoomTriggerRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  // Focus a menu item, scrolling only the menu to show it: the canvas area
+  // clips the menu and must never scroll itself.
+  const focusZoomMenuItem = useCallback((item: HTMLElement) => {
+    item.focus({ preventScroll: true });
+    const menu = zoomMenuRef.current;
+    if (!menu) return;
+    const top = item.offsetTop;
+    const bottom = top + item.offsetHeight;
+    if (top < menu.scrollTop) menu.scrollTop = top;
+    else if (bottom > menu.scrollTop + menu.clientHeight) menu.scrollTop = bottom - menu.clientHeight;
+  }, []);
+
+  // When the menu opens: its height is capped to the room above the control
+  // inside the canvas area, which clips it, and kept so while it is open (a
+  // phone turned on its side); then the focus goes to the checked level, or
+  // the first item. Written to the element here, before paint, so the focus
+  // scrolls the capped menu (W2 audit r2, finding 3).
+  useLayoutEffect(() => {
+    if (!zoomMenuOpen) return;
+    const menu = zoomMenuRef.current;
+    if (!menu) return;
+    const capToArea = () => {
+      const area = canvasAreaRef.current;
+      const pill = zoomPillRef.current;
+      if (!area || !pill) return;
+      menu.style.maxHeight = `${zoomMenuMaxHeight(area.getBoundingClientRect().top, pill.getBoundingClientRect().top)}px`;
+    };
+    capToArea();
+    const first =
+      menu.querySelector<HTMLElement>('[aria-checked="true"]') ??
+      menu.querySelector<HTMLElement>('[role^="menuitem"]');
+    if (first) focusZoomMenuItem(first);
+    window.addEventListener('resize', capToArea);
+    return () => window.removeEventListener('resize', capToArea);
+  }, [zoomMenuOpen, focusZoomMenuItem]);
+
+  // The press that closes the zoom menu only closes it (W2 audit r2, finding
+  // 2: it used to paint a pixel; Apple's menus never click through). Neither
+  // the press, its click nor a finger that lands while it is down reaches any
+  // other handler, so a two-finger touch that closes the menu cannot draw
+  // either, and a press on the dialog's backdrop does not also close the
+  // editor. A press on the menu or its button works as usual.
+  useEffect(() => {
+    const held = new Set<number>();
+    let eatClickUntil = 0;
+    let eatTouchEnd = false;
+    const onDown = (e: PointerEvent) => {
+      // A new first pointer means the held ones are gone, even if their
+      // pointerup was never seen.
+      if (held.size > 0 && e.isPrimary) held.clear();
+      if (held.size === 0) {
+        eatClickUntil = 0;
+        eatTouchEnd = false;
+        if (!zoomMenuOpenRef.current) return;
+        const t = e.target as Node;
+        if (zoomMenuRef.current?.contains(t) || zoomTriggerRef.current?.contains(t)) return;
+        closeZoomMenu();
+      }
+      held.add(e.pointerId);
+      // A pen (an Apple Pencil) sends touch events too (REV on #46, P3 b).
+      if (e.pointerType !== 'mouse') eatTouchEnd = true;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const onUpOrCancel = (e: PointerEvent) => {
+      if (!held.delete(e.pointerId)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.type === 'pointerup') eatClickUntil = performance.now() + 500;
+    };
+    // On touch screens the click (and the dialog's outside-press check)
+    // follow touchend, so it is cancelled too.
+    const onTouchEnd = (e: TouchEvent) => {
+      if (!eatTouchEnd) return;
+      if (e.touches.length === 0) eatTouchEnd = false;
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
+    };
+    // Only a click from the swallowed press: a keyboard click (detail 0) or
+    // one long after it is left alone.
+    const onClick = (e: MouseEvent) => {
+      if (e.detail === 0 || performance.now() > eatClickUntil) return;
+      eatClickUntil = 0;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    // On window, in the capture phase: these run before any listener on the
+    // document (the dialog's outside-press check among them), whatever order
+    // things mounted in (REV on #46, P3 c). A touchcancel ends the eaten
+    // touch like a touchend (P3 b).
+    window.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('pointerup', onUpOrCancel, true);
+    window.addEventListener('pointercancel', onUpOrCancel, true);
+    window.addEventListener('touchend', onTouchEnd, { capture: true, passive: false });
+    window.addEventListener('touchcancel', onTouchEnd, { capture: true, passive: false });
+    window.addEventListener('click', onClick, true);
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('pointerup', onUpOrCancel, true);
+      window.removeEventListener('pointercancel', onUpOrCancel, true);
+      window.removeEventListener('touchend', onTouchEnd, { capture: true });
+      window.removeEventListener('touchcancel', onTouchEnd, { capture: true });
+      window.removeEventListener('click', onClick, true);
+    };
+  }, [closeZoomMenu]);
+
+  const onZoomMenuKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeZoomMenu();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+      const items = Array.from(zoomMenuRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? []);
+      if (items.length === 0) return;
+      e.preventDefault();
+      const i = items.indexOf(document.activeElement as HTMLElement);
+      const next =
+        e.key === 'Home' ? 0
+        : e.key === 'End' ? items.length - 1
+        : e.key === 'ArrowDown' ? (i + 1) % items.length
+        : (i - 1 + items.length) % items.length;
+      focusZoomMenuItem(items[next]);
+    } else if (e.key === 'Tab') {
+      setZoomMenuOpen(false);
+    }
+  }, [closeZoomMenu, focusZoomMenuItem]);
+
   // Wave 2a desktop wheel:
   //   - ctrl/cmd+wheel = ZOOM, anchored at the cursor (trackpad pinch on
   //     macOS surfaces as ctrlKey wheel).
@@ -765,19 +1096,18 @@ export default function PixelEditorBody({
     if (!container) return;
     const handler = (e: WheelEvent) => {
       e.preventDefault();
+      cancelZoomAnimation();
       if (e.ctrlKey || e.metaKey) {
+        // Safari reports a trackpad pinch as gesture events (below); a ctrl
+        // wheel arriving during one is not zoomed twice.
+        const pinch = safariPinchRef.current;
+        if (pinch && performance.now() - pinch.at < 500) return;
         const s = Math.exp(-e.deltaY * 0.0015);
-        const newZoom = clamp(zoom * s, MIN_ZOOM, MAX_ZOOM);
+        const newZoom = clamp(zoom * s, minZoomRef.current, MAX_ZOOM);
         if (newZoom === zoom) return;
         const stackRect = stackRef.current?.getBoundingClientRect();
         if (!stackRect) return;
-        const localCss = { x: e.clientX - stackRect.left, y: e.clientY - stackRect.top };
-        const sEff = newZoom / zoom;
-        const newPan = {
-          x: panRef.current.x + (1 - sEff) * localCss.x,
-          y: panRef.current.y + (1 - sEff) * localCss.y,
-        };
-        commitZoomPan(newZoom, newPan);
+        commitZoomPan(newZoom, anchoredPan(zoom, newZoom, { x: e.clientX - stackRect.left, y: e.clientY - stackRect.top }));
       } else {
         // Plain wheel / two-finger swipe = pan (clamped). No zoom change, so
         // write the transform directly; no setZoom / pendingTransform needed.
@@ -793,7 +1123,105 @@ export default function PixelEditorBody({
     };
     container.addEventListener('wheel', handler, { passive: false });
     return () => container.removeEventListener('wheel', handler);
-  }, [zoom, commitZoomPan, clampPan]);
+  }, [zoom, commitZoomPan, clampPan, cancelZoomAnimation, anchoredPan]);
+
+  // Fit (W2): recompute the fitted zoom whenever the canvas area or the
+  // image size changes (window resize, the side panel, a new image).
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const update = () => {
+      const prev = fitRef.current;
+      const f = fitZoom(container.clientWidth, container.clientHeight, editorWidth, editorHeight);
+      fitRef.current = f;
+      minZoomRef.current = minZoomFor(f);
+      setFit(f);
+      setDpr(window.devicePixelRatio || 1);
+      if (!(f > 0)) return;
+      // Not during a pinch: its own commit lands the zoom when the fingers
+      // lift, against the new smallest zoom (W2 audit r2, finding 8: a commit
+      // here replaced the live pinch under the fingers).
+      const pinch = safariPinchRef.current;
+      if (gestureRef.current || (pinch && performance.now() - pinch.at < 500)) return;
+      // Follow the fit: a fitted image stays fitted when the area changes
+      // size (including while it loaded, if it opened fitted), a zoom left
+      // below the new smallest zoom rises to it, and an image that opened
+      // before the area had a size is fitted once it has.
+      const z = zoomRef.current;
+      const openedAt = openedFitRef.current;
+      openedFitRef.current = 0;
+      const atFit =
+        (prev > 0 && Math.abs(z - Math.min(prev, MAX_ZOOM)) < 1e-6) ||
+        (openedAt > 0 && Math.abs(z - openedAt) < 1e-6);
+      if (atFit || z < minZoomRef.current - 1e-9) {
+        openedUnfittedRef.current = false;
+        commitRef.current(Math.min(f, MAX_ZOOM), { x: 0, y: fitPanY() });
+      } else if (openedUnfittedRef.current) {
+        openedUnfittedRef.current = false;
+        const z1 = openingZoom(z, f);
+        if (z1 !== z) commitRef.current(z1, { x: 0, y: fitPanY() });
+      }
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [editorWidth, editorHeight]);
+
+  // Safari's trackpad pinch (W2): Safari sends gesturestart, gesturechange
+  // and gestureend with a scale from the start of the pinch, not a ctrl
+  // wheel as Chrome does, and would zoom the whole page. Zoom the canvas
+  // instead, anchored at the pointer, through the same commit as the wheel.
+  // The pinch's start zoom lives in a ref, so re-subscribing on every zoom
+  // change does not lose it.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    type PinchEvent = Event & { scale?: number; clientX?: number; clientY?: number };
+    // On iPhone and iPad, Safari sends these beside the touch events of a
+    // two-finger pinch, which the pointer handlers already zoom; only a pinch
+    // with no finger on the screen (a trackpad) is handled here.
+    const touching = () => pointersRef.current.size > 0 || gestureSessionRef.current;
+    const onStart = (e: Event) => {
+      e.preventDefault();
+      if (touching()) return;
+      cancelZoomAnimation();
+      safariPinchRef.current = { startZoom: zoom, at: performance.now() };
+    };
+    const onChange = (e: Event) => {
+      e.preventDefault();
+      if (touching()) return;
+      const start = safariPinchRef.current;
+      const ge = e as PinchEvent;
+      if (!start || typeof ge.scale !== 'number' || !Number.isFinite(ge.scale) || ge.scale <= 0) return;
+      const newZoom = clamp(start.startZoom * ge.scale, minZoomRef.current, MAX_ZOOM);
+      if (newZoom === zoom) return;
+      const stackRect = stackRef.current?.getBoundingClientRect();
+      const box = container.getBoundingClientRect();
+      if (!stackRect) return;
+      const cx = Number.isFinite(ge.clientX) ? (ge.clientX as number) : box.left + box.width / 2;
+      const cy = Number.isFinite(ge.clientY) ? (ge.clientY as number) : box.top + box.height / 2;
+      start.at = performance.now();
+      commitZoomPan(newZoom, anchoredPan(zoom, newZoom, { x: cx - stackRect.left, y: cy - stackRect.top }));
+    };
+    const onEnd = (e: Event) => {
+      e.preventDefault();
+      safariPinchRef.current = null;
+    };
+    const onBlur = () => {
+      safariPinchRef.current = null;
+    };
+    container.addEventListener('gesturestart', onStart, { passive: false });
+    container.addEventListener('gesturechange', onChange, { passive: false });
+    container.addEventListener('gestureend', onEnd, { passive: false });
+    window.addEventListener('blur', onBlur);
+    return () => {
+      container.removeEventListener('gesturestart', onStart);
+      container.removeEventListener('gesturechange', onChange);
+      container.removeEventListener('gestureend', onEnd);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [zoom, commitZoomPan, cancelZoomAnimation, anchoredPan]);
 
   // Wave 2a getPixelCoords — accepts a {clientX, clientY} payload (so it
   // works with pointer / wheel / synthetic events) and derives the visual
@@ -937,6 +1365,7 @@ export default function PixelEditorBody({
           prevCellRef.current = null;
         }
         gestureSessionRef.current = true;
+        cancelZoomAnimation();
         const ids = Array.from(pointersRef.current.keys());
         const p0Id = ids[0];
         const p1Id = ids[1];
@@ -960,7 +1389,7 @@ export default function PixelEditorBody({
       }
       // size > 2: ignore extra pointers (still captured/tracked, but no behavior).
     },
-    [tool, beginStroke, isDrawing, applyAt, cancelStroke, getPixelCoords, zoom]
+    [tool, beginStroke, isDrawing, applyAt, cancelStroke, getPixelCoords, zoom, cancelZoomAnimation]
   );
 
   const handlePointerMove = useCallback(
@@ -990,7 +1419,7 @@ export default function PixelEditorBody({
         const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
         const dist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
         const rawS = dist / g.startDist;
-        const minS = MIN_ZOOM / g.startZoom;
+        const minS = minZoomRef.current / g.startZoom;
         const maxS = MAX_ZOOM / g.startZoom;
         const s = clamp(rawS, minS, maxS);
         const newPan = {
@@ -1363,10 +1792,13 @@ export default function PixelEditorBody({
   // fire while a text input (e.g., the future project-name prompt or a
   // gallery search) is focused. The matching <HotkeysProvider initiallyActive
   // Scopes={['editor']}> wraps both editor mount sites (modal + page).
-  useHotkeys('[', () => cycleBrushSize(-1), { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
-  useHotkeys(']', () => cycleBrushSize(+1), { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
-  useHotkeys('-', () => cycleBrushSize(-1), { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
-  useHotkeys(['=', '+'], () => cycleBrushSize(+1), { useKey: true, splitKey: '_', scopes: [EDITOR_HOTKEY_SCOPE] });
+  // The brush keys fire only when the press is not a zoom shortcut: useKey
+  // matches a single key whatever the modifiers (W2 audit r2, finding 1;
+  // REV on #46, P2 a and P3 a; editorZoom.isBrushKey).
+  useHotkeys('[', (e) => { if (isBrushKey(e)) cycleBrushSize(-1); }, { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
+  useHotkeys(']', (e) => { if (isBrushKey(e)) cycleBrushSize(+1); }, { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
+  useHotkeys('-', (e) => { if (isBrushKey(e)) cycleBrushSize(-1); }, { useKey: true, scopes: [EDITOR_HOTKEY_SCOPE] });
+  useHotkeys(['=', '+'], (e) => { if (isBrushKey(e)) cycleBrushSize(+1); }, { useKey: true, splitKey: '_', scopes: [EDITOR_HOTKEY_SCOPE] });
   useHotkeys('mod+z', (e) => { e.preventDefault(); undo(); }, { scopes: [EDITOR_HOTKEY_SCOPE] });
   useHotkeys('mod+shift+z', (e) => { e.preventDefault(); redo(); }, { scopes: [EDITOR_HOTKEY_SCOPE] });
   // Onion skin: O (Aseprite uses F3, which is the browser's Find Next).
@@ -1395,6 +1827,13 @@ export default function PixelEditorBody({
         clearTimeout(residueTimerRef.current);
         residueTimerRef.current = null;
       }
+      // Nor does a zoom animation's backstop (W2 audit r2, finding 9).
+      if (zoomAnimTimerRef.current !== null) {
+        clearTimeout(zoomAnimTimerRef.current);
+        zoomAnimTimerRef.current = null;
+      }
+      zoomAnimRef.current?.cancel();
+      zoomAnimRef.current = null;
     };
   }, []);
 
@@ -1416,6 +1855,10 @@ export default function PixelEditorBody({
     { id: 'eraser', icon: Eraser, label: 'Eraser' },
     { id: 'eyedropper', icon: Pipette, label: 'Eyedropper' },
   ];
+
+  // Below one device pixel per image pixel, nearest-neighbour drops whole
+  // rows and columns of 1 px art; the layers draw smoothed there (W2 audit).
+  const layerRendering: 'auto' | 'pixelated' = zoom * dpr < 1 ? 'auto' : 'pixelated';
 
   return (
     <>
@@ -1630,7 +2073,7 @@ export default function PixelEditorBody({
           min-h-0/min-w-0 lets the grid track shrink to its assigned size —
           without these, the absolutely-positioned canvas region would create
           intrinsic min-size pressure and push the track past 1fr. */}
-      <main className="[grid-area:canvas] overflow-hidden bg-bg-primary relative min-h-0 min-w-0">
+      <main ref={canvasAreaRef} className="[grid-area:canvas] overflow-hidden bg-bg-primary relative min-h-0 min-w-0">
         {loadError && (
           <div className="absolute inset-0 flex items-center justify-center p-8 z-20">
             <div className="max-w-md rounded-lg border border-red-500/30 bg-red-500/5 p-4 flex items-start gap-3">
@@ -1667,32 +2110,103 @@ export default function PixelEditorBody({
             </div>
           </div>
         )}
-        {/* Zoom controls — floating overlay above the canvas. Outside the
-            pointer-capturing container so button presses never reach the
-            gesture handlers (the closest() guard in handlePointerDown stays
-            as defense but isn't load-bearing anymore). Presets + continuous
-            readout. Pinch/wheel land on non-preset values (e.g. 7.3x), so
-            no button may be highlighted after a gesture; intentional. */}
-        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-2 py-1 rounded bg-bg-primary/80 backdrop-blur-sm border border-border-subtle">
-          <label className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
-            Zoom
-          </label>
-          {([4, 8, 12, 16] as const).map((z) => (
-            <button
-              key={z}
-              onClick={() => commitZoomPan(z, { x: 0, y: 0 })}
-              className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors
-                ${zoom === z
-                  ? 'bg-accent-amber text-bg-primary'
-                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
-                }`}
-            >
-              {z}x
-            </button>
-          ))}
-          <span className="text-[10px] font-mono text-text-muted tabular-nums" aria-live="polite">
-            {zoom.toFixed(1)}x
+        {/* Zoom control (W2; George, Nov 4: "more intuitive and just apple
+            product like"): one pill at the bottom of the canvas area, minus,
+            the zoom as a percentage opening a menu, plus. Outside the
+            pointer-capturing container below, so presses never reach the
+            gesture handlers. A fitted image sits above it (FIT_PAD_BOTTOM). */}
+        <div ref={zoomPillRef} className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-0.5 p-0.5 rounded-xl bg-bg-primary/90 backdrop-blur-sm border border-border-subtle">
+          {/* Zoom changes are announced, as the old readout's were (W2 audit
+              r2, finding 6). */}
+          <span className="sr-only" aria-live="polite" aria-atomic="true">
+            {`Zoom ${formatZoomPercent(zoom)}`}
           </span>
+          <button
+            onClick={() => zoomStep(-1)}
+            title="Zoom out"
+            aria-label="Zoom out"
+            className="h-11 w-11 md:h-7 md:w-8 rounded-lg flex items-center justify-center text-text-primary hover:bg-bg-hover cursor-pointer"
+          >
+            <Minus size={14} />
+          </button>
+          <button
+            ref={zoomTriggerRef}
+            onClick={() => setZoomMenuOpen((v) => !v)}
+            aria-haspopup="menu"
+            aria-expanded={zoomMenuOpen}
+            aria-label={`Zoom options, ${formatZoomPercent(zoom)}`}
+            title="Zoom options"
+            className="h-11 md:h-7 min-w-[4.75rem] px-2 rounded-lg flex items-center justify-center gap-1 text-xs font-mono tabular-nums text-text-primary hover:bg-bg-hover cursor-pointer"
+          >
+            {formatZoomPercent(zoom)}
+            <ChevronDown size={12} className="text-text-muted" />
+          </button>
+          <button
+            onClick={() => zoomStep(1)}
+            title="Zoom in"
+            aria-label="Zoom in"
+            className="h-11 w-11 md:h-7 md:w-8 rounded-lg flex items-center justify-center text-text-primary hover:bg-bg-hover cursor-pointer"
+          >
+            <Plus size={14} />
+          </button>
+          {zoomMenuOpen && (() => {
+            const apple = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
+            const mod = apple ? '\u2318' : 'Ctrl+';
+            const shift = apple ? '\u21e7' : 'Shift+';
+            // Rows are 44 px on phones, like the control's buttons (W2 audit
+            // r2, finding 12). A level the zoom cannot reach (below the fit)
+            // is shown dimmed and does nothing (finding 11); it stays
+            // focusable, as a disabled menu item does.
+            const item = 'w-full flex items-center justify-between gap-6 px-2.5 min-h-11 py-2.5 md:min-h-0 md:py-1.5 rounded-md text-xs text-text-primary focus:bg-bg-hover focus:outline-none';
+            const live = `${item} hover:bg-bg-hover cursor-pointer`;
+            const dim = `${item} opacity-40 cursor-default`;
+            const minZ = minZoomFor(fit);
+            return (
+              <div
+                ref={zoomMenuRef}
+                role="menu"
+                aria-label="Zoom"
+                onKeyDown={onZoomMenuKeyDown}
+                className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 min-w-[13rem] p-1 rounded-xl bg-bg-secondary border border-border-default shadow-lg overflow-y-auto overscroll-contain"
+              >
+                <button
+                  role="menuitem"
+                  aria-disabled={fit > 0 ? undefined : true}
+                  className={fit > 0 ? live : dim}
+                  onClick={() => { if (!(fit > 0)) return; zoomToFit(); closeZoomMenu(); }}
+                >
+                  <span>Zoom to fit</span>
+                  <span className="text-text-muted font-mono">{mod}0</span>
+                </button>
+                <button role="menuitem" className={live} onClick={() => { zoomFromControl(1); closeZoomMenu(); }}>
+                  <span>Actual size</span>
+                  <span className="text-text-muted font-mono">{shift}0</span>
+                </button>
+                <div role="separator" className="my-1 h-px bg-border-subtle" />
+                {ZOOM_MENU_LEVELS.map((level) => {
+                  const on = Math.abs(zoom - level) < 1e-6;
+                  const ok = zoomAllowed(level, minZ, MAX_ZOOM);
+                  const key = zoomNumberKey(level);
+                  return (
+                    <button
+                      key={level}
+                      role="menuitemradio"
+                      aria-checked={on}
+                      aria-disabled={ok ? undefined : true}
+                      className={ok ? live : dim}
+                      onClick={() => { if (!ok) return; zoomFromControl(level); closeZoomMenu(); }}
+                    >
+                      <span className="font-mono tabular-nums">{formatZoomPercent(level)}</span>
+                      <span className="flex items-center gap-2">
+                        {on ? <Check size={12} className="text-accent-amber" /> : null}
+                        {key ? <span className="text-text-muted font-mono">{key}</span> : null}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
 
         <div
@@ -1731,13 +2245,13 @@ export default function PixelEditorBody({
               aria-hidden="true"
               data-onion-layer=""
               className="absolute top-0 left-0 pointer-events-none"
-              style={{ imageRendering: 'pixelated', display: onionShown ? 'block' : 'none', ...CHECKERBOARD_STYLE }}
+              style={{ imageRendering: layerRendering, display: onionShown ? 'block' : 'none', ...CHECKERBOARD_STYLE }}
             />
             <canvas
               ref={editorCanvasRef}
               className="block relative"
               style={{
-                imageRendering: 'pixelated',
+                imageRendering: layerRendering,
                 // Eyedropper tool gets its own cursor (lucide pipette SVG,
                 // hotspot at the tip 2,22). Pencil/eraser keep cursor:none
                 // so the brush-footprint overlay below is the only indicator.
@@ -1757,7 +2271,7 @@ export default function PixelEditorBody({
               aria-hidden="true"
               data-residue-overlay=""
               className="absolute top-0 left-0 pointer-events-none"
-              style={{ imageRendering: 'pixelated', display: showResidue ? 'block' : 'none' }}
+              style={{ imageRendering: layerRendering, display: showResidue ? 'block' : 'none' }}
             />
             <div
               ref={overlayRef}
@@ -1782,7 +2296,7 @@ export default function PixelEditorBody({
           {/* Brush-size toast */}
           {brushToast && (
             <div
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 px-3 py-1.5 rounded bg-black/80 text-amber-300 text-xs font-mono pointer-events-none"
+              className="absolute bottom-16 left-1/2 -translate-x-1/2 z-10 px-3 py-1.5 rounded bg-black/80 text-amber-300 text-xs font-mono pointer-events-none"
               role="status"
               aria-live="polite"
             >

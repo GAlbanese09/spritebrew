@@ -830,7 +830,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
       </div>
 
       {/* GIF scale, for Download GIF */}
-      {showLoop && (
+      {playedSheetReady && (
         <div className="flex items-center gap-2" role="group" aria-label="GIF scale">
           <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
             GIF scale
@@ -884,11 +884,6 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           {sheetPreparing ? 'Preparing...' : 'Download PNG'}
         </Button>
         {playedSheetReady && (
-          <Button variant="ghost" size="sm" onClick={handleDownloadOriginal}>
-            Download original
-          </Button>
-        )}
-        {showLoop && (
           <Button variant="secondary" size="md" onClick={handleDownloadGif} disabled={gifEncoding}>
             {gifEncoding ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
             Download GIF
@@ -905,6 +900,14 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           </Button>
         </Link>
       </div>
+      {playedSheetReady && (
+        <div className="flex">
+          <Button variant="ghost" size="sm" onClick={handleDownloadOriginal}>
+            <Download size={12} />
+            Download original
+          </Button>
+        </div>
+      )}
       {gifError && gifError.src === generatedImageDataUrl && (
         <p className="text-[10px] font-mono text-red-400" role="alert">{gifError.message}</p>
       )}

@@ -27,6 +27,7 @@ import {
   formatZoomPercent,
   nextZoomStep,
   zoomShortcut,
+  zoomNumberKey,
   isBareKey,
   zoomAllowed,
   zoomMenuMaxHeight,
@@ -925,18 +926,19 @@ export default function PixelEditorBody({
   );
 
   // Zoom shortcuts while the editor is open (W2): Cmd (Mac) or Ctrl with +,
-  // -, 0 (fit) and 1 (actual size). They replace the browser's page zoom only
-  // here; outside the editor nothing listens. Not while typing in a field.
+  // - and 0 (fit), which replace the browser's page zoom only here; the
+  // number keys 1 to 6 for 100% to 3200%, as in Aseprite; Shift+0 for 100%.
+  // Outside the editor nothing listens. Not while typing in a field.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const kind = zoomShortcut(e);
-      if (!kind) return;
+      if (kind === null) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
       e.preventDefault();
       if (kind === 'fit') zoomToFit();
-      else if (kind === 'actual') zoomFromControl(1);
-      else zoomStep(kind === 'in' ? 1 : -1);
+      else if (kind === 'in' || kind === 'out') zoomStep(kind === 'in' ? 1 : -1);
+      else zoomFromControl(kind);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -2140,7 +2142,9 @@ export default function PixelEditorBody({
             <Plus size={14} />
           </button>
           {zoomMenuOpen && (() => {
-            const mod = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '\u2318' : 'Ctrl+';
+            const apple = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
+            const mod = apple ? '\u2318' : 'Ctrl+';
+            const shift = apple ? '\u21e7' : 'Shift+';
             // Rows are 44 px on phones, like the control's buttons (W2 audit
             // r2, finding 12). A level the zoom cannot reach (below the fit)
             // is shown dimmed and does nothing (finding 11); it stays
@@ -2168,12 +2172,13 @@ export default function PixelEditorBody({
                 </button>
                 <button role="menuitem" className={live} onClick={() => { zoomFromControl(1); closeZoomMenu(); }}>
                   <span>Actual size</span>
-                  <span className="text-text-muted font-mono">{mod}1</span>
+                  <span className="text-text-muted font-mono">{shift}0</span>
                 </button>
                 <div role="separator" className="my-1 h-px bg-border-subtle" />
                 {ZOOM_MENU_LEVELS.map((level) => {
                   const on = Math.abs(zoom - level) < 1e-6;
                   const ok = zoomAllowed(level, minZ, MAX_ZOOM);
+                  const key = zoomNumberKey(level);
                   return (
                     <button
                       key={level}
@@ -2184,7 +2189,10 @@ export default function PixelEditorBody({
                       onClick={() => { if (!ok) return; zoomFromControl(level); closeZoomMenu(); }}
                     >
                       <span className="font-mono tabular-nums">{formatZoomPercent(level)}</span>
-                      {on ? <Check size={12} className="text-accent-amber" /> : <span />}
+                      <span className="flex items-center gap-2">
+                        {on ? <Check size={12} className="text-accent-amber" /> : null}
+                        {key ? <span className="text-text-muted font-mono">{key}</span> : null}
+                      </span>
                     </button>
                   );
                 })}

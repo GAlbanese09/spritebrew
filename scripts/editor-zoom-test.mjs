@@ -23,7 +23,7 @@ const {
   FIT_PAD_X, FIT_PAD_TOP, FIT_PAD_BOTTOM, MIN_ZOOM_FLOOR, ZOOM_STEPS, ZOOM_MENU_LEVELS,
   MENU_GAP, MENU_MARGIN, MENU_MIN_PX,
   fitZoom, fitPanY, minZoomFor, openingZoom, formatZoomPercent, nextZoomStep, zoomShortcut,
-  isBareKey, zoomAllowed, zoomMenuMaxHeight,
+  isBareKey, zoomAllowed, zoomMenuMaxHeight, ZOOM_NUMBER_KEYS, zoomNumberKey,
 } = await import(pathToFileURL(OUT).href);
 
 let failed = 0;
@@ -120,17 +120,25 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   const k = (key, o = {}) => zoomShortcut({ key, metaKey: false, ctrlKey: false, altKey: false, ...o });
   check('keys: Cmd or Ctrl with = or + zooms in', k('=', { metaKey: true }) === 'in' && k('+', { ctrlKey: true }) === 'in');
   check('keys: with - or _ zooms out', k('-', { ctrlKey: true }) === 'out' && k('_', { metaKey: true }) === 'out');
-  check('keys: with 0 fits and with 1 is actual size', k('0', { metaKey: true }) === 'fit' && k('1', { ctrlKey: true }) === 'actual');
-  check('keys: without Cmd or Ctrl nothing (the brush keys stay)', k('=') === null && k('-') === null && k('0') === null);
-  check('keys: Alt combinations are left alone', k('0', { metaKey: true, altKey: true }) === null);
-  check('keys: other keys nothing', k('2', { metaKey: true }) === null && k('z', { ctrlKey: true }) === null);
+  check('keys: Cmd or Ctrl with 0 fits', k('0', { metaKey: true }) === 'fit' && k('0', { ctrlKey: true }) === 'fit');
+  // George, Nov 4: Chrome keeps Cmd+1 (its first tab), so a number with Cmd
+  // or Ctrl is left to the browser; the number keys alone zoom, as in
+  // Aseprite (HQ 2026-11-04-050).
+  check('keys: Cmd or Ctrl with a number is left to the browser', ['1', '2', '3', '4', '5', '6', '9'].every((n) => k(n, { metaKey: true }) === null && k(n, { ctrlKey: true }) === null));
+  check('keys: the number keys alone are Aseprite\'s levels, 1 to 6 for 100% to 3200%', k('1') === 1 && k('2') === 2 && k('3') === 4 && k('4') === 8 && k('5') === 16 && k('6') === 32);
+  check('keys: 0, 7, 8 and 9 alone do nothing', ['0', '7', '8', '9'].every((n) => k(n) === null));
+  check('keys: Shift+0 is 100% on any layout (by the key\'s place), other Shift+numbers nothing', k(')', { shiftKey: true, code: 'Digit0' }) === 1 && k('0', { shiftKey: true, code: 'Digit0' }) === 1 && k('!', { shiftKey: true, code: 'Digit1' }) === null);
+  check('keys: the number table and the menu agree', Object.keys(ZOOM_NUMBER_KEYS).join() === '1,2,3,4,5,6' && zoomNumberKey(1) === '1' && zoomNumberKey(16) === '5' && zoomNumberKey(0.5) === null && ZOOM_MENU_LEVELS.filter((l) => zoomNumberKey(l)).length === 5);
+  check('keys: without Cmd or Ctrl the brush keys are not zoom keys', ['=', '+', '-', '_', '[', ']'].every((key) => k(key) === null));
+  check('keys: Alt combinations are left alone', k('0', { metaKey: true, altKey: true }) === null && k('2', { altKey: true }) === null);
+  check('keys: other keys nothing', k('z', { ctrlKey: true }) === null && k('o') === null);
   // W2 audit r2, finding 1: the brush keys fire only on a bare key, so no
-  // zoom shortcut also changes the brush size.
+  // Cmd or Ctrl zoom shortcut also changes the brush size.
   const m = (o = {}) => ({ metaKey: false, ctrlKey: false, altKey: false, ...o });
   check('bare: a key alone, or with Shift only (+ on a US layout), is bare', isBareKey(m()) && isBareKey({ ...m(), shiftKey: true }));
   check('bare: with Cmd, Ctrl or Alt it is not', !isBareKey(m({ metaKey: true })) && !isBareKey(m({ ctrlKey: true })) && !isBareKey(m({ altKey: true })));
-  const zoomKeys = ['=', '+', '-', '_', '0', '1'];
-  check('bare: every zoom shortcut is a non-bare key', zoomKeys.every((key) => ['metaKey', 'ctrlKey'].every((mod) => k(key, { [mod]: true }) !== null && !isBareKey(m({ [mod]: true }))) && ['metaKey', 'ctrlKey'].every((mod) => k(key, { [mod]: true, shiftKey: true }) !== null)));
+  const zoomKeys = ['=', '+', '-', '_', '0'];
+  check('bare: every Cmd or Ctrl zoom shortcut is a non-bare key', zoomKeys.every((key) => ['metaKey', 'ctrlKey'].every((mod) => k(key, { [mod]: true }) !== null && !isBareKey(m({ [mod]: true }))) && ['metaKey', 'ctrlKey'].every((mod) => k(key, { [mod]: true, shiftKey: true }) !== null)));
 }
 
 console.log(failed ? `${failed} failed` : 'all pass');

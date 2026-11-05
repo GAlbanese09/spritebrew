@@ -118,23 +118,39 @@ export function isBareKey(e: { metaKey: boolean; ctrlKey: boolean; altKey: boole
   return !(e.metaKey || e.ctrlKey || e.altKey);
 }
 
+/** The number keys' zoom levels, as in Aseprite: 1 is 100%, 2 200%, 3 400%,
+ *  4 800%, 5 1600%, 6 3200% (George's pick, Nov 4: Chrome keeps Cmd+1 for
+ *  its first tab, so "Actual size" moved off it; HQ 2026-11-04-050). */
+export const ZOOM_NUMBER_KEYS: Readonly<Record<string, number>> = { '1': 1, '2': 2, '3': 4, '4': 8, '5': 16, '6': 32 };
+
+/** The number key for a zoom level, or null (the menu shows it). */
+export function zoomNumberKey(level: number): string | null {
+  for (const [key, z] of Object.entries(ZOOM_NUMBER_KEYS)) if (z === level) return key;
+  return null;
+}
+
 /** Whether a keydown is one of the editor's zoom shortcuts, and which:
- *  Cmd (Mac) or Ctrl with = or + (in), - (out), 0 (fit), 1 (actual size).
- *  Alt combinations are left to the system. */
-export function zoomShortcut(e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean }): 'in' | 'out' | 'fit' | 'actual' | null {
-  if (!(e.metaKey || e.ctrlKey) || e.altKey) return null;
-  switch (e.key) {
-    case '=':
-    case '+':
-      return 'in';
-    case '-':
-    case '_':
-      return 'out';
-    case '0':
-      return 'fit';
-    case '1':
-      return 'actual';
-    default:
-      return null;
+ *  Cmd (Mac) or Ctrl with = or + (in), - (out) and 0 (fit); the number keys
+ *  1 to 6 alone (a zoom level, ZOOM_NUMBER_KEYS); Shift+0 (100%, as in
+ *  Figma), matched by the key's place so any layout works. Alt combinations
+ *  are left to the system, and Cmd or Ctrl with a number to the browser
+ *  (Cmd+1 switches tabs). */
+export function zoomShortcut(e: { key: string; code?: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey?: boolean }): 'in' | 'out' | 'fit' | number | null {
+  if (e.altKey) return null;
+  if (e.metaKey || e.ctrlKey) {
+    switch (e.key) {
+      case '=':
+      case '+':
+        return 'in';
+      case '-':
+      case '_':
+        return 'out';
+      case '0':
+        return 'fit';
+      default:
+        return null;
+    }
   }
+  if (e.shiftKey) return e.code === 'Digit0' ? 1 : null;
+  return Object.prototype.hasOwnProperty.call(ZOOM_NUMBER_KEYS, e.key) ? ZOOM_NUMBER_KEYS[e.key] : null;
 }

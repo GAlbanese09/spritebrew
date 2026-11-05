@@ -273,3 +273,17 @@ canvas {
   0%, 100% { text-shadow: 0 0 4px var(--accent-amber-glow); }
   50%      { text-shadow: 0 0 16px var(--accent-amber-strong); }
 }
+
+/* iOS Safari zooms in on a text field whose text is under 16 px when it takes
+   focus, and stays zoomed after the keyboard closes (backlog 13; HQ room
+   2026-11-04-046, George's A). On touch screens every text field gets 16 px
+   text, so focusing one never zooms. This rule is outside any @layer, so it
+   wins over Tailwind's text-xs and text-sm utilities. Desktop (a fine
+   pointer) is unchanged. */
+@media (hover: none) and (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="hidden"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}

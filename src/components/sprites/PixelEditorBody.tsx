@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Pencil, Eraser, Pipette, Undo2, Redo2, FlipHorizontal, History, Save, X, ArrowLeft, Film, AlertCircle, Download, ScanEye, Sparkles, Layers, Minus, Plus, ChevronDown, Check } from 'lucide-react';
+import { Pencil, Eraser, Pipette, Undo2, Redo2, FlipHorizontal, History, Save, X, ArrowLeft, Film, AlertCircle, Download, ScanEye, Sparkles, Layers, Minus, Plus, ChevronDown, Check, Grid3x3, Loader2 } from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import Button from '@/components/ui/Button';
 import {
@@ -33,6 +33,24 @@ import {
   zoomMenuMaxHeight,
   ZOOM_MENU_LEVELS,
 } from '@/lib/editorZoom';
+import {
+  FIX_GRID_ALREADY_CLEAN,
+  FIX_GRID_FAILED,
+  FIX_GRID_LABEL,
+  FIX_GRID_RUNNING,
+  FIX_GRID_TOO_SMALL,
+  FIX_GRID_TOOLTIP,
+  FIX_GRID_UNDO,
+  MIN_SIDE,
+  ROUND_TRIP_MIN,
+  dataUrlToBytes,
+  fixGridTooBig,
+  pixelGridCap,
+  pngBytesToDataUrl,
+  roundTripScore,
+} from '@/lib/pixelGrid';
+import { fixPixelGrid, terminatePixelGrid } from '@/lib/pixelGridClient';
+import FixPixelGridDialog, { type FixGridCompare } from './FixPixelGridDialog';
 import { loadImage } from '@/lib/spriteUtils';
 import {
   ONION_MAX,
@@ -51,6 +69,17 @@ import {
  *  once the edits pause. A wholesale change (flip, undo, redo, revert, clean,
  *  a new image) rescans at once, so old marks never sit on moved pixels. */
 const RESIDUE_RESCAN_MS = 150;
+
+/** How long "Fix pixel grid" shows a toast: these are sentences, longer to
+ *  read than "Cleaned 4 pixels". */
+const FIX_TOAST_MS = 4000;
+
+/** An image handed on by "Fix pixel grid" (onReplaceImage). */
+export interface EditorImage {
+  dataUrl: string;
+  width: number;
+  height: number;
+}
 
 /** Onion skin sources: data URLs of the frames before and after the edited
  *  one, nearest first; null where a frame has no image (W2). */
@@ -186,6 +215,19 @@ interface PixelEditorBodyProps {
    * (FrameGrid on /upload); omitted, the editor shows no onion controls.
    */
   onion?: OnionSources;
+  /**
+   * "Fix pixel grid" (W3), the /editor page only: a frame must keep its size,
+   * so the modal editors, FrameGrid's frame pencil included, leave this out
+   * and do not show the action. Called with the fixed image once the person
+   * chooses to use it, and with `before`, the PNG of what was on screen,
+   * edits included.
+   */
+  onReplaceImage?: (fixed: EditorImage, before: EditorImage) => void;
+  /**
+   * The banner after a fix, over the canvas: its text, what Undo fix does,
+   * and onEdited, called at the first edit, after which the caller drops it.
+   */
+  fixNotice?: { text: string; onUndo: () => void; onEdited: () => void };
 }
 
 export default function PixelEditorBody({
@@ -201,6 +243,8 @@ export default function PixelEditorBody({
   onSaveClose,
   draftKey,
   onion,
+  onReplaceImage,
+  fixNotice,
 }: PixelEditorBodyProps) {
   const editorCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -318,6 +362,25 @@ export default function PixelEditorBody({
   // Transient toast for keyboard-driven brush-size changes.
   const [brushToast, setBrushToast] = useState<string | null>(null);
   const brushToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // "Fix pixel grid" (W3). fixing is the button's and the toast's state, kept
+  // apart from the toast's text so a brush-size toast cannot end the running
+  // one; the ref is what a second press reads. fixCompare outlives fixOpen so
+  // the dialog keeps its content while it fades out.
+  const [fixing, setFixing] = useState(false);
+  const fixingRef = useRef(false);
+  const fixButtonRef = useRef<HTMLButtonElement>(null);
+  const [fixCompare, setFixCompare] = useState<FixGridCompare | null>(null);
+  const [fixOpen, setFixOpen] = useState(false);
+  // False once this body has gone: a fix that answers later does nothing.
+  const bodyLiveRef = useRef(false);
+  useEffect(() => {
+    bodyLiveRef.current = true;
+    return () => {
+      bodyLiveRef.current = false;
+      terminatePixelGrid();
+    };
+  }, []);
 
   // "Show residue" (George, Oct 31; HQ 2026-11-03-007): a layer above the
   // image that marks what "Clean residue" would change. The ref mirrors the
@@ -1788,6 +1851,94 @@ export default function PixelEditorBody({
     brushToastTimerRef.current = setTimeout(() => setBrushToast(null), 2000);
   }, [cleanResidue]);
 
+  const showFixToast = useCallback((text: string) => {
+    if (brushToastTimerRef.current) clearTimeout(brushToastTimerRef.current);
+    setBrushToast(text);
+    brushToastTimerRef.current = setTimeout(() => setBrushToast(null), FIX_TOAST_MS);
+  }, []);
+
+  // "Fix pixel grid": the fixer runs in a worker and the editor stays usable.
+  // A second press while it runs does nothing. The guard's answer and every
+  // failure are a toast; nothing in the editor changes until the person
+  // chooses "Use fixed image".
+  const handleFixGrid = useCallback(async () => {
+    if (fixingRef.current) return;
+    const { pixels, width, height } = useEditorStore.getState();
+    if (!pixels) return;
+    const cap = pixelGridCap((navigator as Navigator & { deviceMemory?: number }).deviceMemory);
+    if (width * height > cap) {
+      showFixToast(fixGridTooBig(cap));
+      return;
+    }
+    if (Math.min(width, height) < MIN_SIDE) {
+      showFixToast(FIX_GRID_TOO_SMALL);
+      return;
+    }
+    fixingRef.current = true;
+    setFixing(true);
+    const input = new Uint8ClampedArray(pixels);
+    try {
+      // The spinner paints before the PNG export, which holds the main
+      // thread for a moment on a large image.
+      await new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+      const beforeUrl = pixelsToPngDataUrl(input, width, height);
+      const png = await fixPixelGrid(dataUrlToBytes(beforeUrl).buffer);
+      const afterUrl = pngBytesToDataUrl(new Uint8Array(png));
+      const fixed = await decodeImageToFrame(afterUrl);
+      if (!bodyLiveRef.current) return;
+      const score = roundTripScore(input, width, height, new Uint8ClampedArray(fixed.pixels), fixed.width, fixed.height);
+      if (score < ROUND_TRIP_MIN) {
+        showFixToast(FIX_GRID_ALREADY_CLEAN);
+        return;
+      }
+      setFixCompare({ beforeUrl, afterUrl, inW: width, inH: height, outW: fixed.width, outH: fixed.height });
+      // The dialog gives focus back to what had it when it opened, and Safari
+      // does not focus a pressed button.
+      fixButtonRef.current?.focus({ preventScroll: true });
+      setFixOpen(true);
+    } catch {
+      if (bodyLiveRef.current) showFixToast(FIX_GRID_FAILED);
+    } finally {
+      fixingRef.current = false;
+      if (bodyLiveRef.current) setFixing(false);
+    }
+  }, [showFixToast]);
+
+  const handleUseFixed = useCallback(() => {
+    if (!fixOpen || !fixCompare || !onReplaceImage) return;
+    const dataUrl = renderToDataUrl();
+    if (!dataUrl) return;
+    setFixOpen(false);
+    // Read now, not when the fix started: edits made while it ran are part
+    // of what Undo fix must bring back.
+    const before = { dataUrl, width: fixCompare.inW, height: fixCompare.inH };
+    // This image's session ends by the person's choice: its edits stay in
+    // its draft, which is listed on the Editor and not offered on Generate.
+    void closeEditorDraft(draftKey);
+    onReplaceImage({ dataUrl: fixCompare.afterUrl, width: fixCompare.outW, height: fixCompare.outH }, before);
+  }, [fixOpen, fixCompare, onReplaceImage, renderToDataUrl, draftKey]);
+
+  // The banner goes at the first edit. Subscribed from an effect, which runs
+  // after the last image's body has reset the store: during this body's first
+  // render the store still holds that image's history.
+  const fixNoticeShown = fixNotice !== undefined;
+  const onFixNoticeEditedRef = useRef(fixNotice?.onEdited);
+  useLayoutEffect(() => {
+    onFixNoticeEditedRef.current = fixNotice?.onEdited;
+  });
+  useEffect(() => {
+    if (!fixNoticeShown) return;
+    return useEditorStore.subscribe((s) => s.historyIndex > 0, (edited) => {
+      if (edited) onFixNoticeEditedRef.current?.();
+    });
+  }, [fixNoticeShown]);
+  // Using the fixed image replaces this whole body, with the dialog in it, so
+  // focus comes back to the button here, once the image has loaded: until
+  // then the button is disabled and cannot take it.
+  useEffect(() => {
+    if (fixNoticeShown && hasPixels) fixButtonRef.current?.focus({ preventScroll: true });
+  }, [fixNoticeShown, hasPixels]);
+
   // Fix #3: scope every editor hotkey to the 'editor' scope so they don't
   // fire while a text input (e.g., the future project-name prompt or a
   // gallery search) is focused. The matching <HotkeysProvider initiallyActive
@@ -2038,6 +2189,20 @@ export default function PixelEditorBody({
         >
           <Sparkles size={16} />
         </button>
+        {onReplaceImage && (
+          <button
+            ref={fixButtonRef}
+            onClick={() => void handleFixGrid()}
+            title={FIX_GRID_TOOLTIP}
+            aria-label={FIX_GRID_LABEL}
+            aria-busy={fixing}
+            disabled={!hasPixels}
+            className={`p-2 rounded cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0 flex items-center justify-center
+              ${fixing ? 'text-accent-amber' : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'}`}
+          >
+            {fixing ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : <Grid3x3 size={16} />}
+          </button>
+        )}
         {onionAvailable && (
           <button
             onClick={toggleOnion}
@@ -2108,6 +2273,23 @@ export default function PixelEditorBody({
                 </div>
               </div>
             </div>
+          </div>
+        )}
+        {/* After "Use fixed image": what happened and the way back, above
+            the image and outside the pointer-capturing container, so it
+            takes no room from the canvas and nothing moves when it goes. */}
+        {fixNotice && (
+          <div
+            role="status"
+            className="absolute top-2 left-1/2 -translate-x-1/2 z-10 w-max max-w-[calc(100%-1rem)] flex items-center gap-1 p-0.5 pl-3 rounded-xl bg-bg-primary/90 backdrop-blur-sm border border-border-subtle transition-opacity duration-[160ms] ease-out starting:opacity-0 motion-reduce:transition-none"
+          >
+            <span className="min-w-0 text-balance text-xs font-mono text-text-primary">{fixNotice.text}</span>
+            <button
+              onClick={fixNotice.onUndo}
+              className="shrink-0 h-11 md:h-7 px-2 rounded-lg text-xs font-mono text-accent-amber hover:bg-bg-hover cursor-pointer"
+            >
+              {FIX_GRID_UNDO}
+            </button>
           </div>
         )}
         {/* Zoom control (W2; George, Nov 4: "more intuitive and just apple
@@ -2294,13 +2476,13 @@ export default function PixelEditorBody({
           </div>
 
           {/* Brush-size toast */}
-          {brushToast && (
+          {(fixing || brushToast) && (
             <div
-              className="absolute bottom-16 left-1/2 -translate-x-1/2 z-10 px-3 py-1.5 rounded bg-black/80 text-amber-300 text-xs font-mono pointer-events-none"
+              className="absolute bottom-16 left-1/2 -translate-x-1/2 z-10 w-max max-w-[calc(100%-2rem)] text-center px-3 py-1.5 rounded bg-black/80 text-amber-300 text-xs font-mono pointer-events-none"
               role="status"
               aria-live="polite"
             >
-              {brushToast}
+              {fixing ? FIX_GRID_RUNNING : brushToast}
             </div>
           )}
         </div>
@@ -2522,6 +2704,15 @@ export default function PixelEditorBody({
     </div>
     {layout === 'page' && (
       <EditorLeaveDialog open={leaveAsk !== null} onStay={stayInEditor} onLeave={leaveEditor} />
+    )}
+    {onReplaceImage && (
+      <FixPixelGridDialog
+        open={fixOpen && leaveAsk === null}
+        compare={fixCompare}
+        checkerboard={CHECKERBOARD_STYLE}
+        onUse={handleUseFixed}
+        onCancel={() => setFixOpen(false)}
+      />
     )}
     </>
   );

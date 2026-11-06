@@ -4,7 +4,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react
 import { useAuth } from '@clerk/react';
 import { HotkeysProvider } from 'react-hotkeys-hook';
 import EditorLanding from '@/components/sprites/EditorLanding';
-import PixelEditorBody from '@/components/sprites/PixelEditorBody';
+import PixelEditorBody, { type EditorImage } from '@/components/sprites/PixelEditorBody';
 import {
   useEditorStore,
   dimsWithinEditorLimits,
@@ -20,6 +20,7 @@ import {
   type RecoveryManifestV1,
 } from '@/lib/editorRecovery';
 import { discardEditorDraft, editorWritesSettled, isEditorSessionOpen, visibleDraft } from '@/components/sprites/useEditorRecovery';
+import { fixGridBanner } from '@/lib/pixelGrid';
 
 /**
  * /editor — full-page Pixel Editor (v2 Phase 1).
@@ -54,8 +55,20 @@ import { discardEditorDraft, editorWritesSettled, isEditorSessionOpen, visibleDr
 // Every session has its own draft key (BUILD 2026-10-29): a new one for a
 // new image, or the restored draft's own key, so a restored session keeps
 // saving into the draft it came from.
+//
+// `fixedFrom`, on an image "Fix pixel grid" made: what Undo fix brings back,
+// held until the first edit or until the image is left. Being part of pending,
+// it cannot outlive the image it belongs to.
 type EditorPending =
-  | { kind: 'image'; draftKey: string; dataUrl: string; width: number; height: number; source?: SpriteProjectSource }
+  | {
+      kind: 'image';
+      draftKey: string;
+      dataUrl: string;
+      width: number;
+      height: number;
+      source?: SpriteProjectSource;
+      fixedFrom?: { draftKey: string; image: EditorImage };
+    }
   | { kind: 'restore'; draftKey: string; envelope: SpriteProjectV1; bytes: Uint8ClampedArray };
 
 const NO_DRAFTS: RecoveryManifestV1[] = [];
@@ -214,6 +227,38 @@ export default function EditorPage() {
     show(null);
   }, [reset, show]);
 
+  // "Use fixed image": the fixed image opens as any new image does, under a
+  // new draft key, with the last image's source.
+  const replaceWithFixed = useCallback((current: EditorPending, fixed: EditorImage, before: EditorImage) => {
+    intentRef.current++;
+    show({
+      kind: 'image',
+      draftKey: newDraftKey('page'),
+      dataUrl: fixed.dataUrl,
+      width: fixed.width,
+      height: fixed.height,
+      source: current.kind === 'image' ? current.source : current.envelope.source,
+      fixedFrom: { draftKey: current.draftKey, image: before },
+    });
+  }, [show]);
+
+  // "Undo fix": what was on screen before the fix reopens under its own draft
+  // key, and the fixed image's draft goes, so abandoned fixes do not pile up
+  // among the saved drafts.
+  const undoFix = useCallback((current: EditorPending) => {
+    if (current.kind !== 'image' || !current.fixedFrom) return;
+    const { draftKey, image } = current.fixedFrom;
+    void discardEditorDraft(current.draftKey);
+    intentRef.current++;
+    show({ kind: 'image', draftKey, dataUrl: image.dataUrl, width: image.width, height: image.height, source: current.source });
+  }, [show]);
+
+  // The first edit of a fixed image ends the banner. The same image stays
+  // open: its draft key, and so its body, do not change.
+  const forgetFix = useCallback((draftKey: string) => {
+    setPending((p) => (p?.kind === 'image' && p.draftKey === draftKey && p.fixedFrom ? { ...p, fixedFrom: undefined } : p));
+  }, []);
+
   // Opens a draft for the account signed in when it was chosen, if that
   // account may see it (its owner checked against the store, not the list on
   // screen), and only if the page is still up, the account unchanged and the
@@ -351,6 +396,12 @@ export default function EditorPage() {
             layout="page"
             source={pending.source}
             draftKey={pending.draftKey}
+            onReplaceImage={(fixed, before) => replaceWithFixed(pending, fixed, before)}
+            fixNotice={pending.fixedFrom && {
+              text: fixGridBanner(pending.fixedFrom.image.width, pending.fixedFrom.image.height, pending.width, pending.height),
+              onUndo: () => undoFix(pending),
+              onEdited: () => forgetFix(pending.draftKey),
+            }}
           />
         ) : (
           <PixelEditorBody
@@ -364,6 +415,7 @@ export default function EditorPage() {
             source={pending.envelope.source}
             restore={{ envelope: pending.envelope, bytes: pending.bytes }}
             draftKey={pending.draftKey}
+            onReplaceImage={(fixed, before) => replaceWithFixed(pending, fixed, before)}
             onDiscardDraft={async () => {
               await handleDiscardDraft(pending.draftKey);
               dismissDraft(pending.draftKey);

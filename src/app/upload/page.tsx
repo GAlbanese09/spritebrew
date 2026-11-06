@@ -7,6 +7,7 @@ import UploadZone from '@/components/sprites/UploadZone';
 import SlicerConfig, { type SliceConfig } from '@/components/sprites/SlicerConfig';
 import FrameGrid from '@/components/sprites/FrameGrid';
 import AnimationPanel from '@/components/sprites/AnimationPanel';
+import AlignFramesPanel, { type AlignedSheet } from '@/components/sprites/AlignFramesPanel';
 import FrameSizeResizer from '@/components/sprites/FrameSizeResizer';
 import SpriteDetector, { type SpriteDetectorExtractResult } from '@/components/sprites/SpriteDetector';
 import BgRemovalBanner from '@/components/sprites/BgRemovalBanner';
@@ -384,6 +385,23 @@ export default function UploadPage() {
     [uploaded, fromGenerated, clearSpriteSheet, replaceSheetSource, askBeforeDiscard, ownership]
   );
 
+  /** Align frames and its Undo. As in handleBgRemoved, the new pixels go only
+   *  onto the sheet they were made from (replaceSheetSource's version guard).
+   *  The uploaded image stays as it was: slicing again starts from it. */
+  const handleAlignCommit = useCallback(
+    async (prepare: () => Promise<AlignedSheet | null>) => {
+      ownership.bump();
+      const token = ownership.capture();
+      const next = await prepare();
+      if (!next || !ownership.isCurrent(token) || !replaceSheetSource(next.sourceImage, next.urls, token.sheetVersion)) {
+        noteStale('align');
+        return false;
+      }
+      return true;
+    },
+    [replaceSheetSource, ownership]
+  );
+
   const sliceGrid = useCallback(
     async (config: SliceConfig) => {
       if (!uploaded) return;
@@ -751,6 +769,19 @@ export default function UploadPage() {
       {spriteSheet && (
         <div className="rounded-lg border border-border-default bg-bg-surface p-6">
           <FrameGrid frameDataUrls={frameDataUrls} />
+        </div>
+      )}
+
+      {/* Align frames, shown after slicing */}
+      {spriteSheet && (
+        <div className="rounded-lg border border-border-default bg-bg-surface p-6">
+          <AlignFramesPanel
+            key={spriteSheet.id}
+            sheet={spriteSheet}
+            animations={animations}
+            frameDataUrls={frameDataUrls}
+            onCommit={handleAlignCommit}
+          />
         </div>
       )}
 

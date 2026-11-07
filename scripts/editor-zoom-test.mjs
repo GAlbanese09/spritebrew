@@ -23,7 +23,7 @@ const {
   FIT_PAD_X, FIT_PAD_TOP, FIT_PAD_BOTTOM, MIN_ZOOM_FLOOR, ZOOM_STEPS, ZOOM_MENU_LEVELS,
   MENU_GAP, MENU_MARGIN, MENU_MIN_PX,
   fitZoom, fitPanY, minZoomFor, openingZoom, formatZoomPercent, nextZoomStep, zoomShortcut,
-  isBrushKey, zoomAllowed, zoomMenuMaxHeight, ZOOM_NUMBER_KEYS, zoomNumberKey,
+  isBrushKey, zoomAllowed, zoomMenuMaxHeight, ZOOM_NUMBER_KEYS, zoomNumberKey, layerRendering,
 } = await import(pathToFileURL(OUT).href);
 
 let failed = 0;
@@ -40,6 +40,7 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   check('pads: 16 at the sides and top, 60 at the bottom', FIT_PAD_X === 16 && FIT_PAD_TOP === 16 && FIT_PAD_BOTTOM === 60);
   check('fit: 1024 in 718 x 565 is exactly 489 / 1024', fitZoom(718, 565, 1024, 1024) === 489 / 1024);
   check('fit: the offset is 22 px up', fitPanY() === -22);
+  check('fit: held room above the image moves it down by half', fitPanY(40) === -2 && fitPanY(44) === 0);
   // George's laptop: a 718 x 565 canvas area, a 1024 x 1024 sheet.
   const f = fitZoom(718, 565, 1024, 1024);
   check('fit: a 1024 sheet in 718 x 565 is the height-limited zoom', near(f, (565 - FIT_PAD_TOP - FIT_PAD_BOTTOM) / 1024), f);
@@ -141,6 +142,12 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   check('brush: [ and ] with Option, or with AltGr (Ctrl and Alt), still change the brush', isBrushKey(e('[', { altKey: true })) && isBrushKey(e(']', { altKey: true, ctrlKey: true })));
   check('brush: Cmd+[ and a plain Ctrl+[ do not', !isBrushKey(e('[', { metaKey: true })) && !isBrushKey(e('[', { ctrlKey: true })));
   check('brush: no number key is a brush key, and no brush key a zoom key', ['1', '2', '3', '4', '5', '6'].every((n) => !isBrushKey(e(n))) && ['[', ']', '-', '='].every((key) => k(key) === null));
+}
+
+// A layer's smoothing, the editor's rule, which the compare view shares.
+{
+  check('rendering: pixelated at 1 device pixel per image pixel and up', layerRendering(1, 1) === 'pixelated' && layerRendering(0.5, 2) === 'pixelated' && layerRendering(8, 1) === 'pixelated');
+  check('rendering: smoothed below that', layerRendering(0.62, 1) === 'auto' && layerRendering(0.4, 2) === 'auto');
 }
 
 console.log(failed ? `${failed} failed` : 'all pass');

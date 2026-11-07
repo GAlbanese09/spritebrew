@@ -92,6 +92,16 @@ export function closeEditorDraft(key: string): Promise<void> {
   return afterWrites(key, () => editorDraftStore().markClosed(key));
 }
 
+/** "Use fixed image" ends the session of the image it was pressed on, by the
+ *  person's choice, so its draft is closed as at Save or Back. Not for a
+ *  fixed image with no edit of its own (`uneditedFix`, its banner still up):
+ *  the page discards that draft and keeps the first way back, so it is not
+ *  saved again, and a prune cannot cost an older draft for it (with five
+ *  drafts, Fix, Use, Fix, Use, Undo fix used to leave four). */
+export function closeDraftForUse(key: string, uneditedFix: boolean): void {
+  if (!uneditedFix) void closeEditorDraft(key);
+}
+
 interface UseEditorRecoveryOptions {
   /** Off only where there is nothing to save. */
   enabled: boolean;
@@ -101,6 +111,9 @@ interface UseEditorRecoveryOptions {
   /** This session's draft key (newDraftKey), or a restored draft's key. */
   projectKey: string;
   surface: DraftSurface;
+  /** Saves the image even with no edit of its own, from when it opens. For a
+   *  fixed image: "Use fixed image" is a decision, like an edit. */
+  saveUnedited?: boolean;
 }
 
 /**
@@ -117,11 +130,14 @@ export function useEditorRecovery({
   getPalette,
   projectKey,
   surface,
+  saveUnedited = false,
 }: UseEditorRecoveryOptions): void {
   // Latest palette-getter in a ref so the long-lived subscription and
   // lifecycle handlers read the current palette without being rebuilt on
   // every palette change.
   const getPaletteRef = useRef(getPalette);
+  // The history index from which the session has something to save.
+  const firstSavedRef = useRef(saveUnedited ? 0 : 1);
   const { isLoaded, userId } = useAuth();
   const authRef = useRef({ isLoaded, userId });
   // The open session's account, pinned the first time Clerk is known to
@@ -134,6 +150,7 @@ export function useEditorRecovery({
   const sessionRef = useRef<{ key: string; owner: string | null | undefined } | null>(null);
   useLayoutEffect(() => {
     getPaletteRef.current = getPalette;
+    firstSavedRef.current = saveUnedited ? 0 : 1;
     authRef.current = { isLoaded, userId };
     const session = sessionRef.current;
     if (session && session.key === projectKey && session.owner === undefined && isLoaded) session.owner = userId ?? null;
@@ -173,15 +190,16 @@ export function useEditorRecovery({
     // and handing the bytes straight to saveDraft (which copies them) is what
     // makes this safe against the unmount reset() that nulls the store while a
     // save is still in flight.
-    const snapshot = (): { project: SpriteProjectV1; bytes: Uint8ClampedArray } | null => {
+    // `unedited`: an image saved with no edit of its own (saveUnedited).
+    const snapshot = (): { project: SpriteProjectV1; bytes: Uint8ClampedArray; unedited: boolean } | null => {
       const s = useEditorStore.getState();
-      if (s.historyIndex <= 0) return null;
+      if (s.historyIndex < firstSavedRef.current) return null;
       const project = s.toProject();
       if (!project) return null;
       const bytes = s.getFramePixels(project.frames[0].id);
       if (!bytes) return null;
       project.color.palette = getPaletteRef.current() ?? [];
-      return { project, bytes: new Uint8ClampedArray(bytes) };
+      return { project, bytes: new Uint8ClampedArray(bytes), unedited: s.historyIndex < 1 };
     };
 
     const scheduleSave = () => {
@@ -191,6 +209,13 @@ export function useEditorRecovery({
       if (!maxWaitTimer) {
         maxWaitTimer = setTimeout(() => { clearTimers(); doSave('idle'); }, MAX_WAIT_MS);
       }
+    };
+
+    // An image saved unedited is saved the moment it is there, so a reload
+    // right after "Use fixed image" keeps it. Edits wait for the pause.
+    const saveOrSchedule = () => {
+      if (firstSavedRef.current === 0 && !wrote && useEditorStore.getState().historyIndex === 0) doSave('edit');
+      else scheduleSave();
     };
 
     // `last`: the session's final save (its editor is going), which cannot
@@ -210,12 +235,18 @@ export function useEditorRecovery({
       const snap = snapshot();
       if (!snap) return;
       wrote = true;
+      // A fixed image saved as it opens makes room for itself only once it is
+      // edited or left: Undo fix discards its draft straight away, and a
+      // prune before that cost an older draft for nothing (audit r2, finding
+      // 5). Every other save prunes as before: without saveUnedited (the
+      // modal editors) no save is ever unedited.
+      const prune = last || !snap.unedited;
       // Queued behind the writes already asked for, so a Discard or a close
       // asked for after this write comes after it too.
       void afterWrites(projectKey, async () => {
         try {
           await store.saveDraft({ projectKey, project: snap.project, bytes: snap.bytes, reason, owner, surface });
-          void store.prune(MAX_DRAFTS, projectKey).catch(() => { /* best-effort */ });
+          if (prune) void store.prune(MAX_DRAFTS, projectKey).catch(() => { /* best-effort */ });
           if (!persistRequested) { persistRequested = true; void requestPersistentStorage(); }
         } catch (err) {
           if (isDevHost()) console.warn('[editorRecovery] save failed', err);
@@ -248,7 +279,7 @@ export function useEditorRecovery({
       // (a Leave whose Back had nowhere to go, say): the session goes on, so
       // its work is saved again, until the next close or Discard.
       if (ended.has(projectKey) && useEditorStore.getState().historyIndex > 0) ended.delete(projectKey);
-      scheduleSave();
+      saveOrSchedule();
     });
 
     // popstate is the SPA Back signal in this App Router app (pagehide does NOT
@@ -268,7 +299,7 @@ export function useEditorRecovery({
         if (isDevHost()) console.warn('[editorRecovery] unavailable in this browser context');
         return;
       }
-      if (useEditorStore.getState().historyIndex > 0) scheduleSave();
+      if (useEditorStore.getState().historyIndex >= firstSavedRef.current) saveOrSchedule();
     }).catch(() => { /* no recovery in this context */ });
 
     return () => {

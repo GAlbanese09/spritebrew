@@ -49,3 +49,6 @@ next-env.d.ts
 /.open-next/
 *.log
 /local/
+
+# Rust build output of the pixel grid WebAssembly crate
+/wasm/pixel-grid/target/

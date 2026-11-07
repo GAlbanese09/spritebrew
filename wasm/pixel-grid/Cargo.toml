@@ -1,0 +1,16 @@
+[package]
+name = "pixel-grid-wasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+pixelfixer = { git = "https://github.com/Retro-Diffusion/pixel-art-fixer", rev = "ef376e57e1c272633ca2dbf5f29ec3fcf6596465" }
+
+[profile.release]
+lto = true
+codegen-units = 1

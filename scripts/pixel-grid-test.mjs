@@ -23,7 +23,7 @@ await build({
   bundle: true, format: 'esm', platform: 'node', outfile: OUT, logLevel: 'silent',
 });
 const {
-  cellCenterScore, gridStepsAgree, gridFixPasses, sameImage, fixGridOutcome,
+  cellCenterScore, cellScoreAt, gridStepsAgree, gridFixPasses, sameImage, fixGridOutcome,
   pixelGridCap, pixelGridCapSide, dataUrlToBytes, pngBytesToDataUrl,
   CELL_CENTER_MIN, CELL_CENTER_TOLERANCE, GRID_STEP_MAX_DIFFERENCE, MIN_SIDE, PIXEL_GRID_MAX_PIXELS, PIXEL_GRID_LOW_MEMORY_PIXELS,
   fixGridTooBig, fixGridSizes, fixGridBanner, fixGridDividerValue,
@@ -84,6 +84,22 @@ function upscale(px, w, h, k) {
     }
   }
   return out;
+}
+
+/** A nearest upscale by a whole k, then cx px cut from the left and cy from
+ *  the top: art whose grid starts partway into a cell, as an AI image or a
+ *  crop has it. */
+function offsetUpscale(px, w, h, k, cx, cy) {
+  const W = w * k - cx;
+  const H = h * k - cy;
+  const out = new Uint8ClampedArray(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (Math.floor((y + cy) / k) * w + Math.floor((x + cx) / k)) * 4;
+      out.set(px.subarray(i, i + 4), (y * W + x) * 4);
+    }
+  }
+  return { px: out, w: W, h: H };
 }
 
 /** A sheet the way the fixer's real input looks: rounded sprites of flat color
@@ -266,17 +282,21 @@ function runFix(png) {
   check('score: an exact nearest upscale x4 scores 1', cellCenterScore(upscale(s, 32, 32, 4), 128, 128, s, 32, 32) === 1);
   const coarse = reduce(s, 32, 32, 11, 11);
   const low = cellCenterScore(s, 32, 32, coarse, 11, 11);
-  check('score: a native sprite on a coarser wrong grid scores low', low < 0.4, low);
+  check('score: a native sprite on a coarser wrong grid scores low', low < 0.5, low);
   check('score: and the guard refuses it', !gridFixPasses(s, 32, 32, coarse, 11, 11));
 
+  // Steps of 1 px cannot shift, so these test what counts and what matches.
   const one = (r, g, b, a = 255) => new Uint8ClampedArray([r, g, b, a]);
-  const a = new Uint8ClampedArray([10, 20, 30, 255, 0, 0, 0, 0]);
-  check('score: a transparent input pixel does not count', cellCenterScore(a, 2, 1, one(10, 20, 30), 1, 1) === 1);
-  check('score: nor does one under alpha 128', cellCenterScore(new Uint8ClampedArray([10, 20, 30, 255, 200, 200, 200, 127]), 2, 1, one(10, 20, 30), 1, 1) === 1);
-  check('score: alpha 128 counts', cellCenterScore(new Uint8ClampedArray([10, 20, 30, 255, 200, 200, 200, 128]), 2, 1, one(10, 20, 30), 1, 1) === 0.5);
+  const pair = (...rgba) => new Uint8ClampedArray(rgba);
+  const ink = pair(10, 20, 30, 255, 10, 20, 30, 255);
+  check('score: a transparent input pixel does not count', cellCenterScore(pair(10, 20, 30, 255, 0, 0, 0, 0), 2, 1, ink, 2, 1) === 1);
+  check('score: nor does one under alpha 128', cellCenterScore(pair(10, 20, 30, 255, 200, 200, 200, 127), 2, 1, ink, 2, 1) === 1);
+  check('score: alpha 128 counts', cellCenterScore(pair(10, 20, 30, 255, 200, 200, 200, 128), 2, 1, ink, 2, 1) === 0.5);
   check('score: nothing counted scores 0', cellCenterScore(new Uint8ClampedArray(8), 2, 1, new Uint8ClampedArray(4), 1, 1) === 0);
 
   check('score: an opaque input against a transparent output cell is a miss', cellCenterScore(one(0, 0, 0), 1, 1, one(0, 0, 0, 0), 1, 1) === 0);
+  check('score: a miss, not a pixel left out: one transparent output cell of two scores 0.5',
+    cellCenterScore(ink, 2, 1, pair(10, 20, 30, 0, 10, 20, 30, 255), 2, 1) === 0.5);
   check('score: and against output alpha 127', cellCenterScore(one(9, 9, 9), 1, 1, one(9, 9, 9, 127), 1, 1) === 0);
   check('score: output alpha 128 can match', cellCenterScore(one(9, 9, 9), 1, 1, one(9, 9, 9, 128), 1, 1) === 1);
 
@@ -284,24 +304,80 @@ function runFix(png) {
   check('score: 24 away on one channel matches', cellCenterScore(one(100, 100, 100), 1, 1, one(124, 100, 100), 1, 1) === 1);
   check('score: 25 away on one channel does not', cellCenterScore(one(100, 100, 100), 1, 1, one(100, 100, 75), 1, 1) === 0);
 
-  // The rule on one row: a pixel counts when it is at least floor(step / 3)
-  // px from both edges of its cell. Marks are pixels wrong for the output.
-  const row = (w, outW, marks) => {
+  // The rule on one row, at a given shift of the cell edges: a pixel counts
+  // when it is at least floor(width / 3) px from both edges of its own cell.
+  // Marks are pixels wrong for the output.
+  const row = (w, outW, marks, shift = 0) => {
     const input = new Uint8ClampedArray(w * 4).fill(255);
     for (const x of marks) input.set([0, 0, 0, 255], x * 4);
-    return cellCenterScore(input, w, 1, new Uint8ClampedArray(outW * 4).fill(255), outW, 1);
+    return cellScoreAt(input, w, 1, new Uint8ClampedArray(outW * 4).fill(255), outW, 1, shift, 0);
   };
   check('cells: x3, only the middle pixel of each cell counts', row(6, 2, [0, 2, 3, 5]) === 1 && row(6, 2, [1]) === 0.5);
   check('cells: x6, the two middle pixels count', row(6, 1, [0, 1, 4, 5]) === 1 && row(6, 1, [2]) === 0.5);
   check('cells: x2 has no margin, so every pixel counts', row(4, 2, [0]) === 0.75);
-  check('cells: x2.5, cells of 3 and 2 px take a margin of 0', row(5, 2, [0, 3]) === 0.6);
-  check('cells: x3.5, cells of 4 and 3 px take a margin of 1', row(7, 2, [0, 3, 4, 6]) === 1 && row(7, 2, [1]) < 1 && row(7, 2, [5]) < 1);
+  check('cells: x2.5, a 3 px cell counts its middle pixel and a 2 px cell both', row(5, 2, [0, 2]) === 1 && row(5, 2, [0, 3]) === 2 / 3 && row(5, 2, [1]) === 2 / 3);
+  check('cells: x3.5, cells of 4 and 3 px take a margin of 1', row(7, 2, [0, 3, 4, 6]) === 1 && row(7, 2, [1]) === 2 / 3 && row(7, 2, [5]) === 2 / 3);
+  check('cells: a shift moves the cells: x3 moved 1 px counts x 2 and 5', row(6, 2, [0, 1, 3, 4], 1) === 1 && row(6, 2, [2], 1) === 0.5);
+  check('cells: a pixel a shift leaves outside every cell does not count', row(6, 2, [5], -1) === 1 && row(6, 2, [0], -1) === 0.5);
   const three = new Uint8ClampedArray([10, 10, 10, 255, 10, 10, 10, 255, 200, 200, 200, 255]);
   const two = new Uint8ClampedArray([10, 10, 10, 255, 200, 200, 200, 255]);
-  check('cells: a 3 x 1 input on 2 x 1 maps x 0, 1 to cell 0 and x 2 to cell 1', cellCenterScore(three, 3, 1, two, 2, 1) === 1);
-  check('cells: and the same for y', cellCenterScore(three, 1, 3, two, 1, 2) === 1);
+  check('cells: a 3 x 1 input on 2 x 1 maps x 0, 1 to cell 0 and x 2 to cell 1', cellScoreAt(three, 3, 1, two, 2, 1, 0, 0) === 1);
+  check('cells: and the same for y', cellScoreAt(three, 1, 3, two, 1, 2, 0, 0) === 1);
 
-  check('threshold: 0.98, two decimals (a change shows up here)', CELL_CENTER_MIN === 0.98);
+  // The search: the fixer cuts even cells from the corner, so art whose grid
+  // starts partway into a cell is scored against its own cells. A perfect
+  // fix, the native art itself, passes (audit r2, finding 1).
+  const art = sprite(32, 32, 31);
+  for (const [k, cx, cy] of [[3, 1, 0], [4, 2, 0], [4, 2, 2], [6, 3, 0]]) {
+    const off = offsetUpscale(art, 32, 32, k, cx, cy);
+    const score = cellCenterScore(off.px, off.w, off.h, art, 32, 32);
+    check(`search: a perfect fix of x${k} shifted ${cy ? `${cx},${cy}` : cx} px passes`, score === 1 && gridFixPasses(off.px, off.w, off.h, art, 32, 32), score);
+  }
+  // A crop that leaves a sliver of the first cell: the fixer may keep it or
+  // drop it, and a fix that drops it, the art less that cell, is right
+  // (BUILD-2's ruling on the r2 stop). The same size with the far edge
+  // dropped is a wrong fix.
+  const less = (px, w, h, left, top, right, bottom) => {
+    const W = w - left - right;
+    const H = h - top - bottom;
+    const out = new Uint8ClampedArray(W * H * 4);
+    for (let y = 0; y < H; y++) out.set(px.subarray(((y + top) * w + left) * 4, ((y + top) * w + left + W) * 4), y * W * 4);
+    return { px: out, w: W, h: H };
+  };
+  for (const [k, cx, cy] of [[3, 2, 0], [3, 2, 2], [4, 3, 0]]) {
+    const off = offsetUpscale(art, 32, 32, k, cx, cy);
+    const dropped = less(art, 32, 32, cx ? 1 : 0, cy ? 1 : 0, 0, 0);
+    const farEnd = less(art, 32, 32, 0, 0, cx ? 1 : 0, cy ? 1 : 0);
+    const name = `x${k} cut ${cy ? `${cx},${cy}` : cx} px`;
+    check(`search: ${name}, the art less the cell the crop cut passes`, gridFixPasses(off.px, off.w, off.h, dropped.px, dropped.w, dropped.h), cellCenterScore(off.px, off.w, off.h, dropped.px, dropped.w, dropped.h));
+    check(`search: ${name}, the art less its far edge is refused`, !gridFixPasses(off.px, off.w, off.h, farEnd.px, farEnd.w, farEnd.h), cellCenterScore(off.px, off.w, off.h, farEnd.px, farEnd.w, farEnd.h));
+  }
+  const corner = offsetUpscale(art, 32, 32, 4, 2, 0);
+  check('search: without it, cells from the corner score x4 shifted 2 px under 0.9', cellScoreAt(corner.px, corner.w, corner.h, art, 32, 32, 0, 0) < 0.9);
+  // On random pairs (right results, wrong sizes, wrong content) the search
+  // gives the rule's own score at some pair of shifts within half a cell, no
+  // less than at no shift and no more than the best of every pair.
+  const next = rng(4242);
+  const odd = [];
+  for (let t = 0; t < 60; t++) {
+    const n = 6 + Math.floor(next() * 10);
+    const k = [2, 3, 4, 5][Math.floor(next() * 4)];
+    const src = sprite(n, n, 100 + t);
+    const off = offsetUpscale(src, n, n, k, Math.floor(next() * k), Math.floor(next() * k));
+    const ow = t % 3 === 0 ? n + 1 : n;
+    const oh = t % 4 === 0 ? n - 1 : n;
+    const out = t % 3 === 0 || t % 4 === 0 ? reduce(off.px, off.w, off.h, ow, oh) : t % 5 === 0 ? sprite(n, n, 900 + t) : src;
+    const hx = Math.floor(off.w / (2 * ow));
+    const hy = Math.floor(off.h / (2 * oh));
+    const scores = [];
+    for (let dy = -hy; dy <= hy; dy++) for (let dx = -hx; dx <= hx; dx++) scores.push(cellScoreAt(off.px, off.w, off.h, out, ow, oh, dx, dy));
+    const found = cellCenterScore(off.px, off.w, off.h, out, ow, oh);
+    const atZero = cellScoreAt(off.px, off.w, off.h, out, ow, oh, 0, 0);
+    if (!scores.includes(found) || found < atZero || found > Math.max(...scores)) odd.push({ t, found, atZero, best: Math.max(...scores) });
+  }
+  check('search: the rule\'s score at some shifts, never under no shift, never over the best', odd.length === 0, odd.slice(0, 3));
+
+  check('threshold: 0.985, on a 0.005 grid (a change shows up here)', CELL_CENTER_MIN === 0.985);
   const flat = new Uint8ClampedArray(100 * 100 * 4).fill(200);
   check('steps: 10%, as a share of the larger', GRID_STEP_MAX_DIFFERENCE === 0.1);
   check('steps: equal steps agree', gridStepsAgree(100, 100, 10, 10));
@@ -326,6 +402,9 @@ function runFix(png) {
 
   check('same image: the same bytes in another array', sameImage(start, { ...start, pixels: new Uint8ClampedArray(fake) }));
   check('same image: one byte off is not', !sameImage(start, { ...start, pixels: edited }));
+  const lastOff = new Uint8ClampedArray(fake);
+  lastOff[lastOff.length - 1] ^= 1;
+  check('same image: nor is the last byte off, so the whole buffer is compared', !sameImage(start, { ...start, pixels: lastOff }));
   check('same image: another size is not', !sameImage(start, { pixels: fake, width: 64, height: 256 }));
   check('same image: an image gone is not', !sameImage(start, { pixels: null, width: 0, height: 0 }));
 
@@ -356,7 +435,7 @@ function runFix(png) {
   check('copy: the action on a refusal', FIX_GRID_SHOW_ANYWAY === 'Show anyway');
   check('copy: the line in the dialog', FIX_GRID_MAY_BE_WRONG === 'This may not be right. Compare before you use it.');
   check('copy: the dismiss button', FIX_GRID_DISMISS === 'Dismiss');
-  check('copy: an edit during a run', FIX_GRID_CHANGED === 'The image changed while fixing, so nothing changed. Press Fix pixel grid again.');
+  check('copy: an edit after the fix started', FIX_GRID_CHANGED === 'The image changed, so the fix was dropped. Press Fix pixel grid again.');
   check('copy: the failure', FIX_GRID_FAILED === 'Fix pixel grid could not load. Try again in a moment. The rest of the editor still works.');
   check('copy: running', FIX_GRID_RUNNING === 'Fixing the pixel grid...');
   check('copy: the tooltip', FIX_GRID_TOOLTIP === 'Fix pixel grid: turns blurry or upscaled pixel art into clean pixels');
@@ -427,15 +506,31 @@ function runFix(png) {
   check('build: the .wasm holds no local path', !wasmBytes.includes('/Users/'));
 
   const notices = readFileSync(path.join(ROOT, 'public/wasm/THIRD-PARTY-NOTICES.txt'), 'utf8');
-  const credits = JSON.parse(readFileSync(path.join(ROOT, 'src/lib/pixelGridCredits.json'), 'utf8'));
-  check('notices: every package has a row', credits.length > 0 && credits.every((c) => c.name && c.version && c.license && c.repository));
-  check('notices: sorted', credits.every((c, i) => i === 0 || credits[i - 1].name < c.name));
-  check('notices: every package has a block', credits.every((c) => notices.includes(`${c.version}\nLicense: ${c.license}\n`)));
+  const rows = JSON.parse(readFileSync(path.join(ROOT, 'src/lib/pixelGridCredits.json'), 'utf8'));
+  // The crates, then the standard library's row (audit r2, finding 6).
+  const credits = rows.slice(0, -1);
+  const std = rows.at(-1);
+  check('notices: every row has a name, version, license and repository', rows.length > 1 && rows.every((c) => c.name && c.version && c.license && c.repository));
+  check('notices: the crates sorted', credits.every((c, i) => i === 0 || credits[i - 1].name < c.name));
+  check('notices: every crate has a block', credits.every((c) => notices.includes(`${c.version}\nLicense: ${c.license}\n`)));
   check('notices: the fixer and its owner', notices.includes('pixel-art-fixer (pixelfixer)') && notices.includes('Astropulse, LLC'));
-  check('notices: the Rust standard library', /Rust standard library [\d.]+\nLicense: MIT\n/.test(notices) && notices.includes('The Rust Project Developers'));
-  check('notices: the MIT text, once', notices.split('Permission is hereby granted').length === 2);
-  check('notices: the BSD-3-Clause text, once', notices.split('Redistribution and use').length === 2);
-  check('notices: no date or local path', !/\/Users\/|\d{4}-\d{2}-\d{2}/.test(notices));
+  const stdBlock = /Rust standard library ([\d.]+)\nLicense: MIT\nCopyright \(c\) The Rust Project Developers\n/.exec(notices);
+  check('notices: the Rust standard library', !!stdBlock);
+  check('credits: the standard library\'s row, last', std.name === 'Rust standard library' && std.version === stdBlock?.[1]
+    && std.license === 'MIT OR Apache-2.0' && std.repository === 'https://github.com/rust-lang/rust');
+  // Its own notices, from the toolchain, follow its entry and come before the
+  // license texts; the rest of the file is this script's own.
+  const stdStart = notices.indexOf(`Notices of the Rust standard library ${stdBlock?.[1]}, from COPYRIGHT-library.html in its toolchain:`);
+  const stdEnd = notices.indexOf('End of the notices of the Rust standard library.');
+  const mitStart = notices.indexOf('MIT License\n\nApplies to every entry marked MIT');
+  const own = notices.slice(0, stdStart) + notices.slice(stdEnd);
+  const stdText = notices.slice(stdStart, stdEnd);
+  check('notices: the standard library\'s own notices, after its entry, before the license texts', stdBlock && stdBlock.index < stdStart && stdStart < stdEnd && stdEnd < mitStart);
+  check('notices: they cover the crates it is built with, hashbrown and dlmalloc among them', /hashbrown-0\.17\.1/.test(stdText) && /dlmalloc-0\.2\.14/.test(stdText) && stdText.includes('Amanieu d\'Antras'));
+  check('notices: and as text, no tags left', !/<\/?(p|b|a|div|pre|code|details|summary|h[1-6]|ul|li|body|html)(\s[^>]*)?\/?>/i.test(stdText) && !/&#\d+;|&quot;|&amp;/.test(stdText));
+  check('notices: the MIT text, once', own.split('Permission is hereby granted').length === 2);
+  check('notices: the BSD-3-Clause text, once', own.split('Redistribution and use').length === 2);
+  check('notices: no date or local path of their own', !/\/Users\/|\d{4}-\d{2}-\d{2}/.test(own) && !notices.includes('/Users/'));
   check('notices: only MIT and BSD-3-Clause', credits.every((c) => c.license === 'MIT' || c.license === 'BSD-3-Clause'));
 }
 
@@ -493,19 +588,46 @@ function runFix(png) {
   check('client: and is ended', workers[1].terminated);
   mock.timers.reset();
 
+  // A new image: a run under way ends with its worker, which would finish
+  // that run before the next image's (audit r2, finding 10); an idle worker
+  // stays.
+  const idle = fixPixelGrid(new ArrayBuffer(4));
+  workers.at(-1).onmessage({ data: { id: workers.at(-1).posted.at(-1).message.id, ok: true, png: output } });
+  await idle;
+  const idleCount = workers.length;
+  cancelPixelGrid();
+  check('client: cancel with nothing running keeps the idle worker', !workers.at(-1).terminated && workers.length === idleCount);
   const cancelled = fixPixelGrid(new ArrayBuffer(4));
-  const runningCount = workers.length;
+  check('client: the next image uses the idle worker', workers.length === idleCount);
+  const busy = workers.at(-1);
+  const stale = busy.posted.at(-1).message.id;
   cancelPixelGrid();
   await assertRejects(cancelled, 'client: cancel fails the request under way');
-  check('client: and keeps the worker', !workers.at(-1).terminated && workers.length === runningCount);
-  const stale = workers.at(-1).posted.at(-1).message.id;
+  check('client: and ends the worker that was running it', busy.terminated);
   const next = fixPixelGrid(new ArrayBuffer(4));
-  check('client: the next image uses the same worker', workers.length === runningCount);
-  workers.at(-1).onmessage({ data: { id: stale, ok: true, png: new ArrayBuffer(1) } });
+  check('client: the next image gets a new worker, so it does not wait for the old run', workers.length === idleCount + 1 && workers.at(-1) !== busy);
+  busy.onmessage?.({ data: { id: stale, ok: true, png: new ArrayBuffer(1) } });
   workers.at(-1).onmessage({ data: { id: workers.at(-1).posted.at(-1).message.id, ok: true, png: output } });
   check('client: a late answer to the cancelled run is ignored', (await next) === output);
+
+  // Each request has its own minute: a cancelled run's time does not end
+  // the next one, and the next one gets a whole minute of its own.
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const before = workers.at(-1);
+  const early = fixPixelGrid(new ArrayBuffer(4));
+  mock.timers.tick(30_000);
   cancelPixelGrid();
-  check('client: cancel with nothing running is safe', !workers.at(-1).terminated);
+  await assertRejects(early, 'client: a run cancelled after 30 s fails');
+  const late = fixPixelGrid(new ArrayBuffer(4));
+  const own = workers.at(-1);
+  mock.timers.tick(30_000);
+  check('client: the cancelled run\'s minute ends nothing', before.terminated && !own.terminated);
+  mock.timers.tick(29_999);
+  check('client: the next run\'s own minute is not over at 59.999 s', !own.terminated);
+  mock.timers.tick(1);
+  await assertRejects(late, 'client: and it ends at its own 60 s');
+  check('client: with its worker', own.terminated);
+  mock.timers.reset();
 
   const left = fixPixelGrid(new ArrayBuffer(4));
   terminatePixelGrid();
@@ -550,6 +672,17 @@ function runFix(png) {
   dropsOn('redo', () => store().redo(), () => { stroke(); store().undo(); });
   dropsOn('flip', () => store().flipHorizontal());
   dropsOn('revert', () => store().revertToOriginal(), stroke);
+  // A stroke cancelled by a second finger puts back the last history entry,
+  // in a new array (audit r2, finding 8).
+  dropsOn('a cancelled stroke', () => store().cancelStroke(), () => { store().beginStroke(); store().paintPixel(1, 1, '#123456'); });
+  // Clean residue: a magenta pixel at the edge, beside the art, is residue.
+  let cleaned = null;
+  dropsOn('Clean residue', () => { cleaned = store().cleanResidue(); }, () => {
+    const px = new Uint8ClampedArray(store().pixels);
+    px.set([200, 0, 200, 255], 0);
+    store().loadFrame('current', px, W, W);
+  });
+  check('action: and Clean residue did change a pixel there', cleaned !== null && cleaned.cleared + cleaned.despilled > 0, cleaned);
   load();
   let moved = 0;
   const stop = useEditorStore.subscribe((s) => s.pixels, () => { moved++; });

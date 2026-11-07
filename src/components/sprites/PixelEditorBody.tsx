@@ -155,7 +155,7 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 import { useSpriteStore } from '@/stores/spriteStore';
 import { extractPaletteFromImageData } from '@/lib/imagePalette';
-import { useEditorRecovery, closeEditorDraft } from './useEditorRecovery';
+import { useEditorRecovery, closeEditorDraft, closeDraftForUse } from './useEditorRecovery';
 import { useEditorHistoryGuard } from './useEditorHistoryGuard';
 import { useLeaveByBack } from './useLeaveByBack';
 import EditorLeaveDialog from './EditorLeaveDialog';
@@ -407,8 +407,9 @@ export default function PixelEditorBody({
   const [fixOpen, setFixOpen] = useState(false);
   const [fixRefusal, setFixRefusal] = useState<FixGridCompare | null>(null);
   const fixStartRef = useRef<FixGridImage | null>(null);
-  // False once this body has gone: a fix that answers later does nothing. The
-  // worker stays for the next image (the page ends it when it goes).
+  // False once this body has gone: a fix that answers later does nothing. A
+  // run under way ends with its worker; an idle worker stays for the next
+  // image (the page ends it when it goes).
   const bodyLiveRef = useRef(false);
   useEffect(() => {
     bodyLiveRef.current = true;
@@ -466,15 +467,27 @@ export default function PixelEditorBody({
   // The banners' lane (audit r1, finding 5): a banner takes the top of the
   // canvas area and the canvas container starts below it, so no part of the
   // image is ever under a banner, at any zoom. laneRoomRef is the height it
-  // takes now. heldRoomRef is what it took and gave back: the fit keeps that
-  // much clear above the image, so when a banner goes the image stays exactly
-  // where it is, with the banner's height as extra room above it.
+  // takes now. heldRoomRef is what a banner that went gave back: the fit keeps
+  // that much clear above the image, so when a banner goes the image stays
+  // exactly where it is, with the banner's height as extra room above it,
+  // until Zoom to fit or any zoom the person asks for (dropHeldRoom).
   const laneRef = useRef<HTMLDivElement>(null);
   const laneRoomRef = useRef(0);
   const heldRoomRef = useRef(0);
   // The lane's height the last time the fit looked: a change is the lane's
   // own doing, and the lane's effect has placed the image already.
   const laneSeenRef = useRef(0);
+  // What the fit update saw last: the fit it measured, and the canvas area
+  // (the container with the lane's room above it; null until it first
+  // looks). An area that changed with the lane in the same frame, a window
+  // resize that wraps a banner, is still followed (audit r2, finding 4).
+  const fitSeenRef = useRef(0);
+  const areaSeenRef = useRef<{ w: number; h: number } | null>(null);
+  // The zoom line screen readers hear. Only a zoom the person asked for sets
+  // it; any other zoom (the opening fit, a resize, a banner's refit) empties
+  // it, so nothing is announced that the person did not do (audit r2,
+  // finding 7).
+  const [zoomSpoken, setZoomSpoken] = useState('');
   // The device's pixels per CSS px: below one device pixel per image pixel
   // the layers draw smoothed, since nearest-neighbour would drop whole rows.
   const [dpr, setDpr] = useState(1);
@@ -992,9 +1005,13 @@ export default function PixelEditorBody({
   //     layout effect can't fire), write the transform directly and clear
   //     pendingTransformRef so no stale string carries into the next commit.
   // panRef is always updated to the (clamped) new pan so subsequent gestures
-  // pick up the current committed position.
+  // pick up the current committed position. `asked`: the person asked for
+  // this zoom, so it is announced (see zoomSpoken).
+  // zoomRef mirrors the newest zoom for callbacks that outlive a render (the
+  // ResizeObservers below): set on each render and, ahead of it, here.
+  const zoomRef = useRef(zoom);
   const commitZoomPan = useCallback(
-    (nextZoom: number, nextPan: { x: number; y: number }) => {
+    (nextZoom: number, nextPan: { x: number; y: number }, asked = false) => {
       const clampedZoom = clamp(nextZoom, minZoomRef.current, MAX_ZOOM);
       const clampedPan = clampPan(nextPan, clampedZoom);
       panRef.current = clampedPan;
@@ -1004,44 +1021,22 @@ export default function PixelEditorBody({
         pendingTransformRef.current = null;
       } else {
         pendingTransformRef.current = transform;
+        // The newest zoom at once, for the lane and size observers, which
+        // can run again before React renders it (audit r2, finding 4).
+        zoomRef.current = clampedZoom;
+        setZoomSpoken(asked ? `Zoom ${formatZoomPercent(clampedZoom)}` : '');
         setZoom(clampedZoom);
       }
     },
     [zoom, clampPan]
   );
 
-  // Mirrors of the current zoom and commit for callbacks that outlive a
-  // render (the ResizeObserver below).
-  const zoomRef = useRef(zoom);
+  // And of the commit.
   const commitRef = useRef(commitZoomPan);
   useLayoutEffect(() => {
     zoomRef.current = zoom;
     commitRef.current = commitZoomPan;
   });
-
-  // A zoom asked for by the zoom control, its menu or a shortcut: about the
-  // centre of the view (the point under the centre stays there) unless a pan
-  // is given, and animated unless the person prefers reduced motion.
-  const zoomFromControl = useCallback(
-    (nextZoom: number, nextPan?: { x: number; y: number }) => {
-      const target = clamp(nextZoom, minZoomRef.current, MAX_ZOOM);
-      const s = target / zoom;
-      const pan = nextPan ?? { x: panRef.current.x * s, y: panRef.current.y * s };
-      const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      // Where the stack is on screen now, measured before a running zoom
-      // animation is cancelled: a second press while one runs starts from
-      // there, not from where the first was heading (W2 audit r2, finding 10).
-      const from = target !== zoom && !reduce && stackRef.current ? stackRef.current.getBoundingClientRect() : null;
-      cancelZoomAnimation();
-      zoomAnimFromRef.current = from;
-      commitZoomPan(target, pan);
-    },
-    [zoom, commitZoomPan, cancelZoomAnimation]
-  );
-
-  const zoomToFit = useCallback(() => {
-    if (fit > 0) zoomFromControl(Math.min(fit, MAX_ZOOM), { x: 0, y: fitPanY(heldRoomRef.current) });
-  }, [fit, zoomFromControl]);
 
   // The fitted zoom for the canvas area as it is now, less any held room, and
   // the smallest zoom that follows from it.
@@ -1054,6 +1049,46 @@ export default function PixelEditorBody({
     return f;
   }, []);
 
+  // The room a banner gave back keeps the image where it was while nothing
+  // else moves. Any zoom the person asks for ends it, so the fit fills the
+  // canvas area again (audit r2, finding 3). Gives the fit.
+  const dropHeldRoom = useCallback(() => {
+    if (heldRoomRef.current === 0) return fitRef.current;
+    heldRoomRef.current = 0;
+    const { width, height } = useEditorStore.getState();
+    return measureFit(width, height);
+  }, [measureFit]);
+
+  // A zoom asked for by the zoom control, its menu or a shortcut: about the
+  // centre of the view (the point under the centre stays there) unless a pan
+  // is given, and animated unless the person prefers reduced motion. A
+  // banner's refit passes asked: false, which keeps the held room and
+  // announces nothing, and `from`, where the image was on screen.
+  const zoomFromControl = useCallback(
+    (nextZoom: number, nextPan?: { x: number; y: number }, { asked = true, from: shownAt }: { asked?: boolean; from?: DOMRect } = {}) => {
+      if (asked) dropHeldRoom();
+      const target = clamp(nextZoom, minZoomRef.current, MAX_ZOOM);
+      const s = target / zoom;
+      const pan = nextPan ?? { x: panRef.current.x * s, y: panRef.current.y * s };
+      const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      // Where the stack is on screen now, measured before a running zoom
+      // animation is cancelled: a second press while one runs starts from
+      // there, not from where the first was heading (W2 audit r2, finding 10).
+      const from = target !== zoom && !reduce ? (shownAt ?? stackRef.current?.getBoundingClientRect() ?? null) : null;
+      cancelZoomAnimation();
+      zoomAnimFromRef.current = from;
+      commitZoomPan(target, pan, asked);
+    },
+    [zoom, commitZoomPan, cancelZoomAnimation, dropHeldRoom]
+  );
+
+  // Zoom to fit (Cmd+0, the menu's Fit): to the whole canvas area, any room
+  // a banner held given back.
+  const zoomToFit = useCallback(() => {
+    const f = dropHeldRoom();
+    if (f > 0) zoomFromControl(Math.min(f, MAX_ZOOM), { x: 0, y: fitPanY() });
+  }, [dropHeldRoom, zoomFromControl]);
+
   // The lane's height goes to the container before the opening fit reads the
   // container (a layout effect runs before that effect) and before the frame
   // paints. Whatever it does, the image stays put on screen: the container's
@@ -1061,30 +1096,54 @@ export default function PixelEditorBody({
   // image the lane takes room from eases down to the new fit, and one that
   // would end up behind the lane moves clear of it.
   const bannerShown = fixNotice !== undefined || fixRefusal !== null;
+  // How many banners the lane holds, kept for its effect below (layout effects
+  // run in order): room a banner gives back as it goes is held, but the same
+  // banners giving room back, unwrapped by a wider window, hold none, so a
+  // fitted image follows the fit as at any resize (audit r2, finding 4).
+  const bannerCount = (fixNotice !== undefined ? 1 : 0) + (fixRefusal !== null ? 1 : 0);
+  const bannerCountRef = useRef(bannerCount);
+  const laneCountRef = useRef(0);
+  useLayoutEffect(() => {
+    bannerCountRef.current = bannerCount;
+  });
   useLayoutEffect(() => {
     const place = () => {
       const container = containerRef.current;
       if (!container) return;
       const room = laneRef.current?.offsetHeight ?? 0;
       const change = room - laneRoomRef.current;
+      const went = bannerCountRef.current < laneCountRef.current;
+      laneCountRef.current = bannerCountRef.current;
       if (change === 0) return;
+      // Where the image is on screen, before an animation under way stops.
+      const shownAt = stackRef.current?.getBoundingClientRect();
       cancelZoomAnimation();
       const wasFit = fitRef.current;
       const z = zoomRef.current;
       laneRoomRef.current = room;
-      heldRoomRef.current = Math.max(0, heldRoomRef.current - change);
+      if (change > 0 || went) heldRoomRef.current = Math.max(0, heldRoomRef.current - change);
       container.style.top = `${room}px`;
       const gesture = gestureRef.current;
       const pan = { x: panRef.current.x, y: panRef.current.y - change / 2 };
       if (gesture) gesture.startPan.y -= change / 2;
       // By the props: as a body opens, the store still holds the last image.
       const f = measureFit(frameWidth, frameHeight);
-      const held = change > 0 && !gesture ? clampPan(pan, z) : pan;
+      // An image that no longer fits is refitted, and its pan is not bounded
+      // first: it stays where it is on screen and eases from there to the new
+      // fit, or moves there once under reduced motion (audit r2, finding 2:
+      // bounding it first dropped it under the zoom control for a frame).
+      const refit = change > 0 && !gesture && f > 0 && z <= wasFit + 1e-6 && z > f + 1e-6;
+      // Unwrapped banners give a fitted image its room at once, as a resize
+      // does; it was fitted, so it grows to the new fit.
+      const regrow = change < 0 && !went && !gesture && f > 0 && Math.abs(z - Math.min(wasFit, MAX_ZOOM)) < 1e-6 && f > z + 1e-6;
+      const held = change > 0 && !gesture && !refit ? clampPan(pan, z) : pan;
       panRef.current = held;
       if (gesture) return;
       if (stackRef.current) stackRef.current.style.transform = `translate3d(${held.x}px, ${held.y}px, 0)`;
-      if (change > 0 && f > 0 && z <= wasFit + 1e-6 && z > f + 1e-6) {
-        zoomFromControl(Math.min(f, MAX_ZOOM), { x: 0, y: fitPanY(heldRoomRef.current) });
+      if (refit) {
+        zoomFromControl(Math.min(f, MAX_ZOOM), { x: 0, y: fitPanY(heldRoomRef.current) }, { asked: false, from: shownAt });
+      } else if (regrow) {
+        commitRef.current(Math.min(f, MAX_ZOOM), { x: 0, y: fitPanY(heldRoomRef.current) });
       }
     };
     place();
@@ -1095,9 +1154,13 @@ export default function PixelEditorBody({
     return () => ro.disconnect();
   }, [bannerShown, frameWidth, frameHeight, zoomFromControl, cancelZoomAnimation, clampPan, measureFit]);
 
+  // The control's minus and plus, from the fit with no held room.
   const zoomStep = useCallback(
-    (dir: 1 | -1) => zoomFromControl(nextZoomStep(zoom, dir, fit, minZoomRef.current, MAX_ZOOM)),
-    [zoom, fit, zoomFromControl]
+    (dir: 1 | -1) => {
+      const f = dropHeldRoom();
+      zoomFromControl(nextZoomStep(zoom, dir, f, minZoomRef.current, MAX_ZOOM));
+    },
+    [zoom, dropHeldRoom, zoomFromControl]
   );
 
   // Zoom shortcuts while the editor is open (W2): Cmd (Mac) or Ctrl with +,
@@ -1277,12 +1340,13 @@ export default function PixelEditorBody({
         // wheel arriving during one is not zoomed twice.
         const pinch = safariPinchRef.current;
         if (pinch && performance.now() - pinch.at < 500) return;
+        dropHeldRoom();
         const s = Math.exp(-e.deltaY * 0.0015);
         const newZoom = clamp(zoom * s, minZoomRef.current, MAX_ZOOM);
         if (newZoom === zoom) return;
         const stackRect = stackRef.current?.getBoundingClientRect();
         if (!stackRect) return;
-        commitZoomPan(newZoom, anchoredPan(zoom, newZoom, { x: e.clientX - stackRect.left, y: e.clientY - stackRect.top }));
+        commitZoomPan(newZoom, anchoredPan(zoom, newZoom, { x: e.clientX - stackRect.left, y: e.clientY - stackRect.top }), true);
       } else {
         // Plain wheel / two-finger swipe = pan (clamped). No zoom change, so
         // write the transform directly; no setZoom / pendingTransform needed.
@@ -1298,7 +1362,7 @@ export default function PixelEditorBody({
     };
     container.addEventListener('wheel', handler, { passive: false });
     return () => container.removeEventListener('wheel', handler);
-  }, [zoom, commitZoomPan, clampPan, cancelZoomAnimation, anchoredPan]);
+  }, [zoom, commitZoomPan, clampPan, cancelZoomAnimation, anchoredPan, dropHeldRoom]);
 
   // Fit (W2): recompute the fitted zoom whenever the canvas area or the
   // image size changes (window resize, the side panel, a new image).
@@ -1306,12 +1370,23 @@ export default function PixelEditorBody({
     const container = containerRef.current;
     if (!container) return;
     const update = () => {
+      // The fit before this look. The lane's effect may have measured it in
+      // this frame already, so the fit this update saw last counts too.
       const prev = fitRef.current;
+      const seen = fitSeenRef.current;
       const f = measureFit(editorWidth, editorHeight);
+      fitSeenRef.current = f;
       setDpr(window.devicePixelRatio || 1);
+      // When only the lane moved, its effect has placed the image. When the
+      // canvas area changed as well, the image follows the fit here, as at
+      // any resize, whichever observer ran first.
+      const area = { w: container.clientWidth, h: container.clientHeight + laneRoomRef.current };
+      const lastArea = areaSeenRef.current;
+      areaSeenRef.current = area;
+      const areaChanged = lastArea !== null && (area.w !== lastArea.w || area.h !== lastArea.h);
       const laneMoved = laneSeenRef.current !== laneRoomRef.current;
       laneSeenRef.current = laneRoomRef.current;
-      if (!(f > 0) || laneMoved) return;
+      if (!(f > 0) || (laneMoved && !areaChanged)) return;
       // Not during a pinch: its own commit lands the zoom when the fingers
       // lift, against the new smallest zoom (W2 audit r2, finding 8: a commit
       // here replaced the live pinch under the fingers).
@@ -1326,6 +1401,7 @@ export default function PixelEditorBody({
       openedFitRef.current = 0;
       const atFit =
         (prev > 0 && Math.abs(z - Math.min(prev, MAX_ZOOM)) < 1e-6) ||
+        (seen > 0 && Math.abs(z - Math.min(seen, MAX_ZOOM)) < 1e-6) ||
         (openedAt > 0 && Math.abs(z - openedAt) < 1e-6);
       if (atFit || z < minZoomRef.current - 1e-9) {
         openedUnfittedRef.current = false;
@@ -1360,6 +1436,7 @@ export default function PixelEditorBody({
       e.preventDefault();
       if (touching()) return;
       cancelZoomAnimation();
+      dropHeldRoom();
       safariPinchRef.current = { startZoom: zoom, at: performance.now() };
     };
     const onChange = (e: Event) => {
@@ -1376,7 +1453,7 @@ export default function PixelEditorBody({
       const cx = Number.isFinite(ge.clientX) ? (ge.clientX as number) : box.left + box.width / 2;
       const cy = Number.isFinite(ge.clientY) ? (ge.clientY as number) : box.top + box.height / 2;
       start.at = performance.now();
-      commitZoomPan(newZoom, anchoredPan(zoom, newZoom, { x: cx - stackRect.left, y: cy - stackRect.top }));
+      commitZoomPan(newZoom, anchoredPan(zoom, newZoom, { x: cx - stackRect.left, y: cy - stackRect.top }), true);
     };
     const onEnd = (e: Event) => {
       e.preventDefault();
@@ -1395,7 +1472,7 @@ export default function PixelEditorBody({
       container.removeEventListener('gestureend', onEnd);
       window.removeEventListener('blur', onBlur);
     };
-  }, [zoom, commitZoomPan, cancelZoomAnimation, anchoredPan]);
+  }, [zoom, commitZoomPan, cancelZoomAnimation, anchoredPan, dropHeldRoom]);
 
   // Wave 2a getPixelCoords — accepts a {clientX, clientY} payload (so it
   // works with pointer / wheel / synthetic events) and derives the visual
@@ -1540,6 +1617,9 @@ export default function PixelEditorBody({
         }
         gestureSessionRef.current = true;
         cancelZoomAnimation();
+        // A pinch is a zoom the person asks for. The room a banner held goes
+        // as it starts, so the pinch is bounded by the whole area's fit.
+        dropHeldRoom();
         const ids = Array.from(pointersRef.current.keys());
         const p0Id = ids[0];
         const p1Id = ids[1];
@@ -1563,7 +1643,7 @@ export default function PixelEditorBody({
       }
       // size > 2: ignore extra pointers (still captured/tracked, but no behavior).
     },
-    [tool, beginStroke, isDrawing, applyAt, cancelStroke, getPixelCoords, zoom, cancelZoomAnimation]
+    [tool, beginStroke, isDrawing, applyAt, cancelStroke, getPixelCoords, zoom, cancelZoomAnimation, dropHeldRoom]
   );
 
   const handlePointerMove = useCallback(
@@ -1665,7 +1745,7 @@ export default function PixelEditorBody({
           x: panRef.current.x + (width * (newZoom - g.startZoom)) / 2,
           y: panRef.current.y + (height * (newZoom - g.startZoom)) / 2,
         };
-        commitZoomPan(newZoom, correctedPan);
+        commitZoomPan(newZoom, correctedPan, newZoom !== g.startZoom);
         gestureRef.current = null;
         // gestureSessionRef stays true until size === 0 (spec rule 4).
       } else if (isDrawing && size === 0) {
@@ -2049,11 +2129,19 @@ export default function PixelEditorBody({
     const start = fixStartRef.current;
     const refused = fixRefusal;
     dropFixRefusal();
-    if (!refused || !start || !sameImage(start, useEditorStore.getState())) return;
+    if (!refused || !start) return;
+    // The image can have changed before the edit watch above has taken the
+    // banner down (an undo by its shortcut and a press here in one moment):
+    // the result is older than the image, so it is dropped, and said so, as
+    // Use does (audit r2, finding 9).
+    if (!sameImage(start, useEditorStore.getState())) {
+      showFixToast(FIX_GRID_CHANGED);
+      return;
+    }
     fixButtonRef.current?.focus({ preventScroll: true });
     setFixCompare(refused);
     setFixOpen(true);
-  }, [fixRefusal, dropFixRefusal]);
+  }, [fixRefusal, dropFixRefusal, showFixToast]);
 
   const handleUseFixed = useCallback(() => {
     if (!fixOpen || !fixCompare || !onReplaceImage) return;
@@ -2069,9 +2157,11 @@ export default function PixelEditorBody({
     const before = { dataUrl: fixCompare.beforeUrl, width: fixCompare.inW, height: fixCompare.inH };
     // This image's session ends by the person's choice: its edits stay in
     // its draft, which is listed on the Editor and not offered on Generate.
-    void closeEditorDraft(draftKey);
+    // A fixed image not yet edited (its banner still up) is the exception:
+    // the page discards its draft and keeps the first way back.
+    closeDraftForUse(draftKey, fixNotice !== undefined);
     onReplaceImage({ dataUrl: fixCompare.afterUrl, width: fixCompare.outW, height: fixCompare.outH }, before);
-  }, [fixOpen, fixCompare, onReplaceImage, showFixToast, draftKey]);
+  }, [fixOpen, fixCompare, onReplaceImage, showFixToast, draftKey, fixNotice]);
 
   // The banner goes at the first edit. Subscribed from an effect, which runs
   // after the last image's body has reset the store: during this body's first
@@ -2475,10 +2565,11 @@ export default function PixelEditorBody({
             pointer-capturing container below, so presses never reach the
             gesture handlers. A fitted image sits above it (FIT_PAD_BOTTOM). */}
         <div ref={zoomPillRef} className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-0.5 p-0.5 rounded-xl bg-bg-primary/90 backdrop-blur-sm border border-border-subtle">
-          {/* Zoom changes are announced, as the old readout's were (W2 audit
-              r2, finding 6). */}
+          {/* The zooms the person asks for are announced, as the old
+              readout's were (W2 audit r2, finding 6); a fit that follows the
+              area or a banner is not (audit r2, finding 7). */}
           <span className="sr-only" aria-live="polite" aria-atomic="true">
-            {`Zoom ${formatZoomPercent(zoom)}`}
+            {zoomSpoken}
           </span>
           <button
             onClick={() => zoomStep(-1)}

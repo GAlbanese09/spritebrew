@@ -92,6 +92,16 @@ export function closeEditorDraft(key: string): Promise<void> {
   return afterWrites(key, () => editorDraftStore().markClosed(key));
 }
 
+/** "Use fixed image" ends the session of the image it was pressed on, by the
+ *  person's choice, so its draft is closed as at Save or Back. Not for a
+ *  fixed image with no edit of its own (`uneditedFix`, its banner still up):
+ *  the page discards that draft and keeps the first way back, so it is not
+ *  saved again, and a prune cannot cost an older draft for it (with five
+ *  drafts, Fix, Use, Fix, Use, Undo fix used to leave four). */
+export function closeDraftForUse(key: string, uneditedFix: boolean): void {
+  if (!uneditedFix) void closeEditorDraft(key);
+}
+
 interface UseEditorRecoveryOptions {
   /** Off only where there is nothing to save. */
   enabled: boolean;
@@ -180,7 +190,8 @@ export function useEditorRecovery({
     // and handing the bytes straight to saveDraft (which copies them) is what
     // makes this safe against the unmount reset() that nulls the store while a
     // save is still in flight.
-    const snapshot = (): { project: SpriteProjectV1; bytes: Uint8ClampedArray } | null => {
+    // `unedited`: an image saved with no edit of its own (saveUnedited).
+    const snapshot = (): { project: SpriteProjectV1; bytes: Uint8ClampedArray; unedited: boolean } | null => {
       const s = useEditorStore.getState();
       if (s.historyIndex < firstSavedRef.current) return null;
       const project = s.toProject();
@@ -188,7 +199,7 @@ export function useEditorRecovery({
       const bytes = s.getFramePixels(project.frames[0].id);
       if (!bytes) return null;
       project.color.palette = getPaletteRef.current() ?? [];
-      return { project, bytes: new Uint8ClampedArray(bytes) };
+      return { project, bytes: new Uint8ClampedArray(bytes), unedited: s.historyIndex < 1 };
     };
 
     const scheduleSave = () => {
@@ -224,12 +235,18 @@ export function useEditorRecovery({
       const snap = snapshot();
       if (!snap) return;
       wrote = true;
+      // A fixed image saved as it opens makes room for itself only once it is
+      // edited or left: Undo fix discards its draft straight away, and a
+      // prune before that cost an older draft for nothing (audit r2, finding
+      // 5). Every other save prunes as before: without saveUnedited (the
+      // modal editors) no save is ever unedited.
+      const prune = last || !snap.unedited;
       // Queued behind the writes already asked for, so a Discard or a close
       // asked for after this write comes after it too.
       void afterWrites(projectKey, async () => {
         try {
           await store.saveDraft({ projectKey, project: snap.project, bytes: snap.bytes, reason, owner, surface });
-          void store.prune(MAX_DRAFTS, projectKey).catch(() => { /* best-effort */ });
+          if (prune) void store.prune(MAX_DRAFTS, projectKey).catch(() => { /* best-effort */ });
           if (!persistRequested) { persistRequested = true; void requestPersistentStorage(); }
         } catch (err) {
           if (isDevHost()) console.warn('[editorRecovery] save failed', err);

@@ -214,5 +214,11 @@
     "version": "0.5.15",
     "license": "MIT",
     "repository": "https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg"
+  },
+  {
+    "name": "Rust standard library",
+    "version": "1.99.1",
+    "license": "MIT OR Apache-2.0",
+    "repository": "https://github.com/rust-lang/rust"
   }
 ]

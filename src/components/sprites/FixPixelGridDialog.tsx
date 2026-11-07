@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import { Description, Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/react';
 import { GripVertical } from 'lucide-react';
 import Button from '@/components/ui/Button';
@@ -69,6 +69,21 @@ function CompareView({ compare, checkerboard }: { compare: FixGridCompare; check
     const ro = new ResizeObserver(measure);
     ro.observe(box);
     return () => ro.disconnect();
+  }, []);
+
+  // On a touch screen HeadlessUI leaves focus on the dialog itself, so that
+  // no keyboard opens over a text field. The divider is no text field, so it
+  // takes focus there too, as it does from a keyboard: a frame after the
+  // dialog has placed its own, which comes after this view's effects.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const slider = sliderRef.current;
+      const active = document.activeElement;
+      if (slider && active instanceof HTMLElement && active !== slider && active.getAttribute('role') === 'dialog' && active.contains(slider)) {
+        slider.focus({ preventScroll: true });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   const moveTo = useCallback((clientX: number) => {

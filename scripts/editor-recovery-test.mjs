@@ -52,22 +52,27 @@ const FAKE_REACT = lines(
 );
 const CLERK = 'export function useAuth() { return globalThis.__auth; }';
 const FAKE_RECOVERY = lines(
+  // The real rule for which drafts a prune deletes (pure).
+  `import { draftsToPrune } from ${JSON.stringify(path.join(ROOT, 'src/lib/editorRecovery/drafts.ts'))};`,
   'export const MAX_DRAFTS = 5;',
   'export function draftVisibleTo(m, owner) { return m.owner === undefined || m.owner === null || m.owner === owner; }',
-  'const db = (globalThis.__draftDb ??= { manifests: new Map(), log: [], gate: null });',
+  'const db = (globalThis.__draftDb ??= { manifests: new Map(), log: [], gate: null, clock: 0 });',
   'export class IndexedDbDraftStore {',
   '  async saveDraft(input) {',
   '    db.log.push(["save", input.projectKey, input.reason, input.owner, input.surface, input.bytes[0]]);',
   '    if (db.gate) await db.gate();',
   '    const existing = db.manifests.get(input.projectKey);',
-  '    db.manifests.set(input.projectKey, { draftId: input.projectKey, owner: input.owner !== undefined ? input.owner : existing && existing.owner, surface: input.surface, bytes0: input.bytes[0] });',
+  '    db.manifests.set(input.projectKey, { draftId: input.projectKey, owner: input.owner !== undefined ? input.owner : existing && existing.owner, surface: input.surface, bytes0: input.bytes[0], updatedAt: 1000 + ++db.clock, closedAt: existing && existing.closedAt });',
   '    db.log.push(["saved", input.projectKey]);',
   '    return { manifest: db.manifests.get(input.projectKey) };',
   '  }',
   '  async getLatest(id) { const m = db.manifests.get(id); return m ? { manifest: m } : null; }',
   '  async markClosed(id) { db.log.push(["close", id]); const m = db.manifests.get(id); if (m) m.closedAt = 1; }',
   '  async deleteDraft(id) { db.log.push(["delete", id]); db.manifests.delete(id); }',
-  '  async prune(keep, protect) { db.log.push(["prune", keep, protect]); }',
+  '  async prune(keep, protect) {',
+  '    db.log.push(["prune", keep, protect]);',
+  '    for (const m of draftsToPrune([...db.manifests.values()], keep, protect)) { db.manifests.delete(m.draftId); db.log.push(["pruned", m.draftId]); }',
+  '  }',
   '}',
   'export async function isRecoveryAvailable() { return true; }',
   'export async function requestPersistentStorage() { return false; }',
@@ -578,6 +583,119 @@ for (const existing of [false, true]) {
   await advance(2000);
   check('an empty store has nothing to save', saves().filter((e) => e[1] === 'page:empty23').length === 0, db.log);
   gone.unmount();
+}
+
+// The draft cap and "Fix pixel grid" (audit r2, finding 5). Five closed drafts
+// from earlier sessions are on the device; the store's prune follows the real
+// rule (drafts.ts draftsToPrune), so a prune past five deletes the oldest.
+async function atTheCap() {
+  await advance(100);
+  db.log.length = 0;
+  db.manifests.clear();
+  db.gate = null;
+  timers = [];
+  globalThis.__auth = { isLoaded: true, userId: 'user_a' };
+  for (let i = 1; i <= 5; i++) db.manifests.set(`page:old${i}`, { draftId: `page:old${i}`, owner: 'user_a', updatedAt: i, closedAt: 1 });
+}
+const oldKept = () => [1, 2, 3, 4, 5].filter((i) => db.manifests.has(`page:old${i}`)).length;
+/** An image opened on the page: its session, mounted once the image is in. */
+async function open(key, saveUnedited) {
+  R.useEditorStore.getState().reset();
+  loadFrame();
+  const c = R.mount(() => R.useEditorRecovery({ enabled: true, getPalette: () => [], projectKey: key, surface: 'page', saveUnedited }));
+  await drain();
+  return c;
+}
+
+// 24. Fix, Use, Undo fix with five saved drafts leaves the five.
+{
+  await atTheCap();
+  const original = await open('page:original', false);
+  R.closeDraftForUse('page:original', false);
+  original.unmount();
+  const fixed = await open('page:fixed', true);
+  const afterOpen = { drafts: db.manifests.size, prunes: db.log.filter((e) => e[0] === 'prune').length };
+  await R.discardEditorDraft('page:fixed');
+  fixed.unmount();
+  await advance(2000);
+  check('five drafts, Fix, Use: the fixed image is saved as it opens, and that first unedited save prunes nothing',
+    afterOpen.drafts === 6 && afterOpen.prunes === 0 && db.log.some((e) => e[0] === 'save' && e[1] === 'page:fixed'), { afterOpen, log: db.log });
+  check('then Undo fix: five drafts again, the same five', db.manifests.size === 5 && oldKept() === 5 && !db.log.some((e) => e[0] === 'pruned'), db.log);
+}
+
+// 25. The pruning waits for the fixed image's first edit, or for it being left.
+{
+  await atTheCap();
+  const fixed = await open('page:fixed-edited', true);
+  const before = db.manifests.size;
+  edit();
+  await advance(1000);
+  check('its first edit saves it and prunes: back to five, the oldest draft gone',
+    before === 6 && db.manifests.size === 5 && db.manifests.has('page:fixed-edited') && !db.manifests.has('page:old1') && oldKept() === 4, db.log);
+  fixed.unmount();
+
+  await atTheCap();
+  const left = await open('page:fixed-left', true);
+  const closing = R.closeEditorDraft('page:fixed-left');
+  left.unmount();
+  await closing;
+  await advance(100);
+  check('left unedited (Back, Save, Leave), it prunes as it goes: five, the fixed image among them',
+    db.manifests.size === 5 && db.manifests.has('page:fixed-left') && db.log.some((e) => e[0] === 'prune' && e[2] === 'page:fixed-left'), db.log);
+}
+
+// 26. Fix, Use, Fix, Use, Undo fix: "Use fixed image" on a fixed image with no
+// edit of its own does not close its draft (the page discards it), so the
+// chain keeps all five. Closing it first, as Use did, cost one.
+for (const closeTheMiddle of [false, true]) {
+  await atTheCap();
+  const original = await open('page:chain-original', false);
+  R.closeDraftForUse('page:chain-original', false);
+  original.unmount();
+  const first = await open('page:chain-fixed1', true);
+  if (closeTheMiddle) R.closeDraftForUse('page:chain-fixed1', false);
+  else R.closeDraftForUse('page:chain-fixed1', true);
+  await R.discardEditorDraft('page:chain-fixed1');
+  first.unmount();
+  const second = await open('page:chain-fixed2', true);
+  await R.discardEditorDraft('page:chain-fixed2');
+  second.unmount();
+  await advance(2000);
+  if (closeTheMiddle) {
+    check('(closing the middle image first, as Use did, pushes an older draft out: four left)', oldKept() === 4, db.log);
+  } else {
+    check('five drafts, Fix, Use, Fix, Use, Undo fix: the same five left, the middle image neither saved again nor closed',
+      db.manifests.size === 5 && oldKept() === 5 && db.log.filter((e) => e[0] === 'save' && e[1] === 'page:chain-fixed1').length === 1 && !db.log.some((e) => e[0] === 'close' && e[1] === 'page:chain-fixed1'), db.log);
+  }
+}
+
+// 27. The modal editors, which never pass saveUnedited, are as they were:
+// nothing saved without an edit, and every save, of whatever kind, prunes.
+{
+  await atTheCap();
+  R.useEditorStore.getState().reset();
+  loadFrame();
+  const modal = R.mount(() => R.useEditorRecovery({ enabled: true, getPalette: () => [], projectKey: 'modal:as-before', surface: 'modal' }));
+  await drain();
+  await advance(3000);
+  const unedited = saves().length;
+  edit();
+  await advance(1000);
+  edit();
+  await advance(300);
+  doc.visibilityState = 'hidden';
+  doc.dispatchEvent(new Event('visibilitychange'));
+  await drain();
+  doc.visibilityState = 'visible';
+  edit();
+  const closing = R.closeEditorDraft('modal:as-before');
+  modal.unmount();
+  await closing;
+  await advance(100);
+  const kinds = saves().map((e) => e[2]);
+  const prunes = db.log.filter((e) => e[0] === 'prune' && e[2] === 'modal:as-before').length;
+  check('a modal session saves nothing unedited, and each of its saves (edit, lifecycle, explicit) prunes, as before',
+    unedited === 0 && JSON.stringify(kinds) === JSON.stringify(['edit', 'lifecycle', 'explicit']) && prunes === 3 && db.manifests.size === 5 && oldKept() === 4, { kinds, prunes, log: db.log });
 }
 
 console.log(`${pass} passed, ${fail} failed`);

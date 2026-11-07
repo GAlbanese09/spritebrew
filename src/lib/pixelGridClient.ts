@@ -10,16 +10,15 @@ const FIX_TIMEOUT_MS = 60_000;
 
 let worker: Worker | null = null;
 let nextId = 0;
-let inFlight: { reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> } | null = null;
+let inFlight: { id: number; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> } | null = null;
 
-/** Fails the request under way, if any, and keeps the worker and its compiled
- *  fixer for the next image: a new image in the editor only cancels. The
- *  worker finishes what it holds and no one is listening for that answer. */
-export function cancelPixelGrid(): void {
-  if (!inFlight) return;
-  clearTimeout(inFlight.timer);
-  inFlight.reject(new Error('Fix pixel grid stopped'));
+/** Fails the request under way, if any. */
+function failInFlight(): void {
+  const request = inFlight;
+  if (!request) return;
   inFlight = null;
+  clearTimeout(request.timer);
+  request.reject(new Error('Fix pixel grid stopped'));
 }
 
 /** Ends the worker and fails any request under way, for when the editor page
@@ -27,7 +26,15 @@ export function cancelPixelGrid(): void {
 export function terminatePixelGrid(): void {
   worker?.terminate();
   worker = null;
-  cancelPixelGrid();
+  failInFlight();
+}
+
+/** Stops "Fix pixel grid" for a new image. A run under way fails, and its
+ *  worker is ended with it: the worker would finish that run before starting
+ *  the next image's, which then waited for both (audit r2, finding 10). An
+ *  idle worker, and the fixer it has compiled, are kept for the next image. */
+export function cancelPixelGrid(): void {
+  if (inFlight) terminatePixelGrid();
 }
 
 /** Runs the fixer on a PNG, one request at a time, and gives the fixed PNG.
@@ -41,13 +48,14 @@ export function fixPixelGrid(png: ArrayBuffer): Promise<ArrayBuffer> {
     }
     const w = (worker ??= new Worker(new URL('../workers/pixelGrid.worker.ts', import.meta.url)));
     const id = ++nextId;
+    // This request's own time: it ends only this request, never a later one.
     const timer = setTimeout(() => {
-      terminatePixelGrid();
+      if (inFlight?.id === id) terminatePixelGrid();
     }, FIX_TIMEOUT_MS);
-    inFlight = { reject, timer };
+    inFlight = { id, reject, timer };
     w.onmessage = (e: MessageEvent<PixelGridReply>) => {
       const reply = e.data;
-      if (reply.id !== id) return;
+      if (reply.id !== id || inFlight?.id !== id) return;
       clearTimeout(timer);
       inFlight = null;
       if (reply.ok) resolve(reply.png);

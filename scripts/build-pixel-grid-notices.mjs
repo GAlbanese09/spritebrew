@@ -2,15 +2,18 @@
 //
 // Writes the license notices for public/wasm/pixel-grid.wasm: every crate
 // compiled into it, from cargo metadata, with the license it is taken under
-// and its copyright lines, then each license text once.
+// and its copyright lines, the Rust standard library with its own notices
+// (COPYRIGHT-library.html from the pinned toolchain, as text), then each
+// license text once.
 //   public/wasm/THIRD-PARTY-NOTICES.txt  served beside the .wasm
 //   src/lib/pixelGridCredits.json        the rows of /credits
 // Deterministic: sorted, no dates, no paths, so a rerun leaves git status
 // clean. scripts/build-pixel-grid-wasm.sh runs it after copying the .wasm.
-// Exits non-zero when a crate offers no license this may take: stop and report.
+// Exits non-zero when a crate offers no license this may take, or when the
+// toolchain's notices are missing: stop and report.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,25 +41,25 @@ const order = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const byName = (a, b) => order(a.name, b.name) || order(a.version, b.version);
 const readText = (file) => readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 
-/** cargo metadata for the .wasm's target, run the way the build script runs
- *  cargo: rust-toolchain.toml would otherwise make rustup download one. */
-function metadata() {
+/** Runs a Rust tool in the crate the way the build script runs cargo:
+ *  rust-toolchain.toml would otherwise make rustup download a toolchain. */
+function rustTool(command, args) {
   const cargoHome = process.env.CARGO_HOME ?? path.join(homedir(), '.cargo');
-  const stdout = execFileSync(
-    'cargo',
-    ['metadata', '--format-version', '1', '--locked', '--filter-platform', 'wasm32-unknown-unknown'],
-    {
-      cwd: CRATE,
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-      env: {
-        ...process.env,
-        RUSTUP_TOOLCHAIN: process.env.RUSTUP_TOOLCHAIN ?? 'stable',
-        PATH: `${path.join(cargoHome, 'bin')}${path.delimiter}${process.env.PATH}`,
-      },
+  return execFileSync(command, args, {
+    cwd: CRATE,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    env: {
+      ...process.env,
+      RUSTUP_TOOLCHAIN: process.env.RUSTUP_TOOLCHAIN ?? 'stable',
+      PATH: `${path.join(cargoHome, 'bin')}${path.delimiter}${process.env.PATH}`,
     },
-  );
-  return JSON.parse(stdout);
+  });
+}
+
+/** cargo metadata for the .wasm's target. */
+function metadata() {
+  return JSON.parse(rustTool('cargo', ['metadata', '--format-version', '1', '--locked', '--filter-platform', 'wasm32-unknown-unknown']));
 }
 
 /** Every crate compiled into the .wasm: normal dependencies from the root,
@@ -156,6 +159,59 @@ function rustVersion() {
   return pin ? pin[1] : stop('rust-toolchain.toml names no channel');
 }
 
+/** Entities a page's text may hold: the named ones and numeric ones. */
+const NAMED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+function decodeEntities(text) {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, name) => {
+    if (name[0] !== '#') return NAMED_ENTITIES[name.toLowerCase()] ?? whole;
+    const code = /^#x/i.test(name) ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+    return Number.isInteger(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+  });
+}
+
+/** The tags that start a line of their own when a page becomes text. */
+const BLOCK_TAG = /^(br|dd|details|div|dl|dt|h[1-6]|hr|li|ol|p|pre|section|summary|table|td|th|tr|ul)$/i;
+
+/** A page's body as plain text: no tags, entities decoded, a line for each
+ *  block, preformatted text (the license texts) exactly as written. */
+function htmlToText(html) {
+  const body = /<body[^>]*>([\s\S]*)<\/body>/i.exec(html)?.[1] ?? html;
+  const flow = (part) => decodeEntities(
+    part
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/\s+/g, ' ')
+      .replace(/<\/?([a-z0-9]+)[^>]*>/gi, (_, tag) => (BLOCK_TAG.test(tag) ? '\n' : '')),
+  );
+  let text = '';
+  let at = 0;
+  const pre = /<pre[^>]*>([\s\S]*?)<\/pre>/gi;
+  for (let m; (m = pre.exec(body));) {
+    text += flow(body.slice(at, m.index));
+    text += `\n${decodeEntities(m[1].replace(/<[^>]*>/g, '')).replace(/^\n+|\s+$/g, '')}\n`;
+    at = m.index + m[0].length;
+  }
+  text += flow(body.slice(at));
+  return text
+    .split('\n')
+    .map((line) => line.replace(/^ +|[ \t]+$/g, ''))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** The standard library's own notices from the toolchain the build uses:
+ *  the crates it is built with (hashbrown, dlmalloc and the rest) and their
+ *  license texts, as the toolchain ships them in COPYRIGHT-library.html. */
+function standardLibraryNotices(version) {
+  const found = rustTool('rustc', ['--version']).trim();
+  if (!found.startsWith(`rustc ${version} `)) stop(`the toolchain is '${found}', not the pinned ${version}`);
+  const file = path.join(rustTool('rustc', ['--print', 'sysroot']).trim(), 'share/doc/rust/COPYRIGHT-library.html');
+  if (!existsSync(file)) stop(`the toolchain has no ${file}: the standard library's notices cannot be written`);
+  const text = htmlToText(readText(file));
+  if (!text.includes('hashbrown') || !text.includes('dlmalloc')) stop(`${file} does not list hashbrown and dlmalloc`);
+  return text;
+}
+
 /** The text after a license's title and copyright lines, from `opening` on. */
 function licenseBody(text, opening) {
   const at = text.indexOf(opening);
@@ -183,20 +239,34 @@ if (bsdBodies.size !== 1) stop('the BSD-3-Clause crates do not share one license
 
 const block = ({ name, version, license, copyright }) => [`${name} ${version}`, `License: ${license}`, ...copyright].join('\n');
 
+/** The standard library: its entry here, and its row on /credits, which
+ *  gives the license it is offered under and its repository. */
+const STD = {
+  name: 'Rust standard library',
+  version: rustVersion(),
+  offered: 'MIT OR Apache-2.0',
+  repository: 'https://github.com/rust-lang/rust',
+};
+
 const notices = [
   'Third-party software in pixel-grid.wasm',
   'pixel-grid.wasm is the WebAssembly build behind "Fix pixel grid" in SpriteBrew. It contains the software listed here. '
     + 'Each entry gives the license it is used under and its copyright lines; the license texts follow the entries. '
+    + 'The Rust standard library\'s entry is followed by its own notices, which cover the crates it is built with. '
     + 'Written by scripts/build-pixel-grid-notices.mjs.',
   ...crates.map((c) => block(c.name === FIXER ? { ...c, name: FIXER_TITLE } : c)),
-  block({ name: 'Rust standard library', version: rustVersion(), license: 'MIT', copyright: ['Copyright (c) The Rust Project Developers'] }),
+  block({ name: STD.name, version: STD.version, license: 'MIT', copyright: ['Copyright (c) The Rust Project Developers'] }),
+  `Notices of the ${STD.name} ${STD.version}, from COPYRIGHT-library.html in its toolchain:`,
+  standardLibraryNotices(STD.version),
+  `End of the notices of the ${STD.name}.`,
   `MIT License\n\nApplies to every entry marked MIT, each with its copyright lines above.\n\n${licenseBody(readText(FIXER_LICENSE), 'Permission is hereby granted')}`,
   `BSD 3-Clause License\n\nApplies to every entry marked BSD-3-Clause, each with its copyright lines above.\n\n${[...bsdBodies][0]}`,
 ].join('\n\n');
 
+const rows = [
+  ...crates.map(({ name, version, license, repository: url }) => ({ name, version, license, repository: url })),
+  { name: STD.name, version: STD.version, license: STD.offered, repository: STD.repository },
+];
 writeFileSync(NOTICES, `${notices}\n`);
-writeFileSync(
-  CREDITS,
-  `${JSON.stringify(crates.map(({ name, version, license, repository: url }) => ({ name, version, license, repository: url })), null, 2)}\n`,
-);
-console.log(`notices: ${crates.length} crates and the Rust standard library`);
+writeFileSync(CREDITS, `${JSON.stringify(rows, null, 2)}\n`);
+console.log(`notices: ${crates.length} crates and the Rust standard library, with its own notices`);

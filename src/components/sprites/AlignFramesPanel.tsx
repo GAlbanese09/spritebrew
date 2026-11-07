@@ -4,9 +4,11 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObjec
 import Button from '@/components/ui/Button';
 import {
   alignmentSummary,
-  applyAlignment,
   measureFrame,
   moveWords,
+  planAlignment,
+  shiftFrame,
+  solidBackground,
   type AlignFrame,
   type AlignTarget,
   type FrameMove,
@@ -60,6 +62,30 @@ const nextTask = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 const toImageData = (frame: AlignFrame) =>
   new ImageData(new Uint8ClampedArray(frame.data), frame.width, frame.height);
 
+/** Each frame's ImageData for the previews, built once per frame. */
+const images = new WeakMap<AlignFrame, ImageData>();
+function imageOf(frame: AlignFrame): ImageData {
+  let image = images.get(frame);
+  if (!image) {
+    image = toImageData(frame);
+    images.set(frame, image);
+  }
+  return image;
+}
+
+/** Each frame's last shifted copy, kept until the frame or its move changes,
+ *  so a frame is shifted only when it is about to be drawn or committed. */
+const shifts = new WeakMap<AlignFrame, { dx: number; dy: number; frame: AlignFrame }>();
+function shiftedOnce(frame: AlignFrame, move: FrameMove): AlignFrame {
+  const kept = shifts.get(frame);
+  if (kept && kept.dx === move.dx && kept.dy === move.dy) return kept.frame;
+  const moved = shiftFrame(frame, move);
+  shifts.set(frame, { dx: move.dx, dy: move.dy, frame: moved });
+  return moved;
+}
+
+const sameList = <T,>(a: T[], b: T[]) => a.length === b.length && a.every((value, i) => value === b[i]);
+
 async function decodeFrame(url: string): Promise<AlignFrame> {
   const img = await loadImage(url);
   return imageToCanvas(img).getContext('2d')!.getImageData(0, 0, img.naturalWidth, img.naturalHeight);
@@ -100,7 +126,7 @@ function paint(canvas: HTMLCanvasElement | null, frame: AlignFrame | undefined) 
   const context = canvas?.getContext('2d');
   if (!canvas || !context || !frame) return;
   context.clearRect(0, 0, canvas.width, canvas.height);
-  context.putImageData(toImageData(frame), 0, 0);
+  context.putImageData(imageOf(frame), 0, 0);
 }
 
 function PreviewLoop({
@@ -161,6 +187,9 @@ export default function AlignFramesPanel({
 }: AlignFramesPanelProps) {
   const sheetVersion = useSpriteStore((s) => s.sheetVersion);
   const [decoded, setDecoded] = useState<Decoded | null>(null);
+  // True from the moment a decode starts until it ends. The card mounts to
+  // read its frames; its own Align or Undo is never read again.
+  const [reading, setReading] = useState(true);
   // The frame map the card's own Align or Undo is committing: it already
   // holds those pixels, so the decode skips it.
   const committedRef = useRef<Map<string, string> | null>(null);
@@ -176,14 +205,17 @@ export default function AlignFramesPanel({
     version: number;
     urls: Map<string, string>;
   } | null>(null);
-  // What the last Align did, shown until the scope, a Leave out or the sheet
-  // changes, or Undo runs.
+  // What the last Align did, shown until the scope, its frames, a Leave out
+  // or the sheet changes, or Undo runs.
   const [result, setResult] = useState<{
     version: number;
     urls: Map<string, string>;
+    ids: string[];
+    leaveOut: boolean[];
     before: AlignFrame[];
     after: AlignFrame[];
     moves: Map<string, FrameMove>;
+    filled: Set<string>;
     feetRow: number | null;
   } | null>(null);
   const [reducedMotion, setReducedMotion] = useState(
@@ -229,18 +261,26 @@ export default function AlignFramesPanel({
   const leaveOut = useMemo(() => scopeFrames.map((f) => isLeftOut(f.id)), [scopeFrames, isLeftOut]);
   const current = useMemo(() => scopeFrames.map((f) => decoded!.frames.get(f.id)!), [scopeFrames, decoded]);
   const measured = useMemo(() => scopeFrames.map((f) => decoded!.measured.get(f.id) ?? null), [scopeFrames, decoded]);
-  const { frames: next, plan } = useMemo(
-    () => applyAlignment(current, { leaveOut, measured }),
-    [current, leaveOut, measured]
-  );
+  // Only a plan: the After preview shifts each frame when it draws it.
+  const plan = useMemo(() => planAlignment(current, { leaveOut, measured }), [current, leaveOut, measured]);
   const numbers = scopeFrames.map((f) => frameNumbers.get(f.id) ?? 0);
+  const scopeIds = useMemo(() => scopeFrames.map((f) => f.id), [scopeFrames]);
+  const plannedFilled = useMemo(() => new Set(plan.filled.map((i) => scopeIds[i])), [plan, scopeIds]);
+  const solid = useMemo(
+    () => plan.refused === 'opaque' && solidBackground(current.filter((_, i) => !leaveOut[i])),
+    [plan, current, leaveOut]
+  );
 
-  const ready = decoded?.urls === frameDataUrls;
   const undoOpen = undo !== null && undo.version === sheetVersion && undo.urls === frameDataUrls;
-  const shown = result !== null && result.version === sheetVersion && result.urls === frameDataUrls ? result : null;
+  const shown = result !== null && result.version === sheetVersion && result.urls === frameDataUrls
+    && sameList(result.ids, scopeIds) && sameList(result.leaveOut, leaveOut) ? result : null;
+  const filledIds = shown?.filled ?? plannedFilled;
   // The previews: after Align, the frames as they were and as aligned.
   const before = shown?.before ?? current;
-  const after = shown?.after ?? next;
+  const afterAt = useCallback(
+    (i: number) => (shown ? shown.after[i] : current[i] && shiftedOnce(current[i], plan.moves[i])),
+    [shown, current, plan]
+  );
   const feetRow = shown ? shown.feetRow : plan.target?.feetRow ?? null;
   const showsJumpsLine = !plan.refused
     && groupFrames.some((f) => startLeftOut.has(f.id) && toggled.get(f.id) !== false);
@@ -249,8 +289,9 @@ export default function AlignFramesPanel({
   const stillStep = before.length > 0 ? still % before.length : 0;
   const looping = !reducedMotion && before.length > 1;
   // A press's result wins over the standing lines, so "Align undone." shows.
-  const line = status || (!ready ? 'Reading frames...' : plan.refused ? alignmentSummary(plan, numbers) : '');
-  const offersRemoveBackground = !status && ready && plan.refused === 'opaque' && !!onRemoveBackground;
+  const line = status || (reading ? 'Reading frames...' : plan.refused ? alignmentSummary(plan, numbers) : '');
+  // Only a solid background is one the page's banner can remove.
+  const offersRemoveBackground = !status && !reading && plan.refused === 'opaque' && solid && !!onRemoveBackground;
 
   // Wait for the card to come into view before reading any frame.
   useEffect(() => {
@@ -272,6 +313,7 @@ export default function AlignFramesPanel({
     }
     let cancelled = false;
     const timer = setTimeout(async () => {
+      setReading(true);
       try {
         const entries = await Promise.all(
           allFrames.flatMap((frame) => {
@@ -284,6 +326,8 @@ export default function AlignFramesPanel({
         setDecoded({ urls: frameDataUrls, frames, measured: measureAll(frames) });
       } catch {
         if (!cancelled) setStatus('Could not read these frames. Try slicing again.');
+      } finally {
+        if (!cancelled) setReading(false);
       }
     }, 0);
     return () => {
@@ -308,7 +352,7 @@ export default function AlignFramesPanel({
     if (steps === 0) return;
     const draw = () => {
       paint(beforeRef.current, before[stepRef.current]);
-      paint(afterRef.current, after[stepRef.current]);
+      paint(afterRef.current, afterAt(stepRef.current));
     };
     stepRef.current = reducedMotion ? stillStep : stepRef.current % steps;
     draw();
@@ -318,7 +362,7 @@ export default function AlignFramesPanel({
       draw();
     }, 1000 / Math.max(1, fps));
     return () => clearInterval(timer);
-  }, [before, after, fps, reducedMotion, stillStep, cellWidth, cellHeight]);
+  }, [before, afterAt, fps, reducedMotion, stillStep, cellWidth, cellHeight]);
 
   const changeScope = useCallback((id: string) => {
     setScopeId(id);
@@ -368,15 +412,17 @@ export default function AlignFramesPanel({
   );
 
   const handleAlign = useCallback(() => {
-    if (!ready || plan.refused) return;
+    // A frame map the card has not read yet waits for its decode.
+    if (reading || decoded?.urls !== frameDataUrls || plan.refused) return;
     void runPress(async () => {
       if (scopeFrames.length > 0 && leaveOut.every(Boolean)) {
         await nextTask();
         return 'Every frame is left out, so nothing moved.';
       }
+      const after = current.map((frame, i) => shiftedOnce(frame, plan.moves[i]));
       const moved = scopeFrames.flatMap((frame, i) => {
         const { dx, dy } = plan.moves[i];
-        return dx !== 0 || dy !== 0 ? [{ frame, pixels: next[i] }] : [];
+        return dx !== 0 || dy !== 0 ? [{ frame, pixels: after[i] }] : [];
       });
       if (moved.length === 0) {
         await nextTask();
@@ -396,12 +442,6 @@ export default function AlignFramesPanel({
       }
       const now = useSpriteStore.getState();
       const earlier = decoded!;
-      setUndo({
-        before: { sourceImage: sheet.sourceImage, urls: frameDataUrls },
-        decoded: earlier,
-        version: now.sheetVersion,
-        urls: now.frameDataUrls,
-      });
       // The card keeps the pixels it committed, so nothing is read again.
       const frames = new Map(earlier.frames);
       const bodies = new Map(earlier.measured);
@@ -410,17 +450,30 @@ export default function AlignFramesPanel({
         bodies.set(frame.id, measureFrame(pixels));
       }
       setDecoded({ urls: committed, frames, measured: bodies });
-      setResult({
-        version: now.sheetVersion,
-        urls: now.frameDataUrls,
-        before: current,
-        after: next,
-        moves: new Map(scopeFrames.map((frame, i) => [frame.id, plan.moves[i]])),
-        feetRow: plan.target?.feetRow ?? null,
-      });
+      // Undo and the applied view are for the Map the card committed. If the
+      // store holds another by now, neither is recorded.
+      if (now.frameDataUrls === committed) {
+        setUndo({
+          before: { sourceImage: sheet.sourceImage, urls: frameDataUrls },
+          decoded: earlier,
+          version: now.sheetVersion,
+          urls: committed,
+        });
+        setResult({
+          version: now.sheetVersion,
+          urls: committed,
+          ids: scopeIds,
+          leaveOut,
+          before: current,
+          after,
+          moves: new Map(scopeFrames.map((frame, i) => [frame.id, plan.moves[i]])),
+          filled: plannedFilled,
+          feetRow: plan.target?.feetRow ?? null,
+        });
+      }
       return alignmentSummary(plan, numbers);
     });
-  }, [ready, plan, scopeFrames, leaveOut, current, next, decoded, numbers, sheet, frameDataUrls, onCommit, runPress, stillCurrent]);
+  }, [reading, plan, scopeFrames, scopeIds, plannedFilled, leaveOut, current, decoded, numbers, sheet, frameDataUrls, onCommit, runPress, stillCurrent]);
 
   const handleUndo = useCallback(() => {
     if (!undo || !undoOpen) return;
@@ -527,7 +580,9 @@ export default function AlignFramesPanel({
             return (
               <li key={frame.id} className="flex items-center gap-3 py-1 text-xs font-mono">
                 <span className="w-20 flex-shrink-0 text-text-secondary">Frame {numbers[i]}</span>
-                <span className="flex-1 min-w-0 text-text-muted">{moveWords(shown?.moves.get(frame.id) ?? plan.moves[i])}</span>
+                <span className="flex-1 min-w-0 text-text-muted">
+                  {filledIds.has(frame.id) ? 'Fills its cell' : moveWords(shown?.moves.get(frame.id) ?? plan.moves[i])}
+                </span>
                 <Button
                   variant={leftOut ? 'primary' : 'ghost'}
                   size="sm"
@@ -549,7 +604,7 @@ export default function AlignFramesPanel({
             ref={alignRef}
             size="sm"
             className={DIMMED}
-            aria-disabled={busy || !ready || undefined}
+            aria-disabled={busy || reading || undefined}
             aria-busy={busy || undefined}
             onClick={handleAlign}
           >

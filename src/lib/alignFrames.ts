@@ -38,8 +38,9 @@ export interface AlignmentPlan {
   moves: FrameMove[];
   /** Null when refused, or when nothing in scope has a body and no target was given. */
   target: AlignTarget | null;
-  /** 'opaque': a frame's background is still there. 'sizes': the frames are
-   *  not all one width and height. */
+  /** 'opaque': every frame in scope with any paint fills its cell, so the
+   *  background is still there. 'sizes': the frames are not all one width and
+   *  height. */
   refused: 'opaque' | 'sizes' | null;
   /** Frames that move. */
   aligned: number;
@@ -47,6 +48,9 @@ export interface AlignmentPlan {
   alreadyInPlace: number;
   /** Indexes into `frames` (0-based) of the frames the crop guard cut. */
   shortenedFrames: number[];
+  /** Indexes into `frames` (0-based) of the frames in scope that paint half
+   *  their cell's ring or more: they get no move and do not steer the target. */
+  filled: number[];
 }
 
 /** Below this alpha a pixel is background, as in detectSprites. */
@@ -91,6 +95,12 @@ function paintedBox(frame: AlignFrame) {
   return maxX < 0 ? null : { minX, minY, maxX, maxY };
 }
 
+/** Whether any pixel has any alpha at all. */
+function hasPaint(frame: AlignFrame): boolean {
+  for (let i = 3; i < frame.data.length; i += 4) if (frame.data[i] !== 0) return true;
+  return false;
+}
+
 /** The lower middle value when the count is even. */
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
@@ -105,16 +115,22 @@ export function planAlignment(frames: AlignFrame[], options: AlignOptions = {}):
   const moves = frames.map(noMove);
 
   const scope = frames.filter((_, i) => inScope(i));
-  const refused =
-    scope.some((frame) => frame.width !== scope[0].width || frame.height !== scope[0].height) ? 'sizes'
-    : scope.some((frame) => !borderMostlyTransparent(frame.data, frame.width, frame.height)) ? 'opaque'
-    : null;
-  if (refused) {
-    return { moves, target: null, refused, aligned: 0, alreadyInPlace: 0, shortenedFrames: [] };
+  if (scope.some((frame) => frame.width !== scope[0].width || frame.height !== scope[0].height)) {
+    return { moves, target: null, refused: 'sizes', aligned: 0, alreadyInPlace: 0, shortenedFrames: [], filled: [] };
+  }
+
+  // A frame that paints half its cell's ring (a big effect, say) stays as it
+  // is. Only when every frame with paint does is the background still there;
+  // an empty frame is neither.
+  const filled = frames.flatMap((frame, i) =>
+    inScope(i) && !borderMostlyTransparent(frame.data, frame.width, frame.height) ? [i] : []);
+  const isFilled = (i: number) => filled.includes(i);
+  if (filled.length > 0 && frames.every((frame, i) => !inScope(i) || isFilled(i) || !hasPaint(frame))) {
+    return { moves, target: null, refused: 'opaque', aligned: 0, alreadyInPlace: 0, shortenedFrames: [], filled };
   }
 
   const measure = (frame: AlignFrame, i: number) => (options.measured ? options.measured[i] : measureFrame(frame));
-  const bodies = frames.map((frame, i) => (inScope(i) ? measure(frame, i) : null));
+  const bodies = frames.map((frame, i) => (inScope(i) && !isFilled(i) ? measure(frame, i) : null));
   const measured = bodies.filter((body) => body !== null);
   const target =
     options.target ??
@@ -154,7 +170,19 @@ export function planAlignment(frames: AlignFrame[], options: AlignOptions = {}):
     else if (!shortened) alreadyInPlace++;
   }
 
-  return { moves, target, refused: null, aligned, alreadyInPlace, shortenedFrames };
+  return { moves, target, refused: null, aligned, alreadyInPlace, shortenedFrames, filled };
+}
+
+/** Whether the frames look like a solid background the page's banner can
+ *  remove: every frame's four corner pixels are opaque and within 15 of one
+ *  color in each channel (the first frame's top left). False with no frames. */
+export function solidBackground(frames: AlignFrame[]): boolean {
+  if (frames.length === 0) return false;
+  const first = frames[0].data;
+  return frames.every(({ data, width, height }) =>
+    width > 0 && height > 0 && [0, width - 1, (height - 1) * width, height * width - 1].every((pixel) =>
+      data[pixel * 4 + 3] === 255
+      && [0, 1, 2].every((channel) => Math.abs(data[pixel * 4 + channel] - first[channel]) <= 15)));
 }
 
 /** A new frame with every pixel moved by (dx, dy); vacated pixels are fully
@@ -200,7 +228,10 @@ export function alignmentSummary(plan: AlignmentPlan, frameNumbers: number[]): s
   if (plan.refused === 'sizes') return 'Align needs frames of one size. Extract them with padding on, then align.';
   if (plan.refused) return 'Remove the background first, then align.';
   const stuck = plan.shortenedFrames.filter((i) => held(plan.moves[i])).length;
-  if (plan.aligned === 0 && stuck === 0) return 'These frames are already aligned.';
+  const filled = plan.filled.map((i) => `Frame ${frameNumbers[i]} fills its cell, so it stays as it is.`);
+  if (plan.aligned === 0 && stuck === 0) {
+    return filled.length > 0 ? filled.join(' ') : 'These frames are already aligned.';
+  }
   const total = plan.aligned + plan.alreadyInPlace + stuck;
   const lines = [`Aligned ${plan.aligned} of ${total} ${total === 1 ? 'frame' : 'frames'}.`];
   if (plan.alreadyInPlace > 0) {
@@ -211,5 +242,5 @@ export function alignmentSummary(plan: AlignmentPlan, frameNumbers: number[]): s
       ? `Frame ${frameNumbers[i]} could not move without cutting something off.`
       : `Frame ${frameNumbers[i]} moved as far as it could without cutting anything off.`);
   }
-  return lines.join(' ');
+  return [...lines, ...filled].join(' ');
 }

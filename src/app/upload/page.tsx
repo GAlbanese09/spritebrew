@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Download, Grid3X3, Loader2, Scan, Sparkles } from 'lucide-react';
 import UploadZone from '@/components/sprites/UploadZone';
 import SlicerConfig, { type SliceConfig } from '@/components/sprites/SlicerConfig';
 import FrameGrid from '@/components/sprites/FrameGrid';
 import AnimationPanel from '@/components/sprites/AnimationPanel';
+import AlignFramesPanel, { type AlignedSheet } from '@/components/sprites/AlignFramesPanel';
 import FrameSizeResizer from '@/components/sprites/FrameSizeResizer';
 import SpriteDetector, { type SpriteDetectorExtractResult } from '@/components/sprites/SpriteDetector';
 import BgRemovalBanner from '@/components/sprites/BgRemovalBanner';
@@ -84,6 +86,7 @@ export default function UploadPage() {
   const [sliceMode, setSliceMode] = useState<SliceMode>('grid');
   // Background removal banner: true = dismissed (user clicked Keep or Apply)
   const [bgBannerDismissed, setBgBannerDismissed] = useState(false);
+  const bgBannerRef = useRef<HTMLDivElement>(null);
   // True while a bulk-PNG ZIP is being assembled — disables the button + shows
   // a spinner. ZIP can take a few seconds on larger sheets.
   const [downloadingZip, setDownloadingZip] = useState(false);
@@ -384,6 +387,31 @@ export default function UploadPage() {
     [uploaded, fromGenerated, clearSpriteSheet, replaceSheetSource, askBeforeDiscard, ownership]
   );
 
+  /** Align frames and its Undo. As in handleBgRemoved, the new pixels go only
+   *  onto the sheet they were made from (replaceSheetSource's version guard).
+   *  The uploaded image stays as it was: slicing again starts from it. */
+  const handleAlignCommit = useCallback(
+    async (prepare: () => Promise<AlignedSheet | null>) => {
+      ownership.bump();
+      const token = ownership.capture();
+      const next = await prepare();
+      if (!next || !ownership.isCurrent(token) || !replaceSheetSource(next.sourceImage, next.urls, token.sheetVersion)) {
+        noteStale('align');
+        return false;
+      }
+      return true;
+    },
+    [replaceSheetSource, ownership]
+  );
+
+  /** Align's opaque refusal: bring the background banner back and show it.
+   *  flushSync mounts the banner's wrapper before the scroll. */
+  const handleShowBgBanner = useCallback(() => {
+    flushSync(() => setBgBannerDismissed(false));
+    const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    bgBannerRef.current?.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'center' });
+  }, []);
+
   const sliceGrid = useCallback(
     async (config: SliceConfig) => {
       if (!uploaded) return;
@@ -658,14 +686,18 @@ export default function UploadPage() {
 
       {/* Background removal banner — shown after upload if a solid background
           is detected. Non-blocking: user can Keep or Remove before proceeding. */}
+      {/* The wrapper is Align's scroll target; empty:mb-0 keeps it from
+          adding a gap while the banner shows nothing. */}
       {uploaded && !bgBannerDismissed && (
-        <BgRemovalBanner
-          imageUrl={uploaded.blobUrl}
-          imageWidth={uploaded.width}
-          imageHeight={uploaded.height}
-          onRemoved={handleBgRemoved}
-          onDismiss={() => setBgBannerDismissed(true)}
-        />
+        <div ref={bgBannerRef} className="empty:mb-0">
+          <BgRemovalBanner
+            imageUrl={uploaded.blobUrl}
+            imageWidth={uploaded.width}
+            imageHeight={uploaded.height}
+            onRemoved={handleBgRemoved}
+            onDismiss={() => setBgBannerDismissed(true)}
+          />
+        </div>
       )}
 
       {/* Mode tabs — always visible as soon as an image is uploaded, so the
@@ -751,6 +783,20 @@ export default function UploadPage() {
       {spriteSheet && (
         <div className="rounded-lg border border-border-default bg-bg-surface p-6">
           <FrameGrid frameDataUrls={frameDataUrls} />
+        </div>
+      )}
+
+      {/* Align frames, shown after slicing */}
+      {spriteSheet && (
+        <div className="rounded-lg border border-border-default bg-bg-surface p-6">
+          <AlignFramesPanel
+            key={spriteSheet.id}
+            sheet={spriteSheet}
+            animations={animations}
+            frameDataUrls={frameDataUrls}
+            onCommit={handleAlignCommit}
+            onRemoveBackground={handleShowBgBanner}
+          />
         </div>
       )}
 

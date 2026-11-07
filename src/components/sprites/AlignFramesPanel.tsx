@@ -25,6 +25,8 @@ interface AlignFramesPanelProps {
   /** Puts what `prepare` returns on the sheet it was started from; false if
    *  the sheet moved on first, or `prepare` returned null. */
   onCommit: (prepare: () => Promise<AlignedSheet | null>) => Promise<boolean>;
+  /** Brings back the page's background banner, for the opaque refusal. */
+  onRemoveBackground?: () => void;
 }
 
 /** Group types whose frames start left out: the body leaves its feet. */
@@ -33,6 +35,8 @@ const ALL_FRAMES = 'all-frames';
 const ALL_FRAMES_FPS = 8;
 /** The widest a preview is drawn, in CSS pixels, at a whole scale. */
 const PREVIEW_SIZE = 160;
+/** Dims a button that cannot act yet but keeps its focus (no native disabled). */
+const DIMMED = 'aria-disabled:opacity-40 aria-disabled:cursor-not-allowed';
 
 const CHECKERBOARD = {
   backgroundImage:
@@ -91,12 +95,14 @@ function PreviewLoop({
   cellWidth,
   cellHeight,
   feetRow,
+  looping,
 }: {
   label: string;
   canvasRef: RefObject<HTMLCanvasElement | null>;
   cellWidth: number;
   cellHeight: number;
   feetRow: number | null;
+  looping: boolean;
 }) {
   const scale = Math.max(1, Math.floor(PREVIEW_SIZE / Math.max(cellWidth, cellHeight)));
   return (
@@ -111,7 +117,7 @@ function PreviewLoop({
           width={cellWidth}
           height={cellHeight}
           role="img"
-          aria-label={`${label} aligning, frames looping`}
+          aria-label={looping ? `${label} aligning, frames looping` : `${label} aligning`}
           className="block w-full h-full pixel-art-render"
           style={{ imageRendering: 'pixelated' }}
         />
@@ -132,7 +138,13 @@ function PreviewLoop({
  * Align and Undo go through the page's commit. A pixel edit in the frame grid
  * does not move sheetVersion, so the frame map is compared as well.
  */
-export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onCommit }: AlignFramesPanelProps) {
+export default function AlignFramesPanel({
+  sheet,
+  animations,
+  frameDataUrls,
+  onCommit,
+  onRemoveBackground,
+}: AlignFramesPanelProps) {
   const sheetVersion = useSpriteStore((s) => s.sheetVersion);
   const [decoded, setDecoded] = useState<{ urls: Map<string, string>; frames: Map<string, AlignFrame> } | null>(null);
   const [scopeId, setScopeId] = useState(ALL_FRAMES);
@@ -150,15 +162,24 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
     () => typeof window !== 'undefined' && !!window.matchMedia
       && window.matchMedia('(prefers-reduced-motion: reduce)').matches
   );
+  // Frames are read once the card first comes into view.
+  const [seen, setSeen] = useState(() => typeof IntersectionObserver === 'undefined');
+  // The frame both previews show under reduced motion.
+  const [still, setStill] = useState(0);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const alignRef = useRef<HTMLButtonElement>(null);
+  const selectRef = useRef<HTMLSelectElement>(null);
   const beforeRef = useRef<HTMLCanvasElement>(null);
   const afterRef = useRef<HTMLCanvasElement>(null);
   const stepRef = useRef(0);
   const selectId = useId();
   const undoNoteId = useId();
+  const groupsLabelId = useId();
 
   const allFrames = useMemo(() => sheet.animations.flatMap((a) => a.frames), [sheet]);
   const frameNumbers = useMemo(() => new Map(allFrames.map((f, i) => [f.id, i + 1])), [allFrames]);
-  const group = animations.find((a) => a.id === scopeId && a.frames.length > 0) ?? null;
+  const groups = animations.filter((a) => a.frames.length > 0);
+  const group = groups.find((a) => a.id === scopeId) ?? null;
   const groupFrames = group?.frames ?? allFrames;
   const fps = group?.fps ?? ALL_FRAMES_FPS;
 
@@ -176,10 +197,8 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
     return [...seen.values()];
   }, [groupFrames, decoded]);
 
-  const leaveOut = useMemo(
-    () => scopeFrames.map((f) => toggled.get(f.id) ?? startLeftOut.has(f.id)),
-    [scopeFrames, toggled, startLeftOut]
-  );
+  const isLeftOut = useCallback((id: string) => toggled.get(id) ?? startLeftOut.has(id), [toggled, startLeftOut]);
+  const leaveOut = useMemo(() => scopeFrames.map((f) => isLeftOut(f.id)), [scopeFrames, isLeftOut]);
   const before = useMemo(() => scopeFrames.map((f) => decoded!.frames.get(f.id)!), [scopeFrames, decoded]);
   const { frames: after, plan } = useMemo(() => applyAlignment(before, { leaveOut }), [before, leaveOut]);
   const numbers = scopeFrames.map((f) => frameNumbers.get(f.id) ?? 0);
@@ -189,9 +208,26 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
   const showsJumpsLine = groupFrames.some((f) => startLeftOut.has(f.id) && toggled.get(f.id) !== false);
   const cellWidth = Math.max(1, ...before.map((f) => f.width));
   const cellHeight = Math.max(1, ...before.map((f) => f.height));
+  const stillStep = before.length > 0 ? still % before.length : 0;
+  const looping = !reducedMotion && before.length > 1;
+  // A press's result wins over the standing lines, so "Align undone." shows.
+  const line = status || (!ready ? 'Reading frames...' : plan.refused ? alignmentSummary(plan, numbers) : '');
+  const offersRemoveBackground = !status && ready && plan.refused === 'opaque' && !!onRemoveBackground;
+
+  // Wait for the card to come into view before reading any frame.
+  useEffect(() => {
+    const card = cardRef.current;
+    if (seen || !card) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setSeen(true);
+    });
+    observer.observe(card);
+    return () => observer.disconnect();
+  }, [seen]);
 
   // Decode each frame's pixels, after a yield so the page never freezes.
   useEffect(() => {
+    if (!seen) return;
     let cancelled = false;
     const timer = setTimeout(async () => {
       try {
@@ -210,7 +246,7 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [allFrames, frameDataUrls]);
+  }, [allFrames, frameDataUrls, seen]);
 
   // Track prefers-reduced-motion.
   useEffect(() => {
@@ -221,7 +257,8 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
     return () => query.removeEventListener('change', update);
   }, []);
 
-  // One timer steps both loops together.
+  // One timer steps both loops together. Under reduced motion nothing loops:
+  // Previous frame and Next frame step both previews instead.
   useEffect(() => {
     const steps = before.length;
     if (steps === 0) return;
@@ -229,7 +266,7 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
       paint(beforeRef.current, before[stepRef.current]);
       paint(afterRef.current, after[stepRef.current]);
     };
-    stepRef.current = reducedMotion ? 0 : stepRef.current % steps;
+    stepRef.current = reducedMotion ? stillStep : stepRef.current % steps;
     draw();
     if (reducedMotion || steps < 2) return;
     const timer = setInterval(() => {
@@ -237,7 +274,7 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
       draw();
     }, 1000 / Math.max(1, fps));
     return () => clearInterval(timer);
-  }, [before, after, fps, reducedMotion, cellWidth, cellHeight]);
+  }, [before, after, fps, reducedMotion, stillStep, cellWidth, cellHeight]);
 
   const changeScope = useCallback((id: string) => {
     setScopeId(id);
@@ -246,6 +283,16 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
 
   const toggleLeaveOut = useCallback((id: string, leftOut: boolean) => {
     setToggled((current) => new Map(current).set(id, !leftOut));
+    setStatus('');
+  }, []);
+
+  /** Leaves out every frame of a group, or brings them all back. */
+  const toggleGroup = useCallback((frames: SpriteFrame[], leftOut: boolean) => {
+    setToggled((current) => {
+      const next = new Map(current);
+      for (const frame of frames) next.set(frame.id, !leftOut);
+      return next;
+    });
     setStatus('');
   }, []);
 
@@ -312,13 +359,16 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
         return stillCurrent() ? undo.before : null;
       });
       if (!applied) return 'Undo is no longer available: the sheet changed.';
+      // Focus moves before Undo goes, so it never drops to the page. Align is
+      // not there when this scope is refused; the scope picker is.
+      (alignRef.current ?? selectRef.current)?.focus();
       setUndo(null);
       return 'Align undone.';
     });
   }, [undo, undoOpen, onCommit, runPress, stillCurrent]);
 
   return (
-    <div className="space-y-4">
+    <div ref={cardRef} className="space-y-4">
       <div>
         <h2 className="text-xs font-mono text-text-secondary uppercase tracking-wider mb-1">Align frames</h2>
         <p className="text-xs font-mono text-text-muted">
@@ -331,6 +381,7 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
           Frames to align
         </label>
         <select
+          ref={selectRef}
           id={selectId}
           value={group?.id ?? ALL_FRAMES}
           onChange={(e) => changeScope(e.target.value)}
@@ -344,6 +395,28 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
         </select>
       </div>
 
+      {!group && groups.length >= 2 && (
+        <div role="group" aria-labelledby={groupsLabelId} className="flex flex-wrap items-center gap-2">
+          <span id={groupsLabelId} className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
+            Leave out a group:
+          </span>
+          {groups.map((g) => {
+            const leftOut = g.frames.every((f) => isLeftOut(f.id));
+            return (
+              <Button
+                key={g.id}
+                variant={leftOut ? 'primary' : 'ghost'}
+                size="sm"
+                aria-pressed={leftOut}
+                onClick={() => toggleGroup(g.frames, leftOut)}
+              >
+                {g.name}
+              </Button>
+            );
+          })}
+        </div>
+      )}
+
       {showsJumpsLine && (
         <p className="text-xs font-mono text-text-secondary">
           Jumps and falls are left out: aligning their feet would flatten them.
@@ -351,9 +424,23 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
       )}
 
       <div className="grid grid-cols-2 gap-4 max-w-md">
-        <PreviewLoop label="Before" canvasRef={beforeRef} cellWidth={cellWidth} cellHeight={cellHeight} feetRow={plan.target?.feetRow ?? null} />
-        <PreviewLoop label="After" canvasRef={afterRef} cellWidth={cellWidth} cellHeight={cellHeight} feetRow={plan.target?.feetRow ?? null} />
+        <PreviewLoop label="Before" canvasRef={beforeRef} cellWidth={cellWidth} cellHeight={cellHeight} feetRow={plan.target?.feetRow ?? null} looping={looping} />
+        <PreviewLoop label="After" canvasRef={afterRef} cellWidth={cellWidth} cellHeight={cellHeight} feetRow={plan.target?.feetRow ?? null} looping={looping} />
       </div>
+
+      {reducedMotion && before.length > 1 && (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="secondary" size="sm" onClick={() => setStill((stillStep + before.length - 1) % before.length)}>
+            Previous frame
+          </Button>
+          <p aria-live="polite" className="text-xs font-mono text-text-secondary">
+            Frame {stillStep + 1} of {before.length}
+          </p>
+          <Button variant="secondary" size="sm" onClick={() => setStill((stillStep + 1) % before.length)}>
+            Next frame
+          </Button>
+        </div>
+      )}
 
       <ul className="max-h-64 overflow-y-auto divide-y divide-border-subtle">
         {scopeFrames.map((frame, i) => {
@@ -379,7 +466,9 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
       <div className="flex flex-wrap items-center gap-3">
         {!plan.refused && (
           <Button
+            ref={alignRef}
             size="sm"
+            className={DIMMED}
             aria-disabled={busy || !ready || undefined}
             aria-busy={busy || undefined}
             onClick={handleAlign}
@@ -387,11 +476,13 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
             Align
           </Button>
         )}
+        {/* Stale Undo stays focusable: aria-disabled, and the press does nothing. */}
         {undo && (
           <Button
             variant="secondary"
             size="sm"
-            disabled={!undoOpen}
+            className={DIMMED}
+            aria-disabled={busy || !undoOpen || undefined}
             aria-busy={busy || undefined}
             aria-describedby={undoOpen ? undefined : undoNoteId}
             onClick={handleUndo}
@@ -406,10 +497,17 @@ export default function AlignFramesPanel({ sheet, animations, frameDataUrls, onC
         )}
       </div>
 
-      {/* Always rendered, so each result is announced once. */}
-      <p role="status" className="text-xs font-mono text-text-secondary min-h-4">
-        {plan.refused ? alignmentSummary(plan, numbers) : status}
-      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Always rendered, so each result is announced once. */}
+        <p role="status" className="text-xs font-mono text-text-secondary min-h-4">
+          {line}
+        </p>
+        {offersRemoveBackground && (
+          <Button variant="secondary" size="sm" onClick={onRemoveBackground}>
+            Remove background
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { borderMostlyTransparent } from '@/lib/sheetAlpha';
 import { detectSprites } from '@/lib/spriteUtils';
 
 /**
@@ -34,7 +35,9 @@ export interface AlignmentPlan {
   moves: FrameMove[];
   /** Null when refused, or when nothing in scope has a body and no target was given. */
   target: AlignTarget | null;
-  refused: 'opaque' | null;
+  /** 'opaque': a frame's background is still there. 'sizes': the frames are
+   *  not all one width and height. */
+  refused: 'opaque' | 'sizes' | null;
   /** Frames that move. */
   aligned: number;
   /** Frames with a body that were on the target already. */
@@ -47,13 +50,6 @@ export interface AlignmentPlan {
 const CONTENT_ALPHA = 10;
 
 const noMove = (): FrameMove => ({ dx: 0, dy: 0, shortened: false });
-
-const isOpaque = (frame: AlignFrame): boolean => {
-  for (let i = 3; i < frame.data.length; i += 4) {
-    if (frame.data[i] < CONTENT_ALPHA) return false;
-  }
-  return frame.data.length > 0;
-};
 
 /** The feet row and center column of a frame's body, or null if it has none. */
 function measureBody(frame: AlignFrame): AlignTarget | null {
@@ -105,8 +101,13 @@ export function planAlignment(frames: AlignFrame[], options: AlignOptions = {}):
   const inScope = (index: number) => !options.leaveOut?.[index];
   const moves = frames.map(noMove);
 
-  if (frames.some((frame, i) => inScope(i) && isOpaque(frame))) {
-    return { moves, target: null, refused: 'opaque', aligned: 0, alreadyInPlace: 0, shortenedFrames: [] };
+  const scope = frames.filter((_, i) => inScope(i));
+  const refused =
+    scope.some((frame) => frame.width !== scope[0].width || frame.height !== scope[0].height) ? 'sizes'
+    : scope.some((frame) => !borderMostlyTransparent(frame.data, frame.width, frame.height)) ? 'opaque'
+    : null;
+  if (refused) {
+    return { moves, target: null, refused, aligned: 0, alreadyInPlace: 0, shortenedFrames: [] };
   }
 
   const bodies = frames.map((frame, i) => (inScope(i) ? measureBody(frame) : null));
@@ -153,8 +154,10 @@ export function planAlignment(frames: AlignFrame[], options: AlignOptions = {}):
 }
 
 /** A new frame with every pixel moved by (dx, dy); vacated pixels are fully
- *  transparent. Apply the same move to every layer of a frame. */
+ *  transparent. A zero move returns `frame` itself. Never changes `frame`.
+ *  Apply the same move to every layer of a frame. */
 export function shiftFrame(frame: AlignFrame, move: FrameMove): AlignFrame {
+  if (move.dx === 0 && move.dy === 0) return frame;
   const { width, height, data } = frame;
   const moved = new Uint8ClampedArray(data.length);
   const columns = width - Math.abs(move.dx);
@@ -172,8 +175,13 @@ export function applyAlignment(frames: AlignFrame[], options: AlignOptions = {})
   return { frames: frames.map((frame, i) => shiftFrame(frame, plan.moves[i])), plan };
 }
 
-/** A frame's move for the preview list: "Up 2, left 1", or "No move". */
-export function moveWords({ dx, dy }: Pick<FrameMove, 'dx' | 'dy'>): string {
+/** A frame held still by the crop guard: it wanted to move and could not. */
+const held = (move: FrameMove) => move.shortened && move.dx === 0 && move.dy === 0;
+
+/** A frame's move for the preview list: "Up 2, left 1", "No move", or, for a
+ *  frame the crop guard held, "Can't move without cutting pixels". */
+export function moveWords({ dx, dy, shortened = false }: Pick<FrameMove, 'dx' | 'dy'> & Partial<FrameMove>): string {
+  if (held({ dx, dy, shortened })) return "Can't move without cutting pixels";
   const parts: string[] = [];
   if (dy !== 0) parts.push(`${dy < 0 ? 'up' : 'down'} ${Math.abs(dy)}`);
   if (dx !== 0) parts.push(`${dx < 0 ? 'left' : 'right'} ${Math.abs(dx)}`);
@@ -185,16 +193,19 @@ export function moveWords({ dx, dy }: Pick<FrameMove, 'dx' | 'dy'>): string {
 /** What Align did, in one status line. `frameNumbers` holds each plan index's
  *  number as the user sees it on the frame grid (1-based). */
 export function alignmentSummary(plan: AlignmentPlan, frameNumbers: number[]): string {
+  if (plan.refused === 'sizes') return 'Align needs frames of one size. Extract them with padding on, then align.';
   if (plan.refused) return 'Remove the background first, then align.';
-  if (plan.aligned === 0) return 'These frames are already aligned.';
-  const stuck = plan.shortenedFrames.filter((i) => plan.moves[i].dx === 0 && plan.moves[i].dy === 0).length;
+  const stuck = plan.shortenedFrames.filter((i) => held(plan.moves[i])).length;
+  if (plan.aligned === 0 && stuck === 0) return 'These frames are already aligned.';
   const total = plan.aligned + plan.alreadyInPlace + stuck;
   const lines = [`Aligned ${plan.aligned} of ${total} ${total === 1 ? 'frame' : 'frames'}.`];
   if (plan.alreadyInPlace > 0) {
     lines.push(`${plan.alreadyInPlace} ${plan.alreadyInPlace === 1 ? 'was' : 'were'} already in place.`);
   }
   for (const i of plan.shortenedFrames) {
-    lines.push(`Frame ${frameNumbers[i]} moved as far as it could without cutting anything off.`);
+    lines.push(held(plan.moves[i])
+      ? `Frame ${frameNumbers[i]} could not move without cutting something off.`
+      : `Frame ${frameNumbers[i]} moved as far as it could without cutting anything off.`);
   }
   return lines.join(' ');
 }

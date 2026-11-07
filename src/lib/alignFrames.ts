@@ -28,6 +28,9 @@ export interface AlignOptions {
   leaveOut?: boolean[];
   /** Align to this instead of the median, for "Align to this frame". */
   target?: AlignTarget;
+  /** One entry per frame, as measureFrame returns, used in place of measuring:
+   *  a caller that keeps these measures each frame once. */
+  measured?: (AlignTarget | null)[];
 }
 
 export interface AlignmentPlan {
@@ -52,7 +55,7 @@ const CONTENT_ALPHA = 10;
 const noMove = (): FrameMove => ({ dx: 0, dy: 0, shortened: false });
 
 /** The feet row and center column of a frame's body, or null if it has none. */
-function measureBody(frame: AlignFrame): AlignTarget | null {
+export function measureFrame(frame: AlignFrame): AlignTarget | null {
   const { sprites } = detectSprites(frame as unknown as ImageData);
   if (sprites.length === 0) return null;
   const body = sprites.reduce((best, s) => (s.width * s.height > best.width * best.height ? s : best));
@@ -110,7 +113,8 @@ export function planAlignment(frames: AlignFrame[], options: AlignOptions = {}):
     return { moves, target: null, refused, aligned: 0, alreadyInPlace: 0, shortenedFrames: [] };
   }
 
-  const bodies = frames.map((frame, i) => (inScope(i) ? measureBody(frame) : null));
+  const measure = (frame: AlignFrame, i: number) => (options.measured ? options.measured[i] : measureFrame(frame));
+  const bodies = frames.map((frame, i) => (inScope(i) ? measure(frame, i) : null));
   const measured = bodies.filter((body) => body !== null);
   const target =
     options.target ??

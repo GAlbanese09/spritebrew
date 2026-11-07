@@ -23,7 +23,7 @@ await build({
   alias: { '@': path.join(ROOT, 'src') },
 });
 const {
-  planAlignment, shiftFrame, applyAlignment, moveWords, alignmentSummary,
+  planAlignment, shiftFrame, applyAlignment, moveWords, alignmentSummary, measureFrame,
 } = await import(pathToFileURL(path.join(OUT_DIR, 'alignFrames.mjs')).href);
 
 let failed = 0;
@@ -378,6 +378,43 @@ const walk = () => WALK.map((pose, i) => walker(blank(24, 32), pose, 6 + WALK_DR
   check('options.target with no bodies is kept and moves nothing', same(planAlignment([blank(8, 8)], { target }).target, target));
 }
 
+// ── Measure once (C4) ──
+
+{
+  const weapon = withBody([[0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0]]);
+  for (const i of [1, 4]) paint(weapon[i], 20, 11, 12, 2);
+  const fixtures = { synthetic: withBody(JITTER), weapon };
+  for (const [name, frames] of Object.entries(fixtures)) {
+    // A plan over one frame targets that frame's own measurement.
+    const own = frames.map((f) => planAlignment([f]).target);
+    check(`C4: measureFrame matches the plan's own measurement, ${name} fixture`, same(frames.map(measureFrame), own), frames.map(measureFrame));
+  }
+  check('C4: measureFrame reads the feet row and the legs center', same(measureFrame(figureAt([0, 0])), { feetRow: 25, centerCol: 14.5 }) && same(measureFrame(weapon[1]), { feetRow: 25, centerCol: 14.5 }), measureFrame(weapon[1]));
+  check('C4: measureFrame is null for an empty frame', measureFrame(blank(16, 16)) === null);
+
+  const sets = {
+    jitter: [withBody(JITTER), {}],
+    weapon: [weapon, {}],
+    walk: [walk(), {}],
+    'crop guard': [(() => { const f = withBody([[0, 0], [0, 0], [-8, 0], [0, -4], [3, 0]]); paint(f[2], 39, 3, 1, 1); paint(f[3], 3, 36, 1, 1, 3); return f; })(), {}],
+    'leave out': [withBody([[0, 0], [0, 0], [0, 0], [9, 9], [9, 9]]), { leaveOut: [false, false, true, true, false] }],
+    'given target': [withBody([[0, 0], [2, 1]]), { target: { feetRow: 28, centerCol: 12.5 } }],
+    empty: [[blank(40, 40), ...withBody([[0, 0], [2, 0]])], {}],
+  };
+  for (const [name, [frames, options]] of Object.entries(sets)) {
+    const plain = planAlignment(frames, options);
+    const cached = planAlignment(frames, { ...options, measured: frames.map(measureFrame) });
+    check(`C4: options.measured gives the same plan, ${name}`, same(plain, cached), { plain, cached });
+  }
+  // The cache is used in place of measuring: told every frame already sits
+  // on the target, nothing moves; told a frame has no body, it stays still.
+  const frames = withBody(JITTER);
+  const told = planAlignment(frames, { measured: frames.map(() => ({ feetRow: 25, centerCol: 14.5 })) });
+  check('C4: options.measured is used in place of measuring', noMoves(told) && told.alreadyInPlace === 6, told.moves);
+  const none = planAlignment(frames, { measured: frames.map((f, i) => (i === 3 ? null : measureFrame(f))) });
+  check('C4: a null measurement is a frame with no body', same(none.moves[3], { dx: 0, dy: 0, shortened: false }) && none.aligned === 4, none.moves);
+}
+
 // ── Inputs and shiftFrame ──
 
 {
@@ -446,11 +483,17 @@ check('no move', moveWords({ dx: 0, dy: 0 }) === 'No move');
   const align = between(panel, 'const handleAlign = useCallback(', 'const handleUndo = useCallback(');
   const undoPress = between(panel, 'const handleUndo = useCallback(', 'return (\n    <div ref={cardRef} className="space-y-4">');
   const loop = between(panel, '// One timer steps both loops together.', 'const changeScope = useCallback(');
-  const alignButton = between(panel, '{!plan.refused && (', '</Button>');
+  const alignButton = between(panel, '{!plan.refused && (\n          <Button', '</Button>');
   const undoButton = between(panel, '{undo && (\n          <Button', '</Button>');
   const decode = between(panel, '// Decode each frame', '// Track prefers-reduced-motion.');
   const watch = between(panel, '// Wait for the card to come into view', '// Decode each frame');
-  const groupRow = between(panel, '{!group && groups.length >= 2 && (', '{showsJumpsLine && (');
+  const groupRow = between(panel, '{!plan.refused && !group && groups.length >= 2 && (', '{showsJumpsLine && (');
+  const frameList = between(panel, '<ul className="max-h-64', '</ul>');
+  const decodeSkip = between(panel, '// Decode each frame', 'let cancelled = false;');
+  const scopeChange = between(panel, 'const changeScope = useCallback(', 'const toggleLeaveOut = useCallback(');
+  const leaveOutToggle = between(panel, 'const toggleLeaveOut = useCallback(', '/** Leaves out every frame of a group');
+  const alignDone = between(align, "if (!applied) {", 'return alignmentSummary(plan, numbers);\n    });');
+  const undoDone = between(undoPress, "if (!applied) {", "return 'Align undone.';");
   const toggleGroup = between(panel, 'const toggleGroup = useCallback(', 'const runPress = useCallback(');
   const showBanner = between(page, 'const handleShowBgBanner = useCallback(', 'const sliceGrid = useCallback(');
   const build = between(panel, 'async function buildAlignedSheet(', 'function paint(');
@@ -468,7 +511,7 @@ check('no move', moveWords({ dx: 0, dy: 0 }) === 'No move');
   check('the status line is always rendered, once', panel.match(/role="status"/g)?.length === 1 && /<div className="flex flex-wrap items-center gap-3">\s*\{\/\* Always rendered, so each result is announced once\. \*\/\}\s*<p role="status"[^>]*>\s*\{line\}\s*<\/p>/.test(panel));
   check('the status clears before each press, so a repeat is announced', /setBusy\(true\);\s*setStatus\(''\);/.test(press));
   check('a second press while working does nothing', /if \(busyRef\.current\) return;\s*busyRef\.current = true;/.test(press) && /finally \{\s*busyRef\.current = false;/.test(press));
-  check('decoding yields first', /useEffect\(\(\) => \{\s*if \(!seen\) return;\s*let cancelled = false;\s*const timer = setTimeout\(async \(\) => \{/.test(decode) && /await nextTask\(\);\s*const built = await buildAlignedSheet\(/.test(align));
+  check('decoding yields first', /useEffect\(\(\) => \{\s*if \(!seen\) return;\s*if \(committedRef\.current === frameDataUrls\) \{\s*committedRef\.current = null;\s*return;\s*\}\s*let cancelled = false;\s*const timer = setTimeout\(async \(\) => \{/.test(decode) && /await nextTask\(\);\s*const built = await buildAlignedSheet\(/.test(align));
   check('Align prepare returns null when the frames changed since the press', /return stillCurrent\(\) \? built : null;/.test(align) && /useSpriteStore\.getState\(\)\.frameDataUrls === frameDataUrls/.test(panel));
   check('Undo restores the exact earlier source image and frame URLs', /before: \{ sourceImage: sheet\.sourceImage, urls: frameDataUrls \}/.test(align) && /return stillCurrent\(\) \? undo\.before : null;/.test(undoPress));
   check('Undo closes when the sheet changed, pixel edits included', /undo\.version === sheetVersion && undo\.urls === frameDataUrls/.test(panel) && /aria-disabled=\{busy \|\| !undoOpen \|\| undefined\}/.test(undoButton) && /Undo is no longer available: the sheet changed\./.test(panel));
@@ -482,7 +525,7 @@ check('no move', moveWords({ dx: 0, dy: 0 }) === 'No move');
   check('P2: Align is aria-disabled while reading or busy', /aria-disabled=\{busy \|\| !ready \|\| undefined\}/.test(alignButton));
   check('P2: Align and Undo both get the dimmed aria-disabled style', /const DIMMED = 'aria-disabled:opacity-40 aria-disabled:cursor-not-allowed';/.test(panel) && /className=\{DIMMED\}/.test(alignButton) && /className=\{DIMMED\}/.test(undoButton));
   // P3: the frame list passes the whole move, so a held frame is named.
-  check('P3: the frame list words come from the whole move', /\{moveWords\(plan\.moves\[i\]\)\}/.test(panel));
+  check('P3: the frame list words come from the whole move, the applied one after Align', /\{moveWords\(shown\?\.moves\.get\(frame\.id\) \?\? plan\.moves\[i\]\)\}/.test(frameList));
   // P4: an opaque sheet offers Remove background.
   check('P4: Remove background shows only on the opaque refusal and only with the callback', /const offersRemoveBackground = !status && ready && plan\.refused === 'opaque' && !!onRemoveBackground;/.test(panel) && /\{offersRemoveBackground && \(\s*<Button[^>]*onClick=\{onRemoveBackground\}>\s*Remove background\s*<\/Button>/.test(panel));
   check('P4: the page callback un-dismisses the banner and scrolls its wrapper into view', /flushSync\(\(\) => setBgBannerDismissed\(false\)\);/.test(showBanner) && /bgBannerRef\.current\?\.scrollIntoView\(/.test(showBanner) && /<div ref=\{bgBannerRef\} className="empty:mb-0">\s*<BgRemovalBanner/.test(page) && /onRemoveBackground=\{handleShowBgBanner\}/.test(alignCard));
@@ -496,6 +539,20 @@ check('no move', moveWords({ dx: 0, dy: 0 }) === 'No move');
   check('P6: the labels drop looping under reduced motion', /aria-label=\{looping \? `\$\{label\} aligning, frames looping` : `\$\{label\} aligning`\}/.test(panel) && /const looping = !reducedMotion && before\.length > 1;/.test(panel) && panel.match(/looping=\{looping\}/g)?.length === 2);
   // P7: frames are read when the card comes into view.
   check('P7: decoding waits for the card to come into view, at once without IntersectionObserver', /useState\(\(\) => typeof IntersectionObserver === 'undefined'\)/.test(panel) && /new IntersectionObserver\(/.test(watch) && /observer\.observe\(card\);/.test(watch) && /if \(entries\.some\(\(entry\) => entry\.isIntersecting\)\) setSeen\(true\);/.test(watch) && /<div ref=\{cardRef\}/.test(panel) && /\[allFrames, frameDataUrls, seen\]/.test(decode));
+  // C1: after Align, Before keeps the original, After the result, and each
+  // row the applied move, until the scope, a Leave out, Undo or the sheet change.
+  check('C1: the applied view is kept only while the sheet and its frame map are the ones Align made', /const shown = result !== null && result\.version === sheetVersion && result\.urls === frameDataUrls \? result : null;/.test(panel) && /version: now\.sheetVersion,\s*urls: now\.frameDataUrls,\s*before: current,\s*after: next,\s*moves: new Map\(scopeFrames\.map\(\(frame, i\) => \[frame\.id, plan\.moves\[i\]\]\)\),/.test(alignDone));
+  check('C1: the previews show the applied frames, the planned ones otherwise', /const before = shown\?\.before \?\? current;\s*const after = shown\?\.after \?\? next;/.test(panel) && /paint\(beforeRef\.current, before\[stepRef\.current\]\);\s*paint\(afterRef\.current, after\[stepRef\.current\]\);/.test(loop) && panel.match(/feetRow=\{feetRow\}/g)?.length === 2 && /const feetRow = shown \? shown\.feetRow :/.test(panel));
+  check('C1: a scope change, a Leave out toggle, a group toggle and Undo each end the applied view', /setResult\(null\);/.test(scopeChange) && /setResult\(null\);/.test(leaveOutToggle) && /setResult\(null\);/.test(toggleGroup) && /setUndo\(null\);\s*setResult\(null\);/.test(undoDone));
+  // C2: a refused scope shows only what helps.
+  check('C2: the frame list, the group row and the jumps line are not rendered when refused', /\{!plan\.refused && \(\s*<ul className="max-h-64/.test(panel) && /^\{!plan\.refused && !group && groups\.length >= 2 && \(/.test(groupRow) && /const showsJumpsLine = !plan\.refused\s*&& groupFrames\.some\(/.test(panel));
+  check('C2: the previews stay when refused', /<div className="grid grid-cols-2 gap-4 max-w-md">\s*<PreviewLoop label="Before"/.test(panel) && !/refused[^\n]*\(\s*<div className="grid grid-cols-2/.test(panel));
+  // C3: the card keeps the pixels its own commit wrote.
+  check('C3: Align sets the decoded frames and the Map it committed, with no decode', /committed = built\.urls;\s*committedRef\.current = built\.urls;\s*return stillCurrent\(\) \? built : null;/.test(align) && /frames\.set\(frame\.id, pixels\);\s*bodies\.set\(frame\.id, measureFrame\(pixels\)\);\s*\}\s*setDecoded\(\{ urls: committed, frames, measured: bodies \}\);/.test(alignDone) && !/decodeFrame|loadImage/.test(align));
+  check('C3: Undo sets the earlier frames and the earlier Map, with no decode', /decoded: earlier,/.test(align) && /committedRef\.current = undo\.before\.urls;\s*return stillCurrent\(\) \? undo\.before : null;/.test(undoPress) && /setDecoded\(undo\.decoded\);/.test(undoDone) && !/decodeFrame|loadImage/.test(undoPress));
+  check('C3: the decode skips only the card\'s own commit, and a refused commit clears the mark', /if \(committedRef\.current === frameDataUrls\) \{\s*committedRef\.current = null;\s*return;\s*\}/.test(decodeSkip) && /if \(!applied\) \{\s*committedRef\.current = null;\s*return 'The sheet changed/.test(align) && /if \(!applied\) \{\s*committedRef\.current = null;\s*return 'Undo is no longer available/.test(undoPress));
+  // C4: each frame is measured once, when read.
+  check('C4: the card passes cached measurements to the plan', /applyAlignment\(current, \{ leaveOut, measured \}\)/.test(panel) && /scopeFrames\.map\(\(f\) => decoded!\.measured\.get\(f\.id\) \?\? null\)/.test(panel) && /setDecoded\(\{ urls: frameDataUrls, frames, measured: measureAll\(frames\) \}\);/.test(decode) && panel.match(/measureFrame\(/g)?.length === 2);
   check('the previews are pixelated canvases at the group fps, 8 for All frames', /imageRendering: 'pixelated'/.test(panel) && /ALL_FRAMES_FPS = 8/.test(panel) && /group\?\.fps \?\? ALL_FRAMES_FPS/.test(panel));
   check('only a rect-sized frame goes back on the sheet', /if \(pixels\.width === frame\.width && pixels\.height === frame\.height\) \{\s*sheetContext\.putImageData\(image, frame\.x, frame\.y\);/.test(build));
   check('the library has no React and no DOM calls', !/from 'react'|document\.|window\.|getContext/.test(lib));

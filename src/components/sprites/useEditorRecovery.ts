@@ -101,6 +101,9 @@ interface UseEditorRecoveryOptions {
   /** This session's draft key (newDraftKey), or a restored draft's key. */
   projectKey: string;
   surface: DraftSurface;
+  /** Saves the image even with no edit of its own, from when it opens. For a
+   *  fixed image: "Use fixed image" is a decision, like an edit. */
+  saveUnedited?: boolean;
 }
 
 /**
@@ -117,11 +120,14 @@ export function useEditorRecovery({
   getPalette,
   projectKey,
   surface,
+  saveUnedited = false,
 }: UseEditorRecoveryOptions): void {
   // Latest palette-getter in a ref so the long-lived subscription and
   // lifecycle handlers read the current palette without being rebuilt on
   // every palette change.
   const getPaletteRef = useRef(getPalette);
+  // The history index from which the session has something to save.
+  const firstSavedRef = useRef(saveUnedited ? 0 : 1);
   const { isLoaded, userId } = useAuth();
   const authRef = useRef({ isLoaded, userId });
   // The open session's account, pinned the first time Clerk is known to
@@ -134,6 +140,7 @@ export function useEditorRecovery({
   const sessionRef = useRef<{ key: string; owner: string | null | undefined } | null>(null);
   useLayoutEffect(() => {
     getPaletteRef.current = getPalette;
+    firstSavedRef.current = saveUnedited ? 0 : 1;
     authRef.current = { isLoaded, userId };
     const session = sessionRef.current;
     if (session && session.key === projectKey && session.owner === undefined && isLoaded) session.owner = userId ?? null;
@@ -175,7 +182,7 @@ export function useEditorRecovery({
     // save is still in flight.
     const snapshot = (): { project: SpriteProjectV1; bytes: Uint8ClampedArray } | null => {
       const s = useEditorStore.getState();
-      if (s.historyIndex <= 0) return null;
+      if (s.historyIndex < firstSavedRef.current) return null;
       const project = s.toProject();
       if (!project) return null;
       const bytes = s.getFramePixels(project.frames[0].id);
@@ -191,6 +198,13 @@ export function useEditorRecovery({
       if (!maxWaitTimer) {
         maxWaitTimer = setTimeout(() => { clearTimers(); doSave('idle'); }, MAX_WAIT_MS);
       }
+    };
+
+    // An image saved unedited is saved the moment it is there, so a reload
+    // right after "Use fixed image" keeps it. Edits wait for the pause.
+    const saveOrSchedule = () => {
+      if (firstSavedRef.current === 0 && !wrote && useEditorStore.getState().historyIndex === 0) doSave('edit');
+      else scheduleSave();
     };
 
     // `last`: the session's final save (its editor is going), which cannot
@@ -248,7 +262,7 @@ export function useEditorRecovery({
       // (a Leave whose Back had nowhere to go, say): the session goes on, so
       // its work is saved again, until the next close or Discard.
       if (ended.has(projectKey) && useEditorStore.getState().historyIndex > 0) ended.delete(projectKey);
-      scheduleSave();
+      saveOrSchedule();
     });
 
     // popstate is the SPA Back signal in this App Router app (pagehide does NOT
@@ -268,7 +282,7 @@ export function useEditorRecovery({
         if (isDevHost()) console.warn('[editorRecovery] unavailable in this browser context');
         return;
       }
-      if (useEditorStore.getState().historyIndex > 0) scheduleSave();
+      if (useEditorStore.getState().historyIndex >= firstSavedRef.current) saveOrSchedule();
     }).catch(() => { /* no recovery in this context */ });
 
     return () => {

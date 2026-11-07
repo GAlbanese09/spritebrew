@@ -1,0 +1,218 @@
+[
+  {
+    "name": "adler2",
+    "version": "2.0.1",
+    "license": "MIT",
+    "repository": "https://github.com/oyvindln/adler2"
+  },
+  {
+    "name": "bitflags",
+    "version": "2.13.0",
+    "license": "MIT",
+    "repository": "https://github.com/bitflags/bitflags"
+  },
+  {
+    "name": "bytemuck",
+    "version": "1.25.1",
+    "license": "MIT",
+    "repository": "https://github.com/Lokathor/bytemuck"
+  },
+  {
+    "name": "byteorder-lite",
+    "version": "0.1.0",
+    "license": "MIT",
+    "repository": "https://github.com/image-rs/byteorder-lite"
+  },
+  {
+    "name": "cfg-if",
+    "version": "1.0.4",
+    "license": "MIT",
+    "repository": "https://github.com/rust-lang/cfg-if"
+  },
+  {
+    "name": "crc32fast",
+    "version": "1.5.0",
+    "license": "MIT",
+    "repository": "https://github.com/srijs/rust-crc32fast"
+  },
+  {
+    "name": "crossbeam-deque",
+    "version": "0.8.7",
+    "license": "MIT",
+    "repository": "https://github.com/crossbeam-rs/crossbeam"
+  },
+  {
+    "name": "crossbeam-epoch",
+    "version": "0.9.20",
+    "license": "MIT",
+    "repository": "https://github.com/crossbeam-rs/crossbeam"
+  },
+  {
+    "name": "crossbeam-utils",
+    "version": "0.8.22",
+    "license": "MIT",
+    "repository": "https://github.com/crossbeam-rs/crossbeam"
+  },
+  {
+    "name": "either",
+    "version": "1.16.0",
+    "license": "MIT",
+    "repository": "https://github.com/rayon-rs/either"
+  },
+  {
+    "name": "fdeflate",
+    "version": "0.3.7",
+    "license": "MIT",
+    "repository": "https://github.com/image-rs/fdeflate"
+  },
+  {
+    "name": "flate2",
+    "version": "1.1.9",
+    "license": "MIT",
+    "repository": "https://github.com/rust-lang/flate2-rs"
+  },
+  {
+    "name": "image",
+    "version": "0.25.10",
+    "license": "MIT",
+    "repository": "https://github.com/image-rs/image"
+  },
+  {
+    "name": "itoa",
+    "version": "1.0.18",
+    "license": "MIT",
+    "repository": "https://github.com/dtolnay/itoa"
+  },
+  {
+    "name": "memchr",
+    "version": "2.8.3",
+    "license": "MIT",
+    "repository": "https://github.com/BurntSushi/memchr"
+  },
+  {
+    "name": "miniz_oxide",
+    "version": "0.8.9",
+    "license": "MIT",
+    "repository": "https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide"
+  },
+  {
+    "name": "moxcms",
+    "version": "0.8.1",
+    "license": "BSD-3-Clause",
+    "repository": "https://github.com/awxkee/moxcms.git"
+  },
+  {
+    "name": "num-complex",
+    "version": "0.4.6",
+    "license": "MIT",
+    "repository": "https://github.com/rust-num/num-complex"
+  },
+  {
+    "name": "num-integer",
+    "version": "0.1.46",
+    "license": "MIT",
+    "repository": "https://github.com/rust-num/num-integer"
+  },
+  {
+    "name": "num-traits",
+    "version": "0.2.19",
+    "license": "MIT",
+    "repository": "https://github.com/rust-num/num-traits"
+  },
+  {
+    "name": "pixelfixer",
+    "version": "0.1.0",
+    "license": "MIT",
+    "repository": "https://github.com/Retro-Diffusion/pixel-art-fixer"
+  },
+  {
+    "name": "png",
+    "version": "0.18.1",
+    "license": "MIT",
+    "repository": "https://github.com/image-rs/image-png"
+  },
+  {
+    "name": "primal-check",
+    "version": "0.3.4",
+    "license": "MIT",
+    "repository": "https://github.com/huonw/primal"
+  },
+  {
+    "name": "pxfm",
+    "version": "0.1.30",
+    "license": "BSD-3-Clause",
+    "repository": "https://github.com/awxkee/pxfm"
+  },
+  {
+    "name": "rayon",
+    "version": "1.12.0",
+    "license": "MIT",
+    "repository": "https://github.com/rayon-rs/rayon"
+  },
+  {
+    "name": "rayon-core",
+    "version": "1.13.0",
+    "license": "MIT",
+    "repository": "https://github.com/rayon-rs/rayon"
+  },
+  {
+    "name": "rustfft",
+    "version": "6.4.1",
+    "license": "MIT",
+    "repository": "https://github.com/ejmahler/RustFFT"
+  },
+  {
+    "name": "serde",
+    "version": "1.0.228",
+    "license": "MIT",
+    "repository": "https://github.com/serde-rs/serde"
+  },
+  {
+    "name": "serde_core",
+    "version": "1.0.228",
+    "license": "MIT",
+    "repository": "https://github.com/serde-rs/serde"
+  },
+  {
+    "name": "serde_json",
+    "version": "1.0.150",
+    "license": "MIT",
+    "repository": "https://github.com/serde-rs/json"
+  },
+  {
+    "name": "simd-adler32",
+    "version": "0.3.9",
+    "license": "MIT",
+    "repository": "https://github.com/mcountryman/simd-adler32"
+  },
+  {
+    "name": "strength_reduce",
+    "version": "0.2.4",
+    "license": "MIT",
+    "repository": "http://github.com/ejmahler/strength_reduce"
+  },
+  {
+    "name": "transpose",
+    "version": "0.2.3",
+    "license": "MIT",
+    "repository": "https://github.com/ejmahler/transpose"
+  },
+  {
+    "name": "zmij",
+    "version": "1.0.21",
+    "license": "MIT",
+    "repository": "https://github.com/dtolnay/zmij"
+  },
+  {
+    "name": "zune-core",
+    "version": "0.5.1",
+    "license": "MIT",
+    "repository": "https://github.com/etemesi254/zune-image"
+  },
+  {
+    "name": "zune-jpeg",
+    "version": "0.5.15",
+    "license": "MIT",
+    "repository": "https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg"
+  }
+]

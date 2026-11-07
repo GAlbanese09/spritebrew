@@ -1,3 +1,6 @@
+# Run cargo and rustup here only through scripts/build-pixel-grid-wasm.sh. This
+# file makes rustup download toolchain 1.99.1 for any other call in this folder;
+# the script uses the installed compiler and holds it to the same version.
 [toolchain]
 channel = "1.99.1"
 targets = ["wasm32-unknown-unknown"]

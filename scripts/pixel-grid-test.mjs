@@ -1,8 +1,10 @@
 // scripts/pixel-grid-test.mjs
 //
 // Offline tests for "Fix pixel grid" (W3): src/lib/pixelGrid.ts (the guard, the
-// cap, the byte helpers, the copy) and the built public/wasm/pixel-grid.wasm,
-// run in node on synthetic images made here. Run from the repo root:
+// outcome of a run, the cap, the byte helpers, the copy), the store's edits
+// that end a kept result, the notices, and the built
+// public/wasm/pixel-grid.wasm, run in node on synthetic images made here. Run
+// from the repo root:
 // `node scripts/pixel-grid-test.mjs`. Bundles the module with esbuild into
 // local/.pixel-grid-test/ (gitignored). Prints only case names and pass or fail.
 
@@ -21,10 +23,12 @@ await build({
   bundle: true, format: 'esm', platform: 'node', outfile: OUT, logLevel: 'silent',
 });
 const {
-  roundTripScore, pixelGridCap, pixelGridCapSide, dataUrlToBytes, pngBytesToDataUrl,
-  ROUND_TRIP_MIN, ROUND_TRIP_TOLERANCE, MIN_SIDE, PIXEL_GRID_MAX_PIXELS, PIXEL_GRID_LOW_MEMORY_PIXELS,
-  fixGridTooBig, fixGridSizes, fixGridBanner,
-  FIX_GRID_RUNNING, FIX_GRID_TOO_SMALL, FIX_GRID_ALREADY_CLEAN, FIX_GRID_FAILED, FIX_GRID_TOOLTIP,
+  cellCenterScore, gridStepsAgree, gridFixPasses, sameImage, fixGridOutcome,
+  pixelGridCap, pixelGridCapSide, dataUrlToBytes, pngBytesToDataUrl,
+  CELL_CENTER_MIN, CELL_CENTER_TOLERANCE, GRID_STEP_MAX_DIFFERENCE, MIN_SIDE, PIXEL_GRID_MAX_PIXELS, PIXEL_GRID_LOW_MEMORY_PIXELS,
+  fixGridTooBig, fixGridSizes, fixGridBanner, fixGridDividerValue,
+  FIX_GRID_RUNNING, FIX_GRID_TOO_SMALL, FIX_GRID_NOT_FOUND, FIX_GRID_SHOW_ANYWAY, FIX_GRID_MAY_BE_WRONG, FIX_GRID_DISMISS,
+  FIX_GRID_CHANGED, FIX_GRID_FAILED, FIX_GRID_TOOLTIP, FIX_GRID_DESCRIPTION,
 } = await import(pathToFileURL(OUT).href);
 
 let failed = 0;
@@ -78,6 +82,73 @@ function upscale(px, w, h, k) {
       const i = (Math.floor(y / k) * w + Math.floor(x / k)) * 4;
       out.set(px.subarray(i, i + 4), (y * w * k + x) * 4);
     }
+  }
+  return out;
+}
+
+/** A sheet the way the fixer's real input looks: rounded sprites of flat color
+ *  with a dark outline and a few loose pixels, on a transparent background. */
+function sheet(size, seed) {
+  const palette = [[24, 20, 37], [190, 74, 47], [234, 212, 170], [58, 68, 102], [99, 199, 77], [254, 174, 52], [38, 92, 66], [255, 255, 255], [0, 0, 0], [140, 60, 120]];
+  const next = rng(seed);
+  const px = new Uint8ClampedArray(size * size * 4);
+  const put = (x, y, c) => {
+    if (x >= 0 && y >= 0 && x < size && y < size) px.set([c[0], c[1], c[2], 255], (y * size + x) * 4);
+  };
+  const cell = size / Math.round(size / 32);
+  for (let oy = 0; oy < size; oy += cell) {
+    for (let ox = 0; ox < size; ox += cell) {
+      const body = palette[1 + Math.floor(next() * 6)];
+      const shade = palette[1 + Math.floor(next() * 6)];
+      const rx = cell * (0.25 + next() * 0.15);
+      const ry = cell * (0.25 + next() * 0.15);
+      const mx = ox + cell / 2;
+      const my = oy + cell / 2 + cell * 0.05;
+      const inside = (x, y) => (x + 0.5 - mx) ** 2 / (rx * rx) + (y + 0.5 - my) ** 2 / (ry * ry) <= 1;
+      for (let y = oy; y < oy + cell; y++) {
+        for (let x = ox; x < ox + cell; x++) {
+          if (!inside(x, y)) continue;
+          const edge = !inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1);
+          put(x, y, edge ? palette[0] : y < my ? body : shade);
+        }
+      }
+      put(Math.round(mx - rx / 2), Math.round(my - ry / 3), palette[7]);
+      put(Math.round(mx + rx / 2), Math.round(my - ry / 3), palette[7]);
+      for (let k = 0; k < cell / 4; k++) put(Math.floor(ox + next() * cell), Math.floor(oy + next() * cell), palette[Math.floor(next() * 8)]);
+    }
+  }
+  return px;
+}
+
+/** A separable Gaussian blur of a w x h image, on premultiplied color as a
+ *  browser blurs. The damage AI art and rescaling leave. */
+function blur(px, w, h, sigma) {
+  const radius = Math.ceil(sigma * 3);
+  const kernel = Array.from({ length: radius * 2 + 1 }, (_, i) => Math.exp(-((i - radius) ** 2) / (2 * sigma * sigma)));
+  const total = kernel.reduce((a, b) => a + b, 0);
+  const premultiplied = new Float64Array(px.length);
+  for (let i = 0; i < px.length; i += 4) {
+    const a = px[i + 3] / 255;
+    premultiplied.set([px[i] * a, px[i + 1] * a, px[i + 2] * a, px[i + 3]], i);
+  }
+  const pass = (from, step, count, lines, lineStep) => {
+    const to = new Float64Array(from.length);
+    for (let line = 0; line < lines; line++) {
+      for (let at = 0; at < count; at++) {
+        for (let k = 0; k < kernel.length; k++) {
+          const i = Math.max(0, Math.min(count - 1, at + k - radius));
+          for (let c = 0; c < 4; c++) to[(line * lineStep + at * step) * 4 + c] += (from[(line * lineStep + i * step) * 4 + c] * kernel[k]) / total;
+        }
+      }
+    }
+    return to;
+  };
+  const both = pass(pass(premultiplied, 1, w, h, w), w, h, w, 1);
+  const out = new Uint8ClampedArray(px.length);
+  for (let i = 0; i < px.length; i += 4) {
+    const a = both[i + 3] / 255;
+    for (let c = 0; c < 3; c++) out[i + c] = a > 0 ? both[i + c] / a : 0;
+    out[i + 3] = both[i + 3];
   }
   return out;
 }
@@ -189,29 +260,80 @@ function runFix(png) {
   return { png: Buffer.from(e.memory.buffer.slice(result + 4, result + 4 + length)) };
 }
 
-// 1. The guard's score.
+// 1. The guard: the score, then the steps.
 {
   const s = sprite(32, 32);
-  check('score: an exact nearest upscale x4 scores 1', roundTripScore(upscale(s, 32, 32, 4), 128, 128, s, 32, 32) === 1);
+  check('score: an exact nearest upscale x4 scores 1', cellCenterScore(upscale(s, 32, 32, 4), 128, 128, s, 32, 32) === 1);
   const coarse = reduce(s, 32, 32, 11, 11);
-  const low = roundTripScore(s, 32, 32, coarse, 11, 11);
+  const low = cellCenterScore(s, 32, 32, coarse, 11, 11);
   check('score: a native sprite on a coarser wrong grid scores low', low < 0.4, low);
-  check('score: and the guard refuses it', low < ROUND_TRIP_MIN);
+  check('score: and the guard refuses it', !gridFixPasses(s, 32, 32, coarse, 11, 11));
 
+  const one = (r, g, b, a = 255) => new Uint8ClampedArray([r, g, b, a]);
   const a = new Uint8ClampedArray([10, 20, 30, 255, 0, 0, 0, 0]);
-  check('score: a transparent input pixel does not count', roundTripScore(a, 2, 1, new Uint8ClampedArray([10, 20, 30, 255]), 1, 1) === 1);
-  check('score: no visible pixel scores 0', roundTripScore(new Uint8ClampedArray(8), 2, 1, new Uint8ClampedArray(4), 1, 1) === 0);
+  check('score: a transparent input pixel does not count', cellCenterScore(a, 2, 1, one(10, 20, 30), 1, 1) === 1);
+  check('score: nor does one under alpha 128', cellCenterScore(new Uint8ClampedArray([10, 20, 30, 255, 200, 200, 200, 127]), 2, 1, one(10, 20, 30), 1, 1) === 1);
+  check('score: alpha 128 counts', cellCenterScore(new Uint8ClampedArray([10, 20, 30, 255, 200, 200, 200, 128]), 2, 1, one(10, 20, 30), 1, 1) === 0.5);
+  check('score: nothing counted scores 0', cellCenterScore(new Uint8ClampedArray(8), 2, 1, new Uint8ClampedArray(4), 1, 1) === 0);
 
-  const one = (r, g, b) => new Uint8ClampedArray([r, g, b, 255]);
-  check('score: the tolerance is 24', ROUND_TRIP_TOLERANCE === 24);
-  check('score: 24 away on one channel matches', roundTripScore(one(100, 100, 100), 1, 1, one(124, 100, 100), 1, 1) === 1);
-  check('score: 25 away on one channel does not', roundTripScore(one(100, 100, 100), 1, 1, one(100, 100, 75), 1, 1) === 0);
+  check('score: an opaque input against a transparent output cell is a miss', cellCenterScore(one(0, 0, 0), 1, 1, one(0, 0, 0, 0), 1, 1) === 0);
+  check('score: and against output alpha 127', cellCenterScore(one(9, 9, 9), 1, 1, one(9, 9, 9, 127), 1, 1) === 0);
+  check('score: output alpha 128 can match', cellCenterScore(one(9, 9, 9), 1, 1, one(9, 9, 9, 128), 1, 1) === 1);
 
-  // Cells: a 3 x 1 input on a 2 x 1 output maps x 0, 1 to cell 0 and x 2 to 1.
+  check('score: the tolerance is 24', CELL_CENTER_TOLERANCE === 24);
+  check('score: 24 away on one channel matches', cellCenterScore(one(100, 100, 100), 1, 1, one(124, 100, 100), 1, 1) === 1);
+  check('score: 25 away on one channel does not', cellCenterScore(one(100, 100, 100), 1, 1, one(100, 100, 75), 1, 1) === 0);
+
+  // The rule on one row: a pixel counts when it is at least floor(step / 3)
+  // px from both edges of its cell. Marks are pixels wrong for the output.
+  const row = (w, outW, marks) => {
+    const input = new Uint8ClampedArray(w * 4).fill(255);
+    for (const x of marks) input.set([0, 0, 0, 255], x * 4);
+    return cellCenterScore(input, w, 1, new Uint8ClampedArray(outW * 4).fill(255), outW, 1);
+  };
+  check('cells: x3, only the middle pixel of each cell counts', row(6, 2, [0, 2, 3, 5]) === 1 && row(6, 2, [1]) === 0.5);
+  check('cells: x6, the two middle pixels count', row(6, 1, [0, 1, 4, 5]) === 1 && row(6, 1, [2]) === 0.5);
+  check('cells: x2 has no margin, so every pixel counts', row(4, 2, [0]) === 0.75);
+  check('cells: x2.5, cells of 3 and 2 px take a margin of 0', row(5, 2, [0, 3]) === 0.6);
+  check('cells: x3.5, cells of 4 and 3 px take a margin of 1', row(7, 2, [0, 3, 4, 6]) === 1 && row(7, 2, [1]) < 1 && row(7, 2, [5]) < 1);
   const three = new Uint8ClampedArray([10, 10, 10, 255, 10, 10, 10, 255, 200, 200, 200, 255]);
   const two = new Uint8ClampedArray([10, 10, 10, 255, 200, 200, 200, 255]);
-  check('score: cell x = floor(x * outW / inW)', roundTripScore(three, 3, 1, two, 2, 1) === 1);
-  check('score: and the same for y', roundTripScore(three, 1, 3, two, 1, 2) === 1);
+  check('cells: a 3 x 1 input on 2 x 1 maps x 0, 1 to cell 0 and x 2 to cell 1', cellCenterScore(three, 3, 1, two, 2, 1) === 1);
+  check('cells: and the same for y', cellCenterScore(three, 1, 3, two, 1, 2) === 1);
+
+  check('threshold: 0.98, two decimals (a change shows up here)', CELL_CENTER_MIN === 0.98);
+  const flat = new Uint8ClampedArray(100 * 100 * 4).fill(200);
+  check('steps: 10%, as a share of the larger', GRID_STEP_MAX_DIFFERENCE === 0.1);
+  check('steps: equal steps agree', gridStepsAgree(100, 100, 10, 10));
+  check('steps: 10.0 and 9.0 (exactly 10%) agree', gridStepsAgree(90, 90, 9, 10));
+  check('steps: 10.0 and 8.9 do not', !gridStepsAgree(1000, 890, 100, 100));
+  check('steps: a true result 6.55% apart agrees', gridStepsAgree(794, 742, 128, 128));
+  const wrong = new Uint8ClampedArray(10 * 50 * 4).fill(200);
+  check('steps: a wrong-size result that matches every cell scores 1', cellCenterScore(flat, 100, 100, wrong, 10, 50) === 1);
+  check('steps: but with unequal steps it is refused', !gridFixPasses(flat, 100, 100, wrong, 10, 50));
+}
+
+// 1b. What a finished run leads to, and with it the "Show anyway" action,
+// which exists only on 'refused'.
+{
+  const px = sprite(32, 32);
+  const fake = upscale(px, 32, 32, 4);
+  const start = { pixels: fake, width: 128, height: 128 };
+  const right = { pixels: px, width: 32, height: 32 };
+  const wrong = { pixels: reduce(px, 32, 32, 11, 11), width: 11, height: 11 };
+  const edited = new Uint8ClampedArray(fake);
+  edited[3 * 4] ^= 1;
+
+  check('same image: the same bytes in another array', sameImage(start, { ...start, pixels: new Uint8ClampedArray(fake) }));
+  check('same image: one byte off is not', !sameImage(start, { ...start, pixels: edited }));
+  check('same image: another size is not', !sameImage(start, { pixels: fake, width: 64, height: 256 }));
+  check('same image: an image gone is not', !sameImage(start, { pixels: null, width: 0, height: 0 }));
+
+  check('outcome: a passing result is offered', fixGridOutcome(start, start, right) === 'offered');
+  check('outcome: a refused result is refused', fixGridOutcome(start, start, wrong) === 'refused');
+  check('outcome: an edit during the run drops a passing result', fixGridOutcome(start, { ...start, pixels: edited }, right) === 'changed');
+  check('outcome: and a refused one, which then gets no action', fixGridOutcome(start, { ...start, pixels: edited }, wrong) === 'changed');
+  check('outcome: a resized image is dropped too', fixGridOutcome(start, { pixels: px, width: 32, height: 32 }, right) === 'changed');
 }
 
 // 2. The cap and the limits.
@@ -230,10 +352,16 @@ function runFix(png) {
   check('copy: too big, full cap', fixGridTooBig(4_000_000) === 'This image is too big to fix here. Try one up to 2000 x 2000.');
   check('copy: too big, low memory', fixGridTooBig(2_000_000) === 'This image is too big to fix here. Try one up to 1414 x 1414.');
   check('copy: too small', FIX_GRID_TOO_SMALL === 'This image is too small to need fixing.');
-  check('copy: the guard', FIX_GRID_ALREADY_CLEAN === 'This already looks like clean pixel art. Nothing changed.');
+  check('copy: the guard', FIX_GRID_NOT_FOUND === "Couldn't find a pixel grid to fix in this image. Nothing changed.");
+  check('copy: the action on a refusal', FIX_GRID_SHOW_ANYWAY === 'Show anyway');
+  check('copy: the line in the dialog', FIX_GRID_MAY_BE_WRONG === 'This may not be right. Compare before you use it.');
+  check('copy: the dismiss button', FIX_GRID_DISMISS === 'Dismiss');
+  check('copy: an edit during a run', FIX_GRID_CHANGED === 'The image changed while fixing, so nothing changed. Press Fix pixel grid again.');
   check('copy: the failure', FIX_GRID_FAILED === 'Fix pixel grid could not load. Try again in a moment. The rest of the editor still works.');
   check('copy: running', FIX_GRID_RUNNING === 'Fixing the pixel grid...');
   check('copy: the tooltip', FIX_GRID_TOOLTIP === 'Fix pixel grid: turns blurry or upscaled pixel art into clean pixels');
+  check('copy: the description is not the name again', FIX_GRID_DESCRIPTION === 'Turns blurry or upscaled pixel art into clean pixels');
+  check('copy: the divider\'s value', fixGridDividerValue(30) === '30% before, 70% after' && fixGridDividerValue(100) === '100% before, 0% after');
   check('copy: the size line', fixGridSizes(160, 120, 32, 24) === '160 x 120 to 32 x 24');
   check('copy: the banner', fixGridBanner(160, 120, 32, 24) === 'Pixel grid fixed: 160 x 120 to 32 x 24.');
 }
@@ -257,15 +385,27 @@ function runFix(png) {
     check('wasm: x5 gives back 32 x 32', out.w === 32 && out.h === 32, [out.w, out.h]);
     const same = out.px.length === native.length && out.px.every((v, i) => v === native[i]);
     check('wasm: x5 gives back the sprite exactly', same);
-    check('wasm: the guard passes it', roundTripScore(fake, 160, 160, out.px, out.w, out.h) >= ROUND_TRIP_MIN);
+    check('wasm: the guard passes it', gridFixPasses(fake, 160, 160, out.px, out.w, out.h));
+  }
+
+  // The case that decided the score: blur smears only the borders between
+  // cells, so a true fix of a blurred x3 sheet passes at the right size.
+  const blurred = blur(upscale(sheet(128, 901), 128, 128, 3), 384, 384, 0.8);
+  const unblurred = runFix(encodePng(blurred, 384, 384));
+  check('wasm: a blurred x3 sheet runs', !!unblurred.png, unblurred.error);
+  if (unblurred.png) {
+    const out = decodePng(unblurred.png);
+    check('wasm: a blurred x3 sheet comes back at the right size', out.w === 128 && out.h === 128, [out.w, out.h]);
+    const score = cellCenterScore(blurred, 384, 384, out.px, out.w, out.h);
+    check('wasm: the guard passes it', gridFixPasses(blurred, 384, 384, out.px, out.w, out.h), score);
   }
 
   const clean = runFix(encodePng(native, 32, 32));
   check('wasm: the sprite as it is runs', !!clean.png, clean.error);
   if (clean.png) {
     const out = decodePng(clean.png);
-    const score = roundTripScore(native, 32, 32, out.px, out.w, out.h);
-    check('wasm: the guard rejects what it returns for clean art', score < ROUND_TRIP_MIN, { score, size: [out.w, out.h] });
+    const score = cellCenterScore(native, 32, 32, out.px, out.w, out.h);
+    check('wasm: the guard refuses what it returns for a busy clean sprite', !gridFixPasses(native, 32, 32, out.px, out.w, out.h), { score, size: [out.w, out.h] });
   }
 
   const small = runFix(encodePng(sprite(15, 15), 15, 15));
@@ -285,6 +425,18 @@ function runFix(png) {
   const license = readFileSync(path.join(ROOT, 'public/wasm/pixel-art-fixer-LICENSE.txt'), 'utf8');
   check('build: the license ships with it', license.startsWith('MIT License') && license.includes('Astropulse, LLC'));
   check('build: the .wasm holds no local path', !wasmBytes.includes('/Users/'));
+
+  const notices = readFileSync(path.join(ROOT, 'public/wasm/THIRD-PARTY-NOTICES.txt'), 'utf8');
+  const credits = JSON.parse(readFileSync(path.join(ROOT, 'src/lib/pixelGridCredits.json'), 'utf8'));
+  check('notices: every package has a row', credits.length > 0 && credits.every((c) => c.name && c.version && c.license && c.repository));
+  check('notices: sorted', credits.every((c, i) => i === 0 || credits[i - 1].name < c.name));
+  check('notices: every package has a block', credits.every((c) => notices.includes(`${c.version}\nLicense: ${c.license}\n`)));
+  check('notices: the fixer and its owner', notices.includes('pixel-art-fixer (pixelfixer)') && notices.includes('Astropulse, LLC'));
+  check('notices: the Rust standard library', /Rust standard library [\d.]+\nLicense: MIT\n/.test(notices) && notices.includes('The Rust Project Developers'));
+  check('notices: the MIT text, once', notices.split('Permission is hereby granted').length === 2);
+  check('notices: the BSD-3-Clause text, once', notices.split('Redistribution and use').length === 2);
+  check('notices: no date or local path', !/\/Users\/|\d{4}-\d{2}-\d{2}/.test(notices));
+  check('notices: only MIT and BSD-3-Clause', credits.every((c) => c.license === 'MIT' || c.license === 'BSD-3-Clause'));
 }
 
 // 7. The client: the worker starts on the first call, one request runs at a
@@ -302,7 +454,7 @@ function runFix(png) {
     postMessage(message, transfer) { this.posted.push({ message, transfer }); }
     terminate() { this.terminated = true; }
   };
-  const { fixPixelGrid, terminatePixelGrid } = await import(pathToFileURL(CLIENT).href);
+  const { fixPixelGrid, cancelPixelGrid, terminatePixelGrid } = await import(pathToFileURL(CLIENT).href);
   check('client: importing it starts no worker', workers.length === 0);
 
   const input = new ArrayBuffer(4);
@@ -341,12 +493,72 @@ function runFix(png) {
   check('client: and is ended', workers[1].terminated);
   mock.timers.reset();
 
+  const cancelled = fixPixelGrid(new ArrayBuffer(4));
+  const runningCount = workers.length;
+  cancelPixelGrid();
+  await assertRejects(cancelled, 'client: cancel fails the request under way');
+  check('client: and keeps the worker', !workers.at(-1).terminated && workers.length === runningCount);
+  const stale = workers.at(-1).posted.at(-1).message.id;
+  const next = fixPixelGrid(new ArrayBuffer(4));
+  check('client: the next image uses the same worker', workers.length === runningCount);
+  workers.at(-1).onmessage({ data: { id: stale, ok: true, png: new ArrayBuffer(1) } });
+  workers.at(-1).onmessage({ data: { id: workers.at(-1).posted.at(-1).message.id, ok: true, png: output } });
+  check('client: a late answer to the cancelled run is ignored', (await next) === output);
+  cancelPixelGrid();
+  check('client: cancel with nothing running is safe', !workers.at(-1).terminated);
+
   const left = fixPixelGrid(new ArrayBuffer(4));
   terminatePixelGrid();
   await assertRejects(left, 'client: terminate() fails the request under way');
-  check('client: terminate() ends the worker', workers[2].terminated);
+  check('client: terminate() ends the worker', workers.at(-1).terminated);
   terminatePixelGrid();
   check('client: terminate() with nothing running is safe', true);
+}
+
+// 8. "Show anyway" goes on an edit: the body drops the kept result when the
+// store's pixels change, so every edit must change them, and nothing else may.
+{
+  const STORE = path.join(ROOT, 'local', '.pixel-grid-test', 'editorStore.mjs');
+  await build({
+    entryPoints: [path.join(ROOT, 'src/components/sprites/editorStore.ts')],
+    bundle: true, format: 'esm', platform: 'node', outfile: STORE, logLevel: 'silent',
+    tsconfig: path.join(ROOT, 'tsconfig.json'), external: ['zustand', 'zustand/*'],
+  });
+  globalThis.ImageData ??= class {
+    constructor(data, width, height) { this.data = data; this.width = width; this.height = height; }
+  };
+  const { useEditorStore } = await import(pathToFileURL(STORE).href);
+  const store = () => useEditorStore.getState();
+  const W = 16;
+  const load = () => store().loadFrame('current', sprite(W, W), W, W);
+  const dropsOn = (name, edit, prepare = () => {}) => {
+    load();
+    prepare();
+    const start = { pixels: new Uint8ClampedArray(store().pixels), width: W, height: W };
+    let dropped = 0;
+    const stop = useEditorStore.subscribe((s) => s.pixels, () => { dropped++; });
+    edit();
+    stop();
+    check(`action: goes on ${name}`, dropped > 0);
+    check(`action: and the image is no longer the one fixed, ${name}`, !sameImage(start, store()));
+  };
+  const stroke = () => { store().beginStroke(); store().paintPixel(1, 1, '#123456'); store().endStroke(); };
+  dropsOn('a stroke', stroke);
+  dropsOn('a stroke held down, before it ends', () => { store().beginStroke(); store().paintPixel(1, 1, '#123456'); });
+  dropsOn('an eraser stroke', () => { store().beginStroke(); store().erasePixel(1, 1); store().endStroke(); });
+  dropsOn('undo', () => store().undo(), stroke);
+  dropsOn('redo', () => store().redo(), () => { stroke(); store().undo(); });
+  dropsOn('flip', () => store().flipHorizontal());
+  dropsOn('revert', () => store().revertToOriginal(), stroke);
+  load();
+  let moved = 0;
+  const stop = useEditorStore.subscribe((s) => s.pixels, () => { moved++; });
+  store().setActiveTool('eraser');
+  store().setBrushSize(4);
+  store().setForegroundColor('#123456');
+  store().eyedrop(1, 1);
+  stop();
+  check('action: stays through a tool, brush or color change', moved === 0);
 }
 
 console.log(failed ? `${failed} FAILED` : 'all passed');

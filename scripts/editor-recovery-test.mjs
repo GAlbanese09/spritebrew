@@ -146,7 +146,7 @@ function loadFrame() {
 }
 const edit = () => R.useEditorStore.getState().flipHorizontal();
 let n = 0;
-async function session({ key = `modal:case${++n}`, surface = 'modal', user = 'user_a', loaded = true } = {}) {
+async function session({ key = `modal:case${++n}`, surface = 'modal', user = 'user_a', loaded = true, saveUnedited = false } = {}) {
   // What an earlier case left in flight (an editor's last save or close as
   // it went) lands first, outside this case's log.
   await advance(100);
@@ -157,7 +157,7 @@ async function session({ key = `modal:case${++n}`, surface = 'modal', user = 'us
   globalThis.__auth = { isLoaded: loaded, userId: user };
   R.useEditorStore.getState().reset();
   loadFrame();
-  const c = R.mount(() => R.useEditorRecovery({ enabled: true, getPalette: () => ['#ffffff'], projectKey: key, surface }));
+  const c = R.mount(() => R.useEditorRecovery({ enabled: true, getPalette: () => ['#ffffff'], projectKey: key, surface, saveUnedited }));
   return { key, c };
 }
 const saves = () => db.log.filter((e) => e[0] === 'save');
@@ -538,6 +538,46 @@ for (const existing of [false, true]) {
   check("a render that ends a session and first knows the account: the ending session saves with no owner (A's draft stays A's), the new session saves as the account",
     oldSaves.length === 1 && oldSaves[0] === undefined && old.owner === 'user_a' && newSaves.length >= 1 && newSaves.every((o) => o === 'user_b'), { oldSaves, newSaves, old });
   d.unmount();
+}
+
+// 23. A fixed image the person chose to use is saved as it opens, with no
+// edit of its own (audit r1, finding 7), and Undo fix still discards it.
+{
+  const plain = await session({ surface: 'page' });
+  await drain();
+  await advance(2000);
+  check('an image opened with no edit is not saved', saves().length === 0, db.log);
+  plain.c.unmount();
+
+  const { key, c } = await session({ surface: 'page', saveUnedited: true });
+  await drain();
+  const s = saves();
+  check('a fixed image is saved as it opens, at once, with no edit', s.length === 1 && s[0][1] === key && db.manifests.has(key), db.log);
+  await advance(2000);
+  check('and only once', saves().length === 1, db.log);
+  await R.discardEditorDraft(key);
+  c.unmount();
+  await advance(2000);
+  check('Undo fix still discards that draft, and nothing writes it again', !db.manifests.has(key) && saves().length === 1, db.log);
+
+  await advance(100);
+  db.log.length = 0;
+  R.useEditorStore.getState().reset();
+  const late = R.mount(() => R.useEditorRecovery({ enabled: true, getPalette: () => [], projectKey: 'page:late23', surface: 'page', saveUnedited: true }));
+  await drain();
+  loadFrame();
+  await drain();
+  check('and when the image loads after the session started', saves().filter((e) => e[1] === 'page:late23').length === 1, db.log);
+  late.unmount();
+
+  await advance(100);
+  db.log.length = 0;
+  R.useEditorStore.getState().reset();
+  const gone = R.mount(() => R.useEditorRecovery({ enabled: true, getPalette: () => [], projectKey: 'page:empty23', surface: 'page', saveUnedited: true }));
+  await drain();
+  await advance(2000);
+  check('an empty store has nothing to save', saves().filter((e) => e[1] === 'page:empty23').length === 0, db.log);
+  gone.unmount();
 }
 
 console.log(`${pass} passed, ${fail} failed`);

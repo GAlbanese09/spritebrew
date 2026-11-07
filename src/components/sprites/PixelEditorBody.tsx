@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Pencil, Eraser, Pipette, Undo2, Redo2, FlipHorizontal, History, Save, X, ArrowLeft, Film, AlertCircle, Download, ScanEye, Sparkles, Layers, Minus, Plus, ChevronDown, Check, Grid3x3, Loader2 } from 'lucide-react';
@@ -14,6 +14,7 @@ import {
   VALID_BRUSH_SIZES,
   dimsWithinEditorLimits,
   editorDimsRejectionMessage,
+  type BrushSize,
   type Tool,
   type DirtyRect,
 } from './editorStore';
@@ -29,27 +30,33 @@ import {
   zoomShortcut,
   zoomNumberKey,
   isBrushKey,
+  layerRendering as layerRenderingFor,
   zoomAllowed,
   zoomMenuMaxHeight,
   ZOOM_MENU_LEVELS,
 } from '@/lib/editorZoom';
 import {
-  FIX_GRID_ALREADY_CLEAN,
+  FIX_GRID_CHANGED,
+  FIX_GRID_DESCRIPTION,
+  FIX_GRID_DISMISS,
   FIX_GRID_FAILED,
   FIX_GRID_LABEL,
+  FIX_GRID_NOT_FOUND,
   FIX_GRID_RUNNING,
+  FIX_GRID_SHOW_ANYWAY,
   FIX_GRID_TOO_SMALL,
   FIX_GRID_TOOLTIP,
   FIX_GRID_UNDO,
   MIN_SIDE,
-  ROUND_TRIP_MIN,
   dataUrlToBytes,
+  fixGridOutcome,
   fixGridTooBig,
   pixelGridCap,
   pngBytesToDataUrl,
-  roundTripScore,
+  sameImage,
+  type FixGridImage,
 } from '@/lib/pixelGrid';
-import { fixPixelGrid, terminatePixelGrid } from '@/lib/pixelGridClient';
+import { cancelPixelGrid, fixPixelGrid } from '@/lib/pixelGridClient';
 import FixPixelGridDialog, { type FixGridCompare } from './FixPixelGridDialog';
 import { loadImage } from '@/lib/spriteUtils';
 import {
@@ -73,6 +80,20 @@ const RESIDUE_RESCAN_MS = 150;
 /** How long "Fix pixel grid" shows a toast: these are sentences, longer to
  *  read than "Cleaned 4 pixels". */
 const FIX_TOAST_MS = 4000;
+
+/** The banners over the canvas: one surface, the zoom control's, with its
+ *  buttons at the same height and 44 px tall on phones. */
+const FIX_BANNER_CLASS =
+  'pointer-events-auto w-max max-w-full flex items-center gap-1 p-0.5 pl-3 rounded-xl bg-bg-primary/90 backdrop-blur-sm border border-border-subtle transition-opacity duration-[160ms] ease-out starting:opacity-0 motion-reduce:transition-none';
+const FIX_BANNER_BUTTON_CLASS = 'shrink-0 h-11 md:h-7 px-2 rounded-lg text-xs font-mono hover:bg-bg-hover cursor-pointer';
+
+/** The person's tool, brush size and color, which "Fix pixel grid" carries
+ *  from one image to the next. */
+export interface EditorTools {
+  tool: Tool;
+  brushSize: BrushSize;
+  color: string;
+}
 
 /** An image handed on by "Fix pixel grid" (onReplaceImage). */
 export interface EditorImage {
@@ -228,6 +249,12 @@ interface PixelEditorBodyProps {
    * and onEdited, called at the first edit, after which the caller drops it.
    */
   fixNotice?: { text: string; onUndo: () => void; onEdited: () => void };
+  /**
+   * Given when "Use fixed image" or "Undo fix" opened this image: each makes a
+   * new body, which starts with these settings and with focus on the Fix
+   * button.
+   */
+  keptTools?: EditorTools;
 }
 
 export default function PixelEditorBody({
@@ -245,6 +272,7 @@ export default function PixelEditorBody({
   onion,
   onReplaceImage,
   fixNotice,
+  keptTools,
 }: PixelEditorBodyProps) {
   const editorCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -352,7 +380,8 @@ export default function PixelEditorBody({
   // and an iPhone reload in the middle of a modal session lost all of it
   // (BUILD 2026-10-29). Reads the live palette at save time via the closure
   // so the saved envelope includes it (toProject emits an empty palette).
-  useEditorRecovery({ enabled: true, getPalette: () => palette, projectKey: draftKey, surface: layout });
+  // A fixed image the person chose to use is saved as it opens, edited or not.
+  useEditorRecovery({ enabled: true, getPalette: () => palette, projectKey: draftKey, surface: layout, saveUnedited: fixNotice !== undefined });
 
   // Mobile-only Colors sheet (Wave 2b-2). Hosts the color picker + palette
   // on phones; never opens at md+ (the close-on-md effect dismisses if the
@@ -366,19 +395,26 @@ export default function PixelEditorBody({
   // "Fix pixel grid" (W3). fixing is the button's and the toast's state, kept
   // apart from the toast's text so a brush-size toast cannot end the running
   // one; the ref is what a second press reads. fixCompare outlives fixOpen so
-  // the dialog keeps its content while it fades out.
+  // the dialog keeps its content while it fades out. fixRefusal is a result
+  // the guard refused, kept for "Show anyway" while its banner stays, and
+  // fixStartRef the pixels the latest result was made from: a result is never
+  // shown or used against any others.
   const [fixing, setFixing] = useState(false);
   const fixingRef = useRef(false);
   const fixButtonRef = useRef<HTMLButtonElement>(null);
+  const fixDescriptionId = useId();
   const [fixCompare, setFixCompare] = useState<FixGridCompare | null>(null);
   const [fixOpen, setFixOpen] = useState(false);
-  // False once this body has gone: a fix that answers later does nothing.
+  const [fixRefusal, setFixRefusal] = useState<FixGridCompare | null>(null);
+  const fixStartRef = useRef<FixGridImage | null>(null);
+  // False once this body has gone: a fix that answers later does nothing. The
+  // worker stays for the next image (the page ends it when it goes).
   const bodyLiveRef = useRef(false);
   useEffect(() => {
     bodyLiveRef.current = true;
     return () => {
       bodyLiveRef.current = false;
-      terminatePixelGrid();
+      cancelPixelGrid();
     };
   }, []);
 
@@ -427,6 +463,18 @@ export default function PixelEditorBody({
   // measurement with the image's size keeps it fitted if the area changed
   // while the image loaded (W2 audit r2, finding 4).
   const openedFitRef = useRef(0);
+  // The banners' lane (audit r1, finding 5): a banner takes the top of the
+  // canvas area and the canvas container starts below it, so no part of the
+  // image is ever under a banner, at any zoom. laneRoomRef is the height it
+  // takes now. heldRoomRef is what it took and gave back: the fit keeps that
+  // much clear above the image, so when a banner goes the image stays exactly
+  // where it is, with the banner's height as extra room above it.
+  const laneRef = useRef<HTMLDivElement>(null);
+  const laneRoomRef = useRef(0);
+  const heldRoomRef = useRef(0);
+  // The lane's height the last time the fit looked: a change is the lane's
+  // own doing, and the lane's effect has placed the image already.
+  const laneSeenRef = useRef(0);
   // The device's pixels per CSS px: below one device pixel per image pixel
   // the layers draw smoothed, since nearest-neighbour would drop whole rows.
   const [dpr, setDpr] = useState(1);
@@ -504,6 +552,17 @@ export default function PixelEditorBody({
   useEffect(() => {
     setLoadError(null);
 
+    // The last image's body cleared these when it went, and loading an image
+    // sets the color, so they are set now and again after the load.
+    const keepTools = () => {
+      if (!keptTools) return;
+      const { setActiveTool, setBrushSize, setForegroundColor } = useEditorStore.getState();
+      setActiveTool(keptTools.tool);
+      setBrushSize(keptTools.brushSize);
+      setForegroundColor(keptTools.color);
+    };
+    keepTools();
+
     // Stage 3 restore: a recovered draft carries the full envelope (name,
     // source, frameId, palette) plus raw bytes, so it must go through
     // loadProject, NOT the dataUrl -> loadFrame path, which rebuilds a fresh
@@ -547,6 +606,7 @@ export default function PixelEditorBody({
 
       setPalette(extractPaletteFromImageData(imageData, 16));
       loadFrame('current', new Uint8ClampedArray(imageData.data), frameWidth, frameHeight, source);
+      keepTools();
 
       if (frameDataUrl.startsWith('blob:')) {
         // We own the consumption side of this blob URL. UploadZone created
@@ -980,8 +1040,60 @@ export default function PixelEditorBody({
   );
 
   const zoomToFit = useCallback(() => {
-    if (fit > 0) zoomFromControl(Math.min(fit, MAX_ZOOM), { x: 0, y: fitPanY() });
+    if (fit > 0) zoomFromControl(Math.min(fit, MAX_ZOOM), { x: 0, y: fitPanY(heldRoomRef.current) });
   }, [fit, zoomFromControl]);
+
+  // The fitted zoom for the canvas area as it is now, less any held room, and
+  // the smallest zoom that follows from it.
+  const measureFit = useCallback((imageW: number, imageH: number) => {
+    const container = containerRef.current;
+    const f = container ? fitZoom(container.clientWidth, container.clientHeight - heldRoomRef.current, imageW, imageH) : 0;
+    fitRef.current = f;
+    minZoomRef.current = minZoomFor(f);
+    setFit(f);
+    return f;
+  }, []);
+
+  // The lane's height goes to the container before the opening fit reads the
+  // container (a layout effect runs before that effect) and before the frame
+  // paints. Whatever it does, the image stays put on screen: the container's
+  // center moves by half the change, and the pan takes that back. A whole
+  // image the lane takes room from eases down to the new fit, and one that
+  // would end up behind the lane moves clear of it.
+  const bannerShown = fixNotice !== undefined || fixRefusal !== null;
+  useLayoutEffect(() => {
+    const place = () => {
+      const container = containerRef.current;
+      if (!container) return;
+      const room = laneRef.current?.offsetHeight ?? 0;
+      const change = room - laneRoomRef.current;
+      if (change === 0) return;
+      cancelZoomAnimation();
+      const wasFit = fitRef.current;
+      const z = zoomRef.current;
+      laneRoomRef.current = room;
+      heldRoomRef.current = Math.max(0, heldRoomRef.current - change);
+      container.style.top = `${room}px`;
+      const gesture = gestureRef.current;
+      const pan = { x: panRef.current.x, y: panRef.current.y - change / 2 };
+      if (gesture) gesture.startPan.y -= change / 2;
+      // By the props: as a body opens, the store still holds the last image.
+      const f = measureFit(frameWidth, frameHeight);
+      const held = change > 0 && !gesture ? clampPan(pan, z) : pan;
+      panRef.current = held;
+      if (gesture) return;
+      if (stackRef.current) stackRef.current.style.transform = `translate3d(${held.x}px, ${held.y}px, 0)`;
+      if (change > 0 && f > 0 && z <= wasFit + 1e-6 && z > f + 1e-6) {
+        zoomFromControl(Math.min(f, MAX_ZOOM), { x: 0, y: fitPanY(heldRoomRef.current) });
+      }
+    };
+    place();
+    const lane = laneRef.current;
+    if (!lane) return;
+    const ro = new ResizeObserver(place);
+    ro.observe(lane);
+    return () => ro.disconnect();
+  }, [bannerShown, frameWidth, frameHeight, zoomFromControl, cancelZoomAnimation, clampPan, measureFit]);
 
   const zoomStep = useCallback(
     (dir: 1 | -1) => zoomFromControl(nextZoomStep(zoom, dir, fit, minZoomRef.current, MAX_ZOOM)),
@@ -1195,12 +1307,11 @@ export default function PixelEditorBody({
     if (!container) return;
     const update = () => {
       const prev = fitRef.current;
-      const f = fitZoom(container.clientWidth, container.clientHeight, editorWidth, editorHeight);
-      fitRef.current = f;
-      minZoomRef.current = minZoomFor(f);
-      setFit(f);
+      const f = measureFit(editorWidth, editorHeight);
       setDpr(window.devicePixelRatio || 1);
-      if (!(f > 0)) return;
+      const laneMoved = laneSeenRef.current !== laneRoomRef.current;
+      laneSeenRef.current = laneRoomRef.current;
+      if (!(f > 0) || laneMoved) return;
       // Not during a pinch: its own commit lands the zoom when the fingers
       // lift, against the new smallest zoom (W2 audit r2, finding 8: a commit
       // here replaced the live pinch under the fingers).
@@ -1218,18 +1329,18 @@ export default function PixelEditorBody({
         (openedAt > 0 && Math.abs(z - openedAt) < 1e-6);
       if (atFit || z < minZoomRef.current - 1e-9) {
         openedUnfittedRef.current = false;
-        commitRef.current(Math.min(f, MAX_ZOOM), { x: 0, y: fitPanY() });
+        commitRef.current(Math.min(f, MAX_ZOOM), { x: 0, y: fitPanY(heldRoomRef.current) });
       } else if (openedUnfittedRef.current) {
         openedUnfittedRef.current = false;
         const z1 = openingZoom(z, f);
-        if (z1 !== z) commitRef.current(z1, { x: 0, y: fitPanY() });
+        if (z1 !== z) commitRef.current(z1, { x: 0, y: fitPanY(heldRoomRef.current) });
       }
     };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(container);
     return () => ro.disconnect();
-  }, [editorWidth, editorHeight]);
+  }, [editorWidth, editorHeight, measureFit]);
 
   // Safari's trackpad pinch (W2): Safari sends gesturestart, gesturechange
   // and gestureend with a scale from the start of the pinch, not a ctrl
@@ -1857,14 +1968,23 @@ export default function PixelEditorBody({
     brushToastTimerRef.current = setTimeout(() => setBrushToast(null), FIX_TOAST_MS);
   }, []);
 
+  // The refusal and its kept result go together. Focus inside the banner goes
+  // to the Fix button first, or it would fall to the page with the banner.
+  const dropFixRefusal = useCallback(() => {
+    if (laneRef.current?.contains(document.activeElement)) fixButtonRef.current?.focus({ preventScroll: true });
+    setFixRefusal(null);
+  }, []);
+
   // "Fix pixel grid": the fixer runs in a worker and the editor stays usable.
-  // A second press while it runs does nothing. The guard's answer and every
-  // failure are a toast; nothing in the editor changes until the person
-  // chooses "Use fixed image".
+  // A second press while it runs does nothing. A result made from pixels that
+  // have since changed is dropped, the guard's refusal is a banner that keeps
+  // the result for "Show anyway", and every failure is a toast. Nothing in the
+  // editor changes until the person chooses "Use fixed image".
   const handleFixGrid = useCallback(async () => {
     if (fixingRef.current) return;
     const { pixels, width, height } = useEditorStore.getState();
     if (!pixels) return;
+    dropFixRefusal();
     const cap = pixelGridCap((navigator as Navigator & { deviceMemory?: number }).deviceMemory);
     if (width * height > cap) {
       showFixToast(fixGridTooBig(cap));
@@ -1876,22 +1996,33 @@ export default function PixelEditorBody({
     }
     fixingRef.current = true;
     setFixing(true);
-    const input = new Uint8ClampedArray(pixels);
+    const start: FixGridImage = { pixels: new Uint8ClampedArray(pixels), width, height };
     try {
       // The spinner paints before the PNG export, which holds the main
       // thread for a moment on a large image.
       await new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
-      const beforeUrl = pixelsToPngDataUrl(input, width, height);
+      if (!bodyLiveRef.current) return;
+      const beforeUrl = pixelsToPngDataUrl(start.pixels, width, height);
       const png = await fixPixelGrid(dataUrlToBytes(beforeUrl).buffer);
       const afterUrl = pngBytesToDataUrl(new Uint8Array(png));
       const fixed = await decodeImageToFrame(afterUrl);
       if (!bodyLiveRef.current) return;
-      const score = roundTripScore(input, width, height, new Uint8ClampedArray(fixed.pixels), fixed.width, fixed.height);
-      if (score < ROUND_TRIP_MIN) {
-        showFixToast(FIX_GRID_ALREADY_CLEAN);
+      const outcome = fixGridOutcome(start, useEditorStore.getState(), {
+        pixels: new Uint8ClampedArray(fixed.pixels),
+        width: fixed.width,
+        height: fixed.height,
+      });
+      if (outcome === 'changed') {
+        showFixToast(FIX_GRID_CHANGED);
         return;
       }
-      setFixCompare({ beforeUrl, afterUrl, inW: width, inH: height, outW: fixed.width, outH: fixed.height });
+      fixStartRef.current = start;
+      const compare = { beforeUrl, afterUrl, inW: width, inH: height, outW: fixed.width, outH: fixed.height };
+      if (outcome === 'refused') {
+        setFixRefusal({ ...compare, refused: true });
+        return;
+      }
+      setFixCompare(compare);
       // The dialog gives focus back to what had it when it opened, and Safari
       // does not focus a pressed button.
       fixButtonRef.current?.focus({ preventScroll: true });
@@ -1902,21 +2033,45 @@ export default function PixelEditorBody({
       fixingRef.current = false;
       if (bodyLiveRef.current) setFixing(false);
     }
-  }, [showFixToast]);
+  }, [showFixToast, dropFixRefusal]);
+
+  // The first change to the image drops a kept result, and the action with it.
+  const refusalShown = fixRefusal !== null;
+  useEffect(() => {
+    if (!refusalShown) return;
+    return useEditorStore.subscribe((s) => s.pixels, () => dropFixRefusal());
+  }, [refusalShown, dropFixRefusal]);
+
+  // "Show anyway": the kept result in the usual dialog, at once. The fixer does
+  // not run again. Focus goes to the Fix button first: the dialog gives it back
+  // to what had it when it opened, and the banner's button goes now.
+  const handleShowAnyway = useCallback(() => {
+    const start = fixStartRef.current;
+    const refused = fixRefusal;
+    dropFixRefusal();
+    if (!refused || !start || !sameImage(start, useEditorStore.getState())) return;
+    fixButtonRef.current?.focus({ preventScroll: true });
+    setFixCompare(refused);
+    setFixOpen(true);
+  }, [fixRefusal, dropFixRefusal]);
 
   const handleUseFixed = useCallback(() => {
     if (!fixOpen || !fixCompare || !onReplaceImage) return;
-    const dataUrl = renderToDataUrl();
-    if (!dataUrl) return;
     setFixOpen(false);
-    // Read now, not when the fix started: edits made while it ran are part
-    // of what Undo fix must bring back.
-    const before = { dataUrl, width: fixCompare.inW, height: fixCompare.inH };
+    // A stroke held down as the dialog opened goes on under it. The dialog
+    // showed older pixels then, so its result is not used.
+    const start = fixStartRef.current;
+    if (!start || !sameImage(start, useEditorStore.getState())) {
+      showFixToast(FIX_GRID_CHANGED);
+      return;
+    }
+    // What was on screen is what the fix started from, checked just above.
+    const before = { dataUrl: fixCompare.beforeUrl, width: fixCompare.inW, height: fixCompare.inH };
     // This image's session ends by the person's choice: its edits stay in
     // its draft, which is listed on the Editor and not offered on Generate.
     void closeEditorDraft(draftKey);
     onReplaceImage({ dataUrl: fixCompare.afterUrl, width: fixCompare.outW, height: fixCompare.outH }, before);
-  }, [fixOpen, fixCompare, onReplaceImage, renderToDataUrl, draftKey]);
+  }, [fixOpen, fixCompare, onReplaceImage, showFixToast, draftKey]);
 
   // The banner goes at the first edit. Subscribed from an effect, which runs
   // after the last image's body has reset the store: during this body's first
@@ -1932,12 +2087,13 @@ export default function PixelEditorBody({
       if (edited) onFixNoticeEditedRef.current?.();
     });
   }, [fixNoticeShown]);
-  // Using the fixed image replaces this whole body, with the dialog in it, so
-  // focus comes back to the button here, once the image has loaded: until
-  // then the button is disabled and cannot take it.
+  // "Use fixed image" and "Undo fix" each replace this whole body, so focus
+  // comes back to the button here, once the image has loaded: until then the
+  // button is disabled and cannot take it.
+  const openedByFix = keptTools !== undefined;
   useEffect(() => {
-    if (fixNoticeShown && hasPixels) fixButtonRef.current?.focus({ preventScroll: true });
-  }, [fixNoticeShown, hasPixels]);
+    if (openedByFix && hasPixels) fixButtonRef.current?.focus({ preventScroll: true });
+  }, [openedByFix, hasPixels]);
 
   // Fix #3: scope every editor hotkey to the 'editor' scope so they don't
   // fire while a text input (e.g., the future project-name prompt or a
@@ -2007,9 +2163,7 @@ export default function PixelEditorBody({
     { id: 'eyedropper', icon: Pipette, label: 'Eyedropper' },
   ];
 
-  // Below one device pixel per image pixel, nearest-neighbour drops whole
-  // rows and columns of 1 px art; the layers draw smoothed there (W2 audit).
-  const layerRendering: 'auto' | 'pixelated' = zoom * dpr < 1 ? 'auto' : 'pixelated';
+  const layerRendering = layerRenderingFor(zoom, dpr);
 
   return (
     <>
@@ -2190,18 +2344,22 @@ export default function PixelEditorBody({
           <Sparkles size={16} />
         </button>
         {onReplaceImage && (
-          <button
-            ref={fixButtonRef}
-            onClick={() => void handleFixGrid()}
-            title={FIX_GRID_TOOLTIP}
-            aria-label={FIX_GRID_LABEL}
-            aria-busy={fixing}
-            disabled={!hasPixels}
-            className={`p-2 rounded cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0 flex items-center justify-center
-              ${fixing ? 'text-accent-amber' : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'}`}
-          >
-            {fixing ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : <Grid3x3 size={16} />}
-          </button>
+          <>
+            <button
+              ref={fixButtonRef}
+              onClick={() => void handleFixGrid()}
+              title={FIX_GRID_TOOLTIP}
+              aria-label={FIX_GRID_LABEL}
+              aria-describedby={fixDescriptionId}
+              aria-busy={fixing}
+              disabled={!hasPixels}
+              className={`p-2 rounded cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0 flex items-center justify-center
+                ${fixing ? 'text-accent-amber' : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'}`}
+            >
+              {fixing ? <Loader2 size={16} className="animate-spin motion-reduce:animate-none" /> : <Grid3x3 size={16} />}
+            </button>
+            <span id={fixDescriptionId} hidden>{FIX_GRID_DESCRIPTION}</span>
+          </>
         )}
         {onionAvailable && (
           <button
@@ -2275,22 +2433,41 @@ export default function PixelEditorBody({
             </div>
           </div>
         )}
-        {/* After "Use fixed image": what happened and the way back, above
-            the image and outside the pointer-capturing container, so it
-            takes no room from the canvas and nothing moves when it goes. */}
-        {fixNotice && (
-          <div
-            role="status"
-            className="absolute top-2 left-1/2 -translate-x-1/2 z-10 w-max max-w-[calc(100%-1rem)] flex items-center gap-1 p-0.5 pl-3 rounded-xl bg-bg-primary/90 backdrop-blur-sm border border-border-subtle transition-opacity duration-[160ms] ease-out starting:opacity-0 motion-reduce:transition-none"
-          >
-            <span className="min-w-0 text-balance text-xs font-mono text-text-primary">{fixNotice.text}</span>
-            <button
-              onClick={fixNotice.onUndo}
-              className="shrink-0 h-11 md:h-7 px-2 rounded-lg text-xs font-mono text-accent-amber hover:bg-bg-hover cursor-pointer"
-            >
-              {FIX_GRID_UNDO}
-            </button>
+        {/* The banners, in their own lane above the canvas container (see
+            laneRef), so they cover no part of the image and, with their
+            buttons outside the pointer-capturing container, take no strokes.
+            After "Use fixed image": what happened and the way back. After the
+            guard's refusal: what happened and "Show anyway", until the person
+            edits, presses Fix pixel grid again, opens it or dismisses it. */}
+        {bannerShown && (
+          <div ref={laneRef} className="absolute top-0 inset-x-0 z-10 flex flex-col items-center gap-1 px-2 pt-2 pb-1 pointer-events-none">
+            {fixNotice && (
+              <div role="status" className={FIX_BANNER_CLASS}>
+                <span className="min-w-0 text-balance text-xs font-mono text-text-primary">{fixNotice.text}</span>
+                <button onClick={fixNotice.onUndo} className={`${FIX_BANNER_BUTTON_CLASS} text-accent-amber`}>
+                  {FIX_GRID_UNDO}
+                </button>
+              </div>
+            )}
+            {fixRefusal && (
+              <div data-fix-refusal="" className={FIX_BANNER_CLASS}>
+                <span className="min-w-0 text-balance text-xs font-mono text-text-primary">{FIX_GRID_NOT_FOUND}</span>
+                <button onClick={handleShowAnyway} className={`${FIX_BANNER_BUTTON_CLASS} text-accent-amber`}>
+                  {FIX_GRID_SHOW_ANYWAY}
+                </button>
+                <button onClick={dropFixRefusal} className={`${FIX_BANNER_BUTTON_CLASS} text-text-muted hover:text-text-primary`}>
+                  {FIX_GRID_DISMISS}
+                </button>
+              </div>
+            )}
           </div>
+        )}
+        {/* The refusal is announced here, once: a live region must exist
+            before its text arrives, and the banner above comes and goes. */}
+        {onReplaceImage && (
+          <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {fixRefusal ? FIX_GRID_NOT_FOUND : ''}
+          </span>
         )}
         {/* Zoom control (W2; George, Nov 4: "more intuitive and just apple
             product like"): one pill at the bottom of the canvas area, minus,
@@ -2398,7 +2575,7 @@ export default function PixelEditorBody({
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
           onLostPointerCapture={handlePointerUp}
-          className="absolute inset-0 flex items-center justify-center"
+          className="absolute inset-0 overflow-hidden flex items-center justify-center"
           style={{
             // Wave 2a touch CSS: kill browser's default touch behaviors so
             // one-finger drags hit our pointer handlers instead of scrolling

@@ -18,9 +18,17 @@ export const FIT_PAD_TOP = 16;
 export const FIT_PAD_BOTTOM = 60;
 
 /** The vertical offset that centres a fitted image between the top padding
- *  and the zoom control (negative: up). */
-export function fitPanY(): number {
-  return -(FIT_PAD_BOTTOM - FIT_PAD_TOP) / 2;
+ *  and the zoom control (negative: up). `heldRoom` is extra room kept clear
+ *  above the image, taken off the height given to fitZoom. */
+export function fitPanY(heldRoom = 0): number {
+  return -(FIT_PAD_BOTTOM - FIT_PAD_TOP - heldRoom) / 2;
+}
+
+/** How an image layer draws at a zoom on a screen of `dpr` device pixels per
+ *  CSS px: below one device pixel per image pixel, nearest-neighbor drops
+ *  whole rows and columns of 1 px art, so it draws smoothed (W2 audit). */
+export function layerRendering(zoom: number, dpr: number): 'auto' | 'pixelated' {
+  return zoom * dpr < 1 ? 'auto' : 'pixelated';
 }
 
 /** The zoom control's steps, powers of two from 25% to 3,200% (pixel art

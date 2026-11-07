@@ -12,16 +12,22 @@ let worker: Worker | null = null;
 let nextId = 0;
 let inFlight: { reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> } | null = null;
 
-/** Ends the worker and fails any request under way. The next call starts a
- *  new worker. */
+/** Fails the request under way, if any, and keeps the worker and its compiled
+ *  fixer for the next image: a new image in the editor only cancels. The
+ *  worker finishes what it holds and no one is listening for that answer. */
+export function cancelPixelGrid(): void {
+  if (!inFlight) return;
+  clearTimeout(inFlight.timer);
+  inFlight.reject(new Error('Fix pixel grid stopped'));
+  inFlight = null;
+}
+
+/** Ends the worker and fails any request under way, for when the editor page
+ *  goes or the worker has failed. The next call starts a new worker. */
 export function terminatePixelGrid(): void {
   worker?.terminate();
   worker = null;
-  if (inFlight) {
-    clearTimeout(inFlight.timer);
-    inFlight.reject(new Error('Fix pixel grid stopped'));
-    inFlight = null;
-  }
+  cancelPixelGrid();
 }
 
 /** Runs the fixer on a PNG, one request at a time, and gives the fixed PNG.

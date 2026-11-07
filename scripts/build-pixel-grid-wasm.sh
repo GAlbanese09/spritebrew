@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds public/wasm/pixel-grid.wasm from wasm/pixel-grid (the fixer behind
-# "Fix pixel grid" in /editor), its sha256 file and the fixer's license. The
-# result is reproducible: run it twice, or after cargo clean, and the sha256
-# is the same, and git status stays clean.
+# "Fix pixel grid" in /editor), its sha256 file, the fixer's license and the
+# notices for every crate in it. The result is reproducible: run it twice, or
+# after cargo clean, and the sha256 is the same, and git status stays clean.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -36,6 +36,7 @@ mkdir -p "$OUT"
 cp target/wasm32-unknown-unknown/release/pixel_grid_wasm.wasm "$OUT/pixel-grid.wasm"
 chmod 644 "$OUT/pixel-grid.wasm"
 cp LICENSE-pixel-art-fixer "$OUT/pixel-art-fixer-LICENSE.txt"
+node "$ROOT/scripts/build-pixel-grid-notices.mjs"
 
 cd "$OUT"
 if command -v sha256sum >/dev/null 2>&1; then

@@ -1,16 +1,19 @@
 'use client';
 
-import { useCallback, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
-import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/react';
+import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
+import { Description, Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/react';
 import { GripVertical } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import { layerRendering } from '@/lib/editorZoom';
 import {
   FIX_GRID_AFTER,
   FIX_GRID_BEFORE,
   FIX_GRID_CANCEL,
   FIX_GRID_DIVIDER_NAME,
   FIX_GRID_LABEL,
+  FIX_GRID_MAY_BE_WRONG,
   FIX_GRID_USE,
+  fixGridDividerValue,
   fixGridSizes,
 } from '@/lib/pixelGrid';
 
@@ -21,11 +24,16 @@ export interface FixGridCompare {
   inH: number;
   outW: number;
   outH: number;
+  /** The guard refused this result and the person asked to see it anyway. */
+  refused?: boolean;
 }
 
 /** The dialog's title, line and buttons, in rem: what the compare view must
  *  leave room for so the whole dialog fits the screen. */
 const DIALOG_CHROME_REM = 11;
+
+/** And the line under the title on a refused result, two lines on a phone. */
+const DIALOG_NOTE_REM = 3;
 
 /** How far one arrow key moves the divider, in percent. */
 const ARROW_STEP = 5;
@@ -35,6 +43,12 @@ const LABEL_FADE_AT = 12;
 
 const MOVE_CLASS = 'transition duration-[160ms] ease-out motion-reduce:transition-none';
 
+/** The divider and the after layer ease on the arrow keys. Tailwind's plain
+ *  `transition` names neither of the properties they move by, and a drag
+ *  follows the pointer with no easing at all. */
+const EASE_LEFT_CLASS = 'transition-[left] duration-[160ms] ease-out motion-reduce:transition-none';
+const EASE_CLIP_CLASS = 'transition-[clip-path] duration-[160ms] ease-out motion-reduce:transition-none';
+
 /** Both images at the same size on screen, split by a divider that follows a
  *  drag or a finger and moves with the arrow keys. */
 function CompareView({ compare, checkerboard }: { compare: FixGridCompare; checkerboard: CSSProperties }) {
@@ -42,6 +56,20 @@ function CompareView({ compare, checkerboard }: { compare: FixGridCompare; check
   const [dragging, setDragging] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
   const sliderRef = useRef<HTMLDivElement>(null);
+
+  // The box's width and the screen's density, for the editor's own rule on
+  // when a layer draws smoothed. Measured before the first paint, and by
+  // layout width: the dialog's scale-in does not count.
+  const [view, setView] = useState({ width: 0, dpr: 1 });
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const measure = () => setView({ width: box.clientWidth, dpr: window.devicePixelRatio || 1 });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, []);
 
   const moveTo = useCallback((clientX: number) => {
     const box = boxRef.current?.getBoundingClientRect();
@@ -77,7 +105,8 @@ function CompareView({ compare, checkerboard }: { compare: FixGridCompare; check
     setSplit(Math.max(0, Math.min(100, next[e.key])));
   };
 
-  const follow = dragging ? '' : MOVE_CLASS;
+  const value = Math.round(split);
+  const chrome = DIALOG_CHROME_REM + (compare.refused ? DIALOG_NOTE_REM : 0);
   const label = 'absolute top-1.5 px-1.5 py-0.5 rounded-md bg-black/70 text-[10px] font-mono text-white pointer-events-none';
   return (
     <div
@@ -92,33 +121,33 @@ function CompareView({ compare, checkerboard }: { compare: FixGridCompare; check
       style={{
         ...checkerboard,
         // The height of the room left is the limit for a tall image.
-        width: `min(100%, calc((100dvh - ${DIALOG_CHROME_REM}rem) * ${compare.inW / compare.inH}))`,
+        width: `min(100%, calc((100dvh - ${chrome}rem) * ${compare.inW / compare.inH}))`,
         aspectRatio: `${compare.inW} / ${compare.inH}`,
         touchAction: 'none',
       }}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element -- a data URL, pixelated on purpose */}
+      {/* eslint-disable-next-line @next/next/no-img-element -- a data URL, drawn by the editor's own rule */}
       <img
         src={compare.beforeUrl}
         alt={FIX_GRID_BEFORE}
         draggable={false}
         className="absolute inset-0 w-full h-full"
-        style={{ imageRendering: 'pixelated' }}
+        style={{ imageRendering: layerRendering(view.width / compare.inW, view.dpr) }}
       />
       {/* The after image covers the before one from the divider rightward;
           the checkerboard behind it stops the before image showing through
           what the fix made transparent. */}
       <div
-        className={`absolute inset-0 ${follow}`}
+        className={`absolute inset-0 ${dragging ? '' : EASE_CLIP_CLASS}`}
         style={{ ...checkerboard, clipPath: `inset(0 0 0 ${split}%)` }}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element -- a data URL, pixelated on purpose */}
+        {/* eslint-disable-next-line @next/next/no-img-element -- a data URL, drawn by the editor's own rule */}
         <img
           src={compare.afterUrl}
           alt={FIX_GRID_AFTER}
           draggable={false}
           className="absolute inset-0 w-full h-full"
-          style={{ imageRendering: 'pixelated' }}
+          style={{ imageRendering: layerRendering(view.width / compare.outW, view.dpr) }}
         />
       </div>
       <span className={`${label} left-1.5 ${MOVE_CLASS} ${split < LABEL_FADE_AT ? 'opacity-0' : ''}`}>
@@ -136,9 +165,10 @@ function CompareView({ compare, checkerboard }: { compare: FixGridCompare; check
         aria-orientation="horizontal"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(split)}
+        aria-valuenow={value}
+        aria-valuetext={fixGridDividerValue(value)}
         onKeyDown={onKeyDown}
-        className={`absolute inset-y-0 -translate-x-1/2 w-11 md:w-8 flex items-center justify-center focus:outline-none group ${follow}`}
+        className={`absolute inset-y-0 -translate-x-1/2 w-11 md:w-8 flex items-center justify-center focus:outline-none group ${dragging ? '' : EASE_LEFT_CLASS}`}
         style={{ left: `${split}%` }}
       >
         <span className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-white shadow-[0_0_3px_rgba(0,0,0,0.8)]" />
@@ -190,21 +220,28 @@ export default function FixPixelGridDialog({ open, compare, checkerboard, onUse,
           <DialogTitle className="text-sm font-mono font-semibold text-text-primary">
             {FIX_GRID_LABEL}
           </DialogTitle>
+          {compare?.refused && (
+            <Description as="p" className="text-xs font-mono text-text-secondary">
+              {FIX_GRID_MAY_BE_WRONG}
+            </Description>
+          )}
           {compare && (
             <>
               <div className="flex-1 min-h-0 flex items-center justify-center">
                 <CompareView key={compare.afterUrl} compare={compare} checkerboard={checkerboard} />
               </div>
-              <p className="text-xs font-mono text-text-muted text-center tabular-nums">
+              <Description as="p" className="text-xs font-mono text-text-muted text-center tabular-nums">
                 {fixGridSizes(compare.inW, compare.inH, compare.outW, compare.outH)}
-              </p>
+              </Description>
             </>
           )}
           <div className="flex items-center justify-end gap-2">
-            <Button variant="secondary" size="sm" onClick={onCancel} className="flex-1 md:flex-none">
+            {/* One height: the secondary variant's border would make it 2 px
+                taller than the primary. */}
+            <Button variant="secondary" size="sm" onClick={onCancel} className="flex-1 md:flex-none md:h-8">
               {FIX_GRID_CANCEL}
             </Button>
-            <Button variant="primary" size="sm" onClick={onUse} className="flex-1 md:flex-none">
+            <Button variant="primary" size="sm" onClick={onUse} className="flex-1 md:flex-none md:h-8">
               {FIX_GRID_USE}
             </Button>
           </div>

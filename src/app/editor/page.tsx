@@ -4,7 +4,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react
 import { useAuth } from '@clerk/react';
 import { HotkeysProvider } from 'react-hotkeys-hook';
 import EditorLanding from '@/components/sprites/EditorLanding';
-import PixelEditorBody, { type EditorImage } from '@/components/sprites/PixelEditorBody';
+import PixelEditorBody, { type EditorImage, type EditorTools } from '@/components/sprites/PixelEditorBody';
 import {
   useEditorStore,
   dimsWithinEditorLimits,
@@ -21,6 +21,7 @@ import {
 } from '@/lib/editorRecovery';
 import { discardEditorDraft, editorWritesSettled, isEditorSessionOpen, visibleDraft } from '@/components/sprites/useEditorRecovery';
 import { fixGridBanner } from '@/lib/pixelGrid';
+import { terminatePixelGrid } from '@/lib/pixelGridClient';
 
 /**
  * /editor — full-page Pixel Editor (v2 Phase 1).
@@ -58,7 +59,8 @@ import { fixGridBanner } from '@/lib/pixelGrid';
 //
 // `fixedFrom`, on an image "Fix pixel grid" made: what Undo fix brings back,
 // held until the first edit or until the image is left. Being part of pending,
-// it cannot outlive the image it belongs to.
+// it cannot outlive the image it belongs to. `keptTools`, on an image that
+// "Use fixed image" or "Undo fix" opened: the settings the person had.
 type EditorPending =
   | {
       kind: 'image';
@@ -68,10 +70,17 @@ type EditorPending =
       height: number;
       source?: SpriteProjectSource;
       fixedFrom?: { draftKey: string; image: EditorImage };
+      keptTools?: EditorTools;
     }
   | { kind: 'restore'; draftKey: string; envelope: SpriteProjectV1; bytes: Uint8ClampedArray };
 
 const NO_DRAFTS: RecoveryManifestV1[] = [];
+
+/** The tool, brush size and color in use, read before their body goes. */
+function currentTools(): EditorTools {
+  const { activeTool, brushSize, foregroundColor } = useEditorStore.getState();
+  return { tool: activeTool, brushSize, color: foregroundColor };
+}
 
 export default function EditorPage() {
   const [pending, setPending] = useState<EditorPending | null>(null);
@@ -109,6 +118,8 @@ export default function EditorPage() {
     liveRef.current = true;
     return () => { liveRef.current = false; };
   }, []);
+  // The fixer's worker outlives each image's body and goes with the page.
+  useEffect(() => terminatePixelGrid, []);
   // A count that every restore, new image and Send to Editor moves on, and a
   // Discard of the draft a restore is loading: a restore opens its draft
   // only if no later choice came while it loaded (Second 122, audit r5).
@@ -228,9 +239,15 @@ export default function EditorPage() {
   }, [reset, show]);
 
   // "Use fixed image": the fixed image opens as any new image does, under a
-  // new draft key, with the last image's source.
+  // new draft key, with the last image's source. Fixing a fixed image keeps
+  // the first way back, so Undo fix returns to what was on screen before the
+  // first fix; the image in between has no way back to it then, so its draft
+  // goes (only an unedited fixed image still has a way back to keep).
   const replaceWithFixed = useCallback((current: EditorPending, fixed: EditorImage, before: EditorImage) => {
+    const firstFix = current.kind === 'image' ? current.fixedFrom : undefined;
+    if (firstFix) void discardEditorDraft(current.draftKey);
     intentRef.current++;
+    const keptTools = currentTools();
     show({
       kind: 'image',
       draftKey: newDraftKey('page'),
@@ -238,7 +255,8 @@ export default function EditorPage() {
       width: fixed.width,
       height: fixed.height,
       source: current.kind === 'image' ? current.source : current.envelope.source,
-      fixedFrom: { draftKey: current.draftKey, image: before },
+      fixedFrom: firstFix ?? { draftKey: current.draftKey, image: before },
+      keptTools,
     });
   }, [show]);
 
@@ -250,7 +268,8 @@ export default function EditorPage() {
     const { draftKey, image } = current.fixedFrom;
     void discardEditorDraft(current.draftKey);
     intentRef.current++;
-    show({ kind: 'image', draftKey, dataUrl: image.dataUrl, width: image.width, height: image.height, source: current.source });
+    const keptTools = currentTools();
+    show({ kind: 'image', draftKey, dataUrl: image.dataUrl, width: image.width, height: image.height, source: current.source, keptTools });
   }, [show]);
 
   // The first edit of a fixed image ends the banner. The same image stays
@@ -402,6 +421,7 @@ export default function EditorPage() {
               onUndo: () => undoFix(pending),
               onEdited: () => forgetFix(pending.draftKey),
             }}
+            keptTools={pending.keptTools}
           />
         ) : (
           <PixelEditorBody

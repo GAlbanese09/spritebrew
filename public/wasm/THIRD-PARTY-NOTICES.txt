@@ -1,0 +1,210 @@
+Third-party software in pixel-grid.wasm
+
+pixel-grid.wasm is the WebAssembly build behind "Fix pixel grid" in SpriteBrew. It contains the software listed here. Each entry gives the license it is used under and its copyright lines; the license texts follow the entries. Written by scripts/build-pixel-grid-notices.mjs.
+
+adler2 2.0.1
+License: MIT
+Copyright (C) Jonas Schievink <jonasschievink@gmail.com>
+
+bitflags 2.13.0
+License: MIT
+Copyright (c) 2014 The Rust Project Developers
+
+bytemuck 1.25.1
+License: MIT
+Copyright (c) 2019 Daniel "Lokathor" Gee.
+
+byteorder-lite 0.1.0
+License: MIT
+Copyright (c) 2015 Andrew Gallant
+
+cfg-if 1.0.4
+License: MIT
+Copyright (c) 2014 Alex Crichton
+
+crc32fast 1.5.0
+License: MIT
+Copyright (c) 2018 Sam Rijs, Alex Crichton and contributors
+
+crossbeam-deque 0.8.7
+License: MIT
+Copyright (c) 2019 The Crossbeam Project Developers
+
+crossbeam-epoch 0.9.20
+License: MIT
+Copyright (c) 2019 The Crossbeam Project Developers
+
+crossbeam-utils 0.8.22
+License: MIT
+Copyright (c) 2019 The Crossbeam Project Developers
+
+either 1.16.0
+License: MIT
+Copyright (c) 2015
+No author named in the crate; see https://github.com/rayon-rs/either
+
+fdeflate 0.3.7
+License: MIT
+Copyright (c) The image-rs Developers
+
+flate2 1.1.9
+License: MIT
+Copyright (c) 2014-2026 Alex Crichton
+
+image 0.25.10
+License: MIT
+Copyright (c) The image-rs Developers
+
+itoa 1.0.18
+License: MIT
+Copyright (c) David Tolnay
+
+memchr 2.8.3
+License: MIT
+Copyright (c) 2015 Andrew Gallant
+
+miniz_oxide 0.8.9
+License: MIT
+Copyright 2013-2014 RAD Game Tools and Valve Software
+Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC
+Copyright (c) 2017 Frommi
+Copyright (c) 2017-2024 oyvindln
+Copyright (c) 2020 Frommi
+
+moxcms 0.8.1
+License: BSD-3-Clause
+Copyright 2024 Radzivon Bartoshyk
+Copyright (c) Radzivon Bartoshyk. All rights reserved.
+
+num-complex 0.4.6
+License: MIT
+Copyright (c) 2014 The Rust Project Developers
+
+num-integer 0.1.46
+License: MIT
+Copyright (c) 2014 The Rust Project Developers
+
+num-traits 0.2.19
+License: MIT
+Copyright (c) 2014 The Rust Project Developers
+
+pixel-art-fixer (pixelfixer) 0.1.0
+License: MIT
+Copyright (c) 2026 Astropulse, LLC
+
+png 0.18.1
+License: MIT
+Copyright (c) 2015 nwin
+
+primal-check 0.3.4
+License: MIT
+Copyright (c) 2014 Huon Wilson
+
+pxfm 0.1.30
+License: BSD-3-Clause
+Copyright 2024 Radzivon Bartoshyk
+Copyright (c) Radzivon Bartoshyk. All rights reserved.
+
+rayon 1.12.0
+License: MIT
+Copyright (c) 2010 The Rust Project Developers
+
+rayon-core 1.13.0
+License: MIT
+Copyright (c) 2010 The Rust Project Developers
+
+rustfft 6.4.1
+License: MIT
+Copyright (c) 2015 The RustFFT Developers
+
+serde 1.0.228
+License: MIT
+Copyright (c) Erick Tryzelaar, David Tolnay
+
+serde_core 1.0.228
+License: MIT
+Copyright (c) Erick Tryzelaar, David Tolnay
+
+serde_json 1.0.150
+License: MIT
+Copyright (c) Erick Tryzelaar, David Tolnay
+
+simd-adler32 0.3.9
+License: MIT
+Copyright (c) [2021] [Marvin Countryman]
+
+strength_reduce 0.2.4
+License: MIT
+Copyright (c) 2015 The RustFFT Developers
+
+transpose 0.2.3
+License: MIT
+Copyright 2022 The transpose developers
+Copyright (c) 2022 The transpose Developers
+
+zmij 1.0.21
+License: MIT
+Copyright (c) David Tolnay
+
+zune-core 0.5.1
+License: MIT
+Copyright (c) zune-image developers
+
+zune-jpeg 0.5.15
+License: MIT
+Copyright (c) zune-image developers
+
+Rust standard library 1.99.1
+License: MIT
+Copyright (c) The Rust Project Developers
+
+MIT License
+
+Applies to every entry marked MIT, each with its copyright lines above.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+BSD 3-Clause License
+
+Applies to every entry marked BSD-3-Clause, each with its copyright lines above.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+1.  Redistributions of source code must retain the above copyright notice, this
+    list of conditions and the following disclaimer.
+
+2.  Redistributions in binary form must reproduce the above copyright notice,
+    this list of conditions and the following disclaimer in the documentation
+    and/or other materials provided with the distribution.
+
+3.  Neither the name of the copyright holder nor the names of its
+    contributors may be used to endorse or promote products derived from
+    this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

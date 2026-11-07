@@ -430,6 +430,9 @@ export default function LandingPage() {
             <a href="/refund-policy" className="hover:text-[#9a918a] transition-colors">
               Refund Policy
             </a>
+            <a href="/credits" className="hover:text-[#9a918a] transition-colors">
+              Credits
+            </a>
             <a
               href="https://tally.so/r/Y5oGp6"
               target="_blank"

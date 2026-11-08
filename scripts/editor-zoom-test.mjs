@@ -23,7 +23,7 @@ const {
   FIT_PAD_X, FIT_PAD_TOP, FIT_PAD_BOTTOM, MIN_ZOOM_FLOOR, ZOOM_STEPS, ZOOM_MENU_LEVELS,
   MENU_GAP, MENU_MARGIN, MENU_MIN_PX,
   fitZoom, fitPanY, minZoomFor, openingZoom, formatZoomPercent, nextZoomStep, zoomShortcut,
-  isBrushKey, zoomAllowed, zoomMenuMaxHeight, ZOOM_NUMBER_KEYS, zoomNumberKey,
+  isBrushKey, zoomAllowed, zoomMenuMaxHeight, ZOOM_NUMBER_KEYS, zoomNumberKey, layerRendering, panYClearOfControl,
 } = await import(pathToFileURL(OUT).href);
 
 let failed = 0;
@@ -40,6 +40,12 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   check('pads: 16 at the sides and top, 60 at the bottom', FIT_PAD_X === 16 && FIT_PAD_TOP === 16 && FIT_PAD_BOTTOM === 60);
   check('fit: 1024 in 718 x 565 is exactly 489 / 1024', fitZoom(718, 565, 1024, 1024) === 489 / 1024);
   check('fit: the offset is 22 px up', fitPanY() === -22);
+  check('fit: held room above the image moves it down by half', fitPanY(40) === -2 && fitPanY(44) === 0);
+  // A held room's zoom in keeps an image that fits clear of the control
+  // (audit r3, finding 1): the lowest place is a fit's bottom edge.
+  check('clear of the control: a fitted image may sit no lower than the fit places it', panYClearOfControl(565, 565 - 76) === fitPanY() && panYClearOfControl(565, 565 - 46 - 76) === fitPanY(46));
+  check('clear of the control: a smaller image may sit lower, its bottom on the same line', panYClearOfControl(565, 289) === 565 / 2 - 60 - 289 / 2);
+  check('clear of the control: no bound for an image taller than a fit allows', panYClearOfControl(565, 565 - 75) === Infinity && panYClearOfControl(0, 10) === Infinity);
   // George's laptop: a 718 x 565 canvas area, a 1024 x 1024 sheet.
   const f = fitZoom(718, 565, 1024, 1024);
   check('fit: a 1024 sheet in 718 x 565 is the height-limited zoom', near(f, (565 - FIT_PAD_TOP - FIT_PAD_BOTTOM) / 1024), f);
@@ -94,6 +100,12 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   check('steps: a zoom a hair off a step counts as on it', nextZoomStep(3.99, 1, 0.46, 0.46, 32) === 8 && nextZoomStep(4.01, -1, 0.46, 0.46, 32) === 2);
   check('steps: a small frame (fit 9.2, min 1) passes the fit between 8 and 16', nextZoomStep(8, 1, 9.2, 1, 32) === 9.2 && nextZoomStep(9.2, 1, 9.2, 1, 32) === 16);
   check('steps: with no fit known, the powers of two', nextZoomStep(1, 1, 0, 1, 32) === 2 && nextZoomStep(1, -1, 0, 1, 32) === 1);
+  // A banner's held room (audit r3, finding 1): the held fit 55% is the
+  // smallest zoom, and the whole area's fit 59% is a stop as well.
+  check('steps: with room held, minus at the held fit stays, so a zoom out never grows the image', nextZoomStep(0.55, -1, 0.55, 0.55, 32, 0.59) === 0.55);
+  check('steps: with room held, plus from the held fit is the whole area\'s fit', nextZoomStep(0.55, 1, 0.55, 0.55, 32, 0.59) === 0.59);
+  check('steps: with room held, minus between the fits is the held fit, and from 100% the area\'s fit', nextZoomStep(0.57, -1, 0.55, 0.55, 32, 0.59) === 0.55 && nextZoomStep(1, -1, 0.55, 0.55, 32, 0.59) === 0.59);
+  check('steps: no area fit given is the stops as before', [0.46, 0.5, 4, 7.3, 32].every((z) => [1, -1].every((d) => nextZoomStep(z, d, 0.46, 0.46, 32) === nextZoomStep(z, d, 0.46, 0.46, 32, 0))));
   // W2 audit r2, finding 11: the menu offers only levels the zoom can reach.
   check('allowed: a level below the fit is not offered (50% with the fit at 70%)', zoomAllowed(0.5, 0.7, 32) === false && zoomAllowed(1, 0.7, 32) === true);
   check('allowed: the ends count, with a hair of tolerance', zoomAllowed(0.7, 0.7, 32) && zoomAllowed(32, 0.7, 32) && zoomAllowed(0.7 - 1e-12, 0.7, 32) && !zoomAllowed(32.01, 0.7, 32));
@@ -141,6 +153,12 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   check('brush: [ and ] with Option, or with AltGr (Ctrl and Alt), still change the brush', isBrushKey(e('[', { altKey: true })) && isBrushKey(e(']', { altKey: true, ctrlKey: true })));
   check('brush: Cmd+[ and a plain Ctrl+[ do not', !isBrushKey(e('[', { metaKey: true })) && !isBrushKey(e('[', { ctrlKey: true })));
   check('brush: no number key is a brush key, and no brush key a zoom key', ['1', '2', '3', '4', '5', '6'].every((n) => !isBrushKey(e(n))) && ['[', ']', '-', '='].every((key) => k(key) === null));
+}
+
+// A layer's smoothing, the editor's rule, which the compare view shares.
+{
+  check('rendering: pixelated at 1 device pixel per image pixel and up', layerRendering(1, 1) === 'pixelated' && layerRendering(0.5, 2) === 'pixelated' && layerRendering(8, 1) === 'pixelated');
+  check('rendering: smoothed below that', layerRendering(0.62, 1) === 'auto' && layerRendering(0.4, 2) === 'auto');
 }
 
 console.log(failed ? `${failed} failed` : 'all pass');

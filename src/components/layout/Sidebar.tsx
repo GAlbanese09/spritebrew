@@ -187,7 +187,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           >
             SpriteBrew v{CURRENT_VERSION}
           </a>
-          <div className="flex gap-2 text-[9px] font-mono">
+          <div className="flex flex-wrap gap-x-2 text-[9px] font-mono">
             <a href="/privacy" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
               Privacy
             </a>
@@ -198,6 +198,10 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             <span className="text-text-muted/40">&middot;</span>
             <a href="/refund-policy" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
               Refunds
+            </a>
+            <span className="text-text-muted/40">&middot;</span>
+            <a href="/credits" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
+              Credits
             </a>
             <span className="text-text-muted/40">&middot;</span>
             <a href={FEEDBACK_URL} target="_blank" rel="noopener noreferrer" className="text-text-muted hover:text-text-secondary transition-colors">

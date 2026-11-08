@@ -1,6 +1,6 @@
-Third-party software in pixel-grid.wasm
+Third-party notices for pixel-grid.wasm
 
-pixel-grid.wasm is the WebAssembly build behind "Fix pixel grid" in SpriteBrew. It contains the software listed here. Each entry gives the license it is used under and its copyright lines; the license texts follow the entries. The Rust standard library's entry is followed by its own notices, which cover the crates it is built with. Written by scripts/build-pixel-grid-notices.mjs.
+pixel-grid.wasm is the WebAssembly build behind "Fix pixel grid" in SpriteBrew. This file holds its license notices: an entry for each crate compiled into it and one for the Rust standard library, each with the license it is used under and its copyright lines; then the standard library's own notices as the Rust toolchain ships them, which cover every target and so list packages this .wasm does not hold; then the license texts. Written by scripts/build-pixel-grid-notices.mjs.
 
 adler2 2.0.1
 License: MIT
@@ -158,7 +158,7 @@ Rust standard library 1.99.1
 License: MIT
 Copyright (c) The Rust Project Developers
 
-Notices of the Rust standard library 1.99.1, from COPYRIGHT-library.html in its toolchain:
+The Rust standard library's notices, as the Rust toolchain ships them, for every target. This .wasm uses its wasm32 parts: core, alloc, std, compiler_builtins, hashbrown and dlmalloc.
 
 Copyright notices for The Rust Standard Library
 

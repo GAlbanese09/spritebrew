@@ -23,7 +23,7 @@ await build({
   bundle: true, format: 'esm', platform: 'node', outfile: OUT, logLevel: 'silent',
 });
 const {
-  cellCenterScore, cellScoreAt, gridStepsAgree, gridFixPasses, sameImage, fixGridOutcome,
+  cellCenterScore, cellCenterSearch, cellScoreAt, gridStepsAgree, gridFixPasses, sameImage, fixGridOutcome,
   pixelGridCap, pixelGridCapSide, dataUrlToBytes, pngBytesToDataUrl,
   CELL_CENTER_MIN, CELL_CENTER_TOLERANCE, GRID_STEP_MAX_DIFFERENCE, MIN_SIDE, PIXEL_GRID_MAX_PIXELS, PIXEL_GRID_LOW_MEMORY_PIXELS,
   fixGridTooBig, fixGridSizes, fixGridBanner, fixGridDividerValue,
@@ -100,6 +100,55 @@ function offsetUpscale(px, w, h, k, cx, cy) {
     }
   }
   return { px: out, w: W, h: H };
+}
+
+/** A nearest upscale by a whole k with padX opaque gray columns added at the
+ *  left and padY rows at the top: art whose grid starts later than the
+ *  corner, so its cells are found by a positive shift. */
+function paddedUpscale(px, w, h, k, padX, padY) {
+  const W = w * k + padX;
+  const H = h * k + padY;
+  const out = new Uint8ClampedArray(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (x < padX || y < padY) {
+        out.set([107, 107, 107, 255], (y * W + x) * 4);
+        continue;
+      }
+      const i = (Math.floor((y - padY) / k) * w + Math.floor((x - padX) / k)) * 4;
+      out.set(px.subarray(i, i + 4), (y * W + x) * 4);
+    }
+  }
+  return { px: out, w: W, h: H };
+}
+
+/** An n x n upscale by k whose grid starts dx, dy px before the corner, the
+ *  size kept (the last cell takes the rest), so every cell is k px. */
+function shiftedUpscale(px, n, k, dx, dy) {
+  const W = n * k;
+  const out = new Uint8ClampedArray(W * W * 4);
+  for (let y = 0; y < W; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (Math.min(n - 1, Math.floor((y + dy) / k)) * n + Math.min(n - 1, Math.floor((x + dx) / k))) * 4;
+      out.set(px.subarray(i, i + 4), (y * W + x) * 4);
+    }
+  }
+  return out;
+}
+
+/** Diagonal stripes of the palette, color (x - y) mod 8, with a share of
+ *  loose pixels: art where one cell right and one row down looks alike. */
+function stripes(n, seed, loose) {
+  const palette = [[24, 20, 37], [190, 74, 47], [234, 212, 170], [58, 68, 102], [99, 199, 77], [254, 174, 52], [38, 92, 66], [255, 255, 255]];
+  const next = rng(seed);
+  const px = new Uint8ClampedArray(n * n * 4);
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      const c = next() < loose ? palette[Math.floor(next() * 8)] : palette[(((x - y) % 8) + 8) % 8];
+      px.set([c[0], c[1], c[2], 255], (y * n + x) * 4);
+    }
+  }
+  return px;
 }
 
 /** A sheet the way the fixer's real input looks: rounded sprites of flat color
@@ -297,6 +346,10 @@ function runFix(png) {
   check('score: an opaque input against a transparent output cell is a miss', cellCenterScore(one(0, 0, 0), 1, 1, one(0, 0, 0, 0), 1, 1) === 0);
   check('score: a miss, not a pixel left out: one transparent output cell of two scores 0.5',
     cellCenterScore(ink, 2, 1, pair(10, 20, 30, 0, 10, 20, 30, 255), 2, 1) === 0.5);
+  // The rule the search is held to counts it the same way (audit r3, finding 4).
+  check('score: and so does the rule at one pair of shifts, the tests\' reference',
+    cellScoreAt(ink, 2, 1, pair(10, 20, 30, 0, 10, 20, 30, 255), 2, 1, 0, 0) === 0.5
+    && cellScoreAt(pair(10, 20, 30, 255, 10, 20, 30, 255), 1, 2, pair(10, 20, 30, 0, 10, 20, 30, 255), 1, 2, 0, 0) === 0.5);
   check('score: and against output alpha 127', cellCenterScore(one(9, 9, 9), 1, 1, one(9, 9, 9, 127), 1, 1) === 0);
   check('score: output alpha 128 can match', cellCenterScore(one(9, 9, 9), 1, 1, one(9, 9, 9, 128), 1, 1) === 1);
 
@@ -333,6 +386,56 @@ function runFix(png) {
     const score = cellCenterScore(off.px, off.w, off.h, art, 32, 32);
     check(`search: a perfect fix of x${k} shifted ${cy ? `${cx},${cy}` : cx} px passes`, score === 1 && gridFixPasses(off.px, off.w, off.h, art, 32, 32), score);
   }
+  // Audit r3, finding 4: a grid offset on y alone, which only a search of
+  // the y shifts finds.
+  for (const [k, cy] of [[4, 2], [3, 1]]) {
+    const off = offsetUpscale(art, 32, 32, k, 0, cy);
+    const score = cellCenterScore(off.px, off.w, off.h, art, 32, 32);
+    check(`search: a perfect fix of x${k} shifted 0,${cy} px (y only) passes`, score === 1 && gridFixPasses(off.px, off.w, off.h, art, 32, 32), score);
+  }
+  // A grid that starts later than the corner: a padded left and top edge,
+  // which only a positive shift lines up; no shift of 0 or less on that
+  // axis passes it.
+  for (const [k, padX, padY] of [[3, 2, 0], [3, 0, 2], [4, 2, 2]]) {
+    const pad = paddedUpscale(art, 32, 32, k, padX, padY);
+    const found = cellCenterSearch(pad.px, pad.w, pad.h, art, 32, 32);
+    const reachX = Math.floor(pad.w / 64);
+    const reachY = Math.floor(pad.h / 64);
+    let below = 0;
+    for (let dy = -reachY; dy <= reachY; dy++) {
+      for (let dx = -reachX; dx <= reachX; dx++) {
+        if ((padX && dx <= 0) || (padY && dy <= 0)) below = Math.max(below, cellScoreAt(pad.px, pad.w, pad.h, art, 32, 32, dx, dy));
+      }
+    }
+    const name = `x${k} padded ${padX},${padY} px`;
+    check(`search: ${name}, a grid that starts later than the corner, passes by a positive shift`,
+      found.score === 1 && gridFixPasses(pad.px, pad.w, pad.h, art, 32, 32) && (!padX || found.shiftX > 0) && (!padY || found.shiftY > 0), found);
+    check(`search: ${name}, no shift of 0 or less there would pass it`, below < CELL_CENTER_MIN, below);
+  }
+  // A local peak (audit r3, finding 3): stripes x3 whose grid starts 1, 2 px
+  // before the corner. With no y shift the best x shift is +1, and with that
+  // x shift no y shift does better than none: a search one axis at a time
+  // from no shift stops there, at about 0.72, though the true pair -1, -1
+  // scores 1.
+  {
+    const lines = stripes(16, 3, 0.1);
+    const input = shiftedUpscale(lines, 16, 3, 1, 2);
+    const at = (dx, dy) => cellScoreAt(input, 48, 48, lines, 16, 16, dx, dy);
+    const trap = at(1, 0) > at(0, 0) && at(1, 0) > at(-1, 0) && at(1, 0) >= at(1, -1) && at(1, 0) >= at(1, 1) && at(1, 0) < CELL_CENTER_MIN;
+    check('search: the stripes case is a local peak for a search one axis at a time', trap, [at(1, 0), at(0, 0), at(-1, 0), at(1, -1), at(1, 1)]);
+    const found = cellCenterSearch(input, 48, 48, lines, 16, 16);
+    check('search: past a local peak, the true pair of shifts is found and the fix passes',
+      found.score === 1 && at(found.shiftX, found.shiftY) === 1 && gridFixPasses(input, 48, 48, lines, 16, 16), found);
+  }
+  // x2 art cut by 1 px (audit r3, finding 5): cells of 2 px and one of 1 px,
+  // which a shift of 1 px lines up; half a cell, rounded down, is 0 there.
+  for (const [cx, cy] of [[1, 0], [0, 1], [1, 1]]) {
+    const off = offsetUpscale(art, 32, 32, 2, cx, cy);
+    const found = cellCenterSearch(off.px, off.w, off.h, art, 32, 32);
+    check(`search: a perfect fix of x2 cut ${cx},${cy} px passes, by a 1 px shift`,
+      found.score === 1 && gridFixPasses(off.px, off.w, off.h, art, 32, 32) && (Math.abs(found.shiftX) === 1 || Math.abs(found.shiftY) === 1), found);
+    check(`search: and with no shift, x2 cut ${cx},${cy} px scores under the threshold`, cellScoreAt(off.px, off.w, off.h, art, 32, 32, 0, 0) < CELL_CENTER_MIN);
+  }
   // A crop that leaves a sliver of the first cell: the fixer may keep it or
   // drop it, and a fix that drops it, the art less that cell, is right
   // (BUILD-2's ruling on the r2 stop). The same size with the far edge
@@ -354,28 +457,48 @@ function runFix(png) {
   }
   const corner = offsetUpscale(art, 32, 32, 4, 2, 0);
   check('search: without it, cells from the corner score x4 shifted 2 px under 0.9', cellScoreAt(corner.px, corner.w, corner.h, art, 32, 32, 0, 0) < 0.9);
-  // On random pairs (right results, wrong sizes, wrong content) the search
-  // gives the rule's own score at some pair of shifts within half a cell, no
-  // less than at no shift and no more than the best of every pair.
+  // On random pairs (right results with offsets and pads, x2 cut by 1 px,
+  // steps of exactly 1.5 and under it, wrong sizes, wrong content, loose
+  // transparent pixels) the search equals the best of the rule over every
+  // pair of shifts in range, and the rule's own score at the pair it gives:
+  // reach is half a cell, at least 1 px from a step of 1.5 (audit r3,
+  // findings 3 and 5).
+  const reachOf = (inSize, outSize) => Math.max(Math.floor(inSize / (2 * outSize)), 2 * inSize >= 3 * outSize ? 1 : 0);
   const next = rng(4242);
   const odd = [];
-  for (let t = 0; t < 60; t++) {
+  let thirds = 0;
+  for (let t = 0; t < 160; t++) {
     const n = 6 + Math.floor(next() * 10);
-    const k = [2, 3, 4, 5][Math.floor(next() * 4)];
+    const k = [1.5, 2, 2, 3, 4, 5][Math.floor(next() * 6)];
     const src = sprite(n, n, 100 + t);
-    const off = offsetUpscale(src, n, n, k, Math.floor(next() * k), Math.floor(next() * k));
-    const ow = t % 3 === 0 ? n + 1 : n;
+    let input;
+    if (k === 1.5) {
+      // Exactly 1.5: 3m px on 2m cells, every other cell 1 px.
+      input = { px: reduce(upscale(src, n, n, 3), 3 * n, 3 * n, Math.floor(1.5 * n), Math.floor(1.5 * n)), w: Math.floor(1.5 * n), h: Math.floor(1.5 * n) };
+    } else if (t % 7 === 0) {
+      input = paddedUpscale(src, n, n, k, Math.floor(next() * k), Math.floor(next() * k));
+    } else {
+      input = offsetUpscale(src, n, n, k, Math.floor(next() * k), Math.floor(next() * k));
+    }
+    if (t % 6 === 0) {
+      // A few loose transparent pixels, which no shift counts.
+      for (let i = 0; i < input.w * input.h; i += 11) input.px[i * 4 + 3] = 0;
+    }
+    const ow = t % 3 === 0 ? n + 1 : t % 8 === 0 ? Math.max(2, Math.floor(input.w / 1.5)) : n;
     const oh = t % 4 === 0 ? n - 1 : n;
-    const out = t % 3 === 0 || t % 4 === 0 ? reduce(off.px, off.w, off.h, ow, oh) : t % 5 === 0 ? sprite(n, n, 900 + t) : src;
-    const hx = Math.floor(off.w / (2 * ow));
-    const hy = Math.floor(off.h / (2 * oh));
-    const scores = [];
-    for (let dy = -hy; dy <= hy; dy++) for (let dx = -hx; dx <= hx; dx++) scores.push(cellScoreAt(off.px, off.w, off.h, out, ow, oh, dx, dy));
-    const found = cellCenterScore(off.px, off.w, off.h, out, ow, oh);
-    const atZero = cellScoreAt(off.px, off.w, off.h, out, ow, oh, 0, 0);
-    if (!scores.includes(found) || found < atZero || found > Math.max(...scores)) odd.push({ t, found, atZero, best: Math.max(...scores) });
+    const out = t % 3 === 0 || t % 4 === 0 || t % 8 === 0 ? reduce(input.px, input.w, input.h, ow, oh) : t % 5 === 0 ? sprite(n, n, 900 + t) : src;
+    const hx = reachOf(input.w, ow);
+    const hy = reachOf(input.h, oh);
+    if (2 * hx > input.w / ow || 2 * hy > input.h / oh) thirds++;
+    let best = 0;
+    for (let dy = -hy; dy <= hy; dy++) for (let dx = -hx; dx <= hx; dx++) best = Math.max(best, cellScoreAt(input.px, input.w, input.h, out, ow, oh, dx, dy));
+    const found = cellCenterSearch(input.px, input.w, input.h, out, ow, oh);
+    const atFound = cellScoreAt(input.px, input.w, input.h, out, ow, oh, found.shiftX, found.shiftY);
+    const inRange = Math.abs(found.shiftX) <= hx && Math.abs(found.shiftY) <= hy;
+    if (found.score !== best || atFound !== found.score || !inRange || cellCenterScore(input.px, input.w, input.h, out, ow, oh) !== found.score) odd.push({ t, k, found, atFound, best });
   }
-  check('search: the rule\'s score at some shifts, never under no shift, never over the best', odd.length === 0, odd.slice(0, 3));
+  check('search: the best of the rule over every pair of shifts, and the rule\'s own score at the pair it gives', odd.length === 0, odd.slice(0, 3));
+  check('search: those pairs include steps where a 1 px shift spans two cell edges', thirds >= 20, thirds);
 
   check('threshold: 0.985, on a 0.005 grid (a change shows up here)', CELL_CENTER_MIN === 0.985);
   const flat = new Uint8ClampedArray(100 * 100 * 4).fill(200);
@@ -519,8 +642,13 @@ function runFix(png) {
   check('credits: the standard library\'s row, last', std.name === 'Rust standard library' && std.version === stdBlock?.[1]
     && std.license === 'MIT OR Apache-2.0' && std.repository === 'https://github.com/rust-lang/rust');
   // Its own notices, from the toolchain, follow its entry and come before the
-  // license texts; the rest of the file is this script's own.
-  const stdStart = notices.indexOf(`Notices of the Rust standard library ${stdBlock?.[1]}, from COPYRIGHT-library.html in its toolchain:`);
+  // license texts; the rest of the file is this script's own. The toolchain's
+  // cover every target, and the file says so (audit r3, finding 6).
+  check('notices: the opening says what the file holds, not that the .wasm holds all of it',
+    notices.startsWith('Third-party notices for pixel-grid.wasm\n\n') && !notices.includes('It contains the software listed here')
+    && /This file holds its license notices: [^\n]*cover every target and so list packages this \.wasm does not hold/.test(notices));
+  const stdHeading = 'The Rust standard library\'s notices, as the Rust toolchain ships them, for every target. This .wasm uses its wasm32 parts: ';
+  const stdStart = notices.indexOf(stdHeading);
   const stdEnd = notices.indexOf('End of the notices of the Rust standard library.');
   const mitStart = notices.indexOf('MIT License\n\nApplies to every entry marked MIT');
   const own = notices.slice(0, stdStart) + notices.slice(stdEnd);
@@ -528,6 +656,23 @@ function runFix(png) {
   check('notices: the standard library\'s own notices, after its entry, before the license texts', stdBlock && stdBlock.index < stdStart && stdStart < stdEnd && stdEnd < mitStart);
   check('notices: they cover the crates it is built with, hashbrown and dlmalloc among them', /hashbrown-0\.17\.1/.test(stdText) && /dlmalloc-0\.2\.14/.test(stdText) && stdText.includes('Amanieu d\'Antras'));
   check('notices: and as text, no tags left', !/<\/?(p|b|a|div|pre|code|details|summary|h[1-6]|ul|li|body|html)(\s[^>]*)?\/?>/i.test(stdText) && !/&#\d+;|&quot;|&amp;/.test(stdText));
+  // The parts named are the ones the .wasm holds: the standard library's
+  // crates among its function names (v0 crate roots), less the crates listed
+  // above, and the paths its panics carry. The wasm32 sysroot's crates of
+  // Rust 1.99.1.
+  const sysroot = ['addr2line', 'adler2', 'alloc', 'cfg_if', 'compiler_builtins', 'core', 'dlmalloc', 'getopts', 'gimli', 'hashbrown', 'libc', 'memchr', 'miniz_oxide', 'object', 'panic_abort', 'panic_unwind', 'proc_macro', 'rustc_demangle', 'std', 'std_detect', 'test', 'unwind'];
+  const listed = new Set(credits.map((c) => c.name.replace(/-/g, '_')));
+  const bin = wasmBytes.toString('latin1');
+  const held = new Set();
+  for (const m of bin.matchAll(/\/rustc\/[0-9a-f]{40}\/library\/([a-z_]+)\//g)) held.add(m[1]);
+  for (const m of bin.matchAll(/\/rust\/deps\/([a-z_]+)-\d/g)) held.add(m[1]);
+  for (const m of bin.matchAll(/C(?:s[0-9A-Za-z]*_)?([1-9][0-9]?)([a-z_][a-z0-9_]*)/g)) {
+    const name = m[2].slice(0, Number(m[1]));
+    if (name.length === Number(m[1]) && sysroot.includes(name) && !listed.has(name)) held.add(name);
+  }
+  const parts = /This \.wasm uses its wasm32 parts: ([a-z_, ]+) and ([a-z_]+)\./.exec(notices);
+  const named = parts ? [...parts[1].split(', '), parts[2]] : [];
+  check('notices: the standard library parts it names are the ones the .wasm holds', named.length > 0 && [...held].sort().join() === [...named].sort().join(), { held: [...held].sort(), named });
   check('notices: the MIT text, once', own.split('Permission is hereby granted').length === 2);
   check('notices: the BSD-3-Clause text, once', own.split('Redistribution and use').length === 2);
   check('notices: no date or local path of their own', !/\/Users\/|\d{4}-\d{2}-\d{2}/.test(own) && !notices.includes('/Users/'));

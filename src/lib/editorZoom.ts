@@ -24,6 +24,15 @@ export function fitPanY(heldRoom = 0): number {
   return -(FIT_PAD_BOTTOM - FIT_PAD_TOP - heldRoom) / 2;
 }
 
+/** The lowest an image `imageH` CSS px tall may sit, as a pan (positive:
+ *  down) from the middle of an area `areaH` tall, and stay clear of the zoom
+ *  control: its bottom edge at a fit's, FIT_PAD_BOTTOM above the area's.
+ *  Infinity when it is taller than a fit leaves room for, where it cannot. */
+export function panYClearOfControl(areaH: number, imageH: number): number {
+  if (!(imageH <= areaH - FIT_PAD_TOP - FIT_PAD_BOTTOM)) return Infinity;
+  return areaH / 2 - FIT_PAD_BOTTOM - imageH / 2;
+}
+
 /** How an image layer draws at a zoom on a screen of `dpr` device pixels per
  *  CSS px: below one device pixel per image pixel, nearest-neighbor drops
  *  whole rows and columns of 1 px art, so it draws smoothed (W2 audit). */
@@ -102,9 +111,11 @@ export function zoomMenuMaxHeight(areaTop: number, controlTop: number): number {
  *  nearest step, or the fit, beyond the current zoom in that direction,
  *  within [min, max]. The current zoom when there is none. A zoom within
  *  0.5% of a step counts as on it, so pinch residue never makes a step that
- *  only nudges. */
-export function nextZoomStep(current: number, dir: 1 | -1, fit: number, min: number, max: number): number {
-  const stops = [...ZOOM_STEPS, ...(fit > 0 ? [fit] : [])]
+ *  only nudges. `areaFit`, when given, is one more stop: the whole canvas
+ *  area's fit while a banner's room is held, `fit` then being the fit less
+ *  that room. */
+export function nextZoomStep(current: number, dir: 1 | -1, fit: number, min: number, max: number, areaFit = 0): number {
+  const stops = [...ZOOM_STEPS, ...[fit, areaFit].filter((f) => f > 0)]
     .filter((s) => zoomAllowed(s, min, max))
     .sort((a, b) => a - b);
   const tol = current * 0.005;

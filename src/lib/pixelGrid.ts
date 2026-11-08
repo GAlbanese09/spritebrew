@@ -12,24 +12,28 @@
 /**
  * A fixed image must reproduce this share of the input's cell centers to be
  * offered as a fix, by cellCenterScore: each axis's cell edges may move by
- * whole px, up to half a cell either way, and the best shift counts, since
- * the art's grid may start partway into a cell. On a 0.005 grid, the lowest
- * value at which wrong or clean results pass on real sheets at most 20% of
- * the time, offset grids and none together (HQ's rule: refuse rather than
- * offer a bad fix, and "Show anyway" keeps a refusal one press from the
- * dialog). A result is right when it is the native size of the art it was
- * given (a cell a crop cut at an image edge may be kept or dropped) and at
- * least 95% of the overlapping pixels equal the native art; clean art is
- * never right. Measured on Nov 7, 2026 on the app's own path (PNG, the
- * committed .wasm, decode, this guard) on 5,524 images the editor can open:
- * the r1 set, and the same art cropped so its grid starts a third and a half
- * of a cell in, on x, y and both. Percent passed, right / wrong or clean:
+ * whole px, up to half a cell either way (at least 1 px from steps of 1.5),
+ * and the best pair of shifts counts, since the art's grid may start partway
+ * into a cell. On a 0.005 grid, the lowest value at which wrong or clean
+ * results pass on real sheets at most 20% of the time, offset grids and none
+ * together (HQ's rule: refuse rather than offer a bad fix, and "Show anyway"
+ * keeps a refusal one press from the dialog). A result is right when it is
+ * the native size of the art it was given (a cell a crop cut at an image edge
+ * may be kept or dropped) and at least 95% of the overlapping pixels equal
+ * the native art; clean art is never right. Measured on Nov 8, 2026 on the
+ * app's own path (PNG, the committed .wasm, decode, this guard) on 5,524
+ * images the editor can open: the r1 set, and the same art cropped so its
+ * grid starts a third and a half of a cell in, on x, y and both. Percent
+ * passed, right / wrong or clean:
  *                     real sheets                                synthetic
  *                     together      no offset     offsets       together
- *   0.980             82.3 / 22.1   89.4 / 21.1   81.0 / 22.4   80.5 / 21.3
- *   0.985             77.8 / 12.8   87.9 / 12.6   75.9 / 12.8   74.5 / 18.0
- *   0.990             68.6 /  5.4   85.1 /  7.4   65.6 /  4.8   64.1 / 14.3
+ *   0.980             82.6 / 22.6   89.4 / 21.1   81.4 / 23.1   81.2 / 21.4
+ *   0.985             77.9 / 12.8   87.9 / 12.6   76.0 / 12.8   75.3 / 18.2
+ *   0.990             68.8 /  5.4   85.1 /  7.4   65.8 /  4.8   64.8 / 14.4
+ *   commit 3, 0.985   77.8 / 12.8   87.9 / 12.6   75.9 / 12.8   74.5 / 18.0
  *   commit 2's guard  53.4 / 10.6   82.3 / 12.6   48.0 /  9.9   55.2 / 17.9
+ * Commit 3 searched one axis at a time with half a cell, rounded down, of
+ * reach (audit r3, findings 3 and 5).
  */
 export const CELL_CENTER_MIN = 0.985;
 
@@ -79,9 +83,12 @@ function coreCells(inSize: number, outSize: number, shift: number): Int32Array {
   return cells;
 }
 
-/** How far an axis's cell edges may move: half a cell, in whole px. */
+/** How far an axis's cell edges may move: half a cell, in whole px, and at
+ *  least 1 px from steps of 1.5, so x2 art cut by 1 px (cells of 2 px and
+ *  one of 1 px) can still be lined up (audit r3, finding 5). */
 function maxShift(inSize: number, outSize: number): number {
-  return Math.floor(inSize / (2 * outSize));
+  const half = Math.floor(inSize / (2 * outSize));
+  return half === 0 && 2 * inSize >= 3 * outSize ? 1 : half;
 }
 
 /** Whether an input pixel is reproduced by an output cell: the cell is
@@ -126,117 +133,202 @@ export function cellScoreAt(
   return counted === 0 ? 0 : matched / counted;
 }
 
-/** The pixels counted under a pair of shifts, and how many of them match. */
-interface Tally {
-  shift: number;
-  /** The swept axis's cells under `shift`. */
-  cells: Int32Array;
+/** Whether a share of matches, matched of counted, is above best's (exact:
+ *  no division). Nothing counted is never above; anything matched is above
+ *  nothing counted. */
+function better(counted: number, matched: number, best: { counted: number; matched: number }): boolean {
+  if (counted === 0) return false;
+  if (best.counted === 0) return matched > 0;
+  return matched * best.counted > best.matched * counted;
+}
+
+/**
+ * One axis of the search. Over every shift in range, the cells coreCells
+ * gives an input coordinate a lie within lo[a] to lo[a] + 2: the shifts span
+ * 2 x reach px, which cross at most one cell edge from steps of 2 (reach is
+ * floor(step / 2)) and at most two below that (reach 1 from steps of 1.5,
+ * cells of 1 or 2 px). A coordinate's place is its cell less lo[a] (0, 1 or
+ * 2, and 2 only below a step of 2), or -1 when it is not counted. Kept: the
+ * places at the first shift, -reach; which places each coordinate takes at
+ * some shift (bits); and each change of place from one shift to the next,
+ * which are few (a cell's core gains a coordinate at one end and loses one at
+ * the other), so no shift rebuilds the axis.
+ */
+interface ShiftAxis {
+  reach: number;
+  lo: Int32Array;
+  first: Int8Array;
+  taken: Uint8Array;
+  /** The changes from shift k - reach to k + 1 - reach are changes[ends[k]]
+   *  up to changes[ends[k + 1]], as triples: coordinate, place before, place
+   *  after. */
+  ends: Int32Array;
+  changes: Int32Array;
+}
+
+function shiftAxis(inSize: number, outSize: number): ShiftAxis {
+  const reach = maxShift(inSize, outSize);
+  const lo = new Int32Array(inSize);
+  for (let a = 0; a < inSize; a++) lo[a] = Math.floor(((a - reach) * outSize) / inSize);
+  const placesAt = (shift: number): Int8Array => {
+    const cells = coreCells(inSize, outSize, shift);
+    const places = new Int8Array(inSize);
+    for (let a = 0; a < inSize; a++) places[a] = cells[a] < 0 ? -1 : cells[a] - lo[a];
+    return places;
+  };
+  const first = placesAt(-reach);
+  const taken = new Uint8Array(inSize);
+  for (let a = 0; a < inSize; a++) if (first[a] >= 0) taken[a] |= 1 << first[a];
+  const ends = new Int32Array(2 * reach + 1);
+  const changes: number[] = [];
+  let before = first;
+  for (let k = 0; k < 2 * reach; k++) {
+    const after = placesAt(k + 1 - reach);
+    for (let a = 0; a < inSize; a++) {
+      if (after[a] === before[a]) continue;
+      changes.push(a, before[a], after[a]);
+      if (after[a] >= 0) taken[a] |= 1 << after[a];
+    }
+    ends[k + 1] = changes.length;
+    before = after;
+  }
+  return { reach, lo, first, taken, ends, changes: Int32Array.from(changes) };
+}
+
+/** A pixel's code in the search: this bit when it counts (alpha >= 128, on a
+ *  row and a column some shift counts), and bit 3 x py + px when the output
+ *  cell at its row's place py and its column's place px reproduces it. */
+const COUNTS = 1 << 9;
+
+/** The best pair of shifts, with the pixels counted and matched there. */
+interface Shifts {
+  shiftX: number;
+  shiftY: number;
   counted: number;
   matched: number;
 }
 
-/** Whether a's share of matches is above b's (exact: no division). */
-function better(a: Tally, b: Tally): boolean {
-  if (a.counted === 0) return false;
-  if (b.counted === 0) return a.matched > 0;
-  return a.matched * b.counted > b.matched * a.counted;
-}
-
 /**
- * The best shift of one axis's cells, the other axis's cells held as given
- * (`fixed`), starting from `current`, which a tie keeps. Every shift puts an
- * input coordinate a in output cell lo[a] or lo[a] + 1 (a cell is at least
- * as wide as the shifts span), so one pass over the image tallies, per
- * coordinate, its visible pixels and its matches against both, and each
- * shift then costs one pass along the axis, however wide the cells are.
+ * The best pair of shifts over the whole range, exactly: every y shift, each
+ * with its best x shift (audit r3, finding 3: a search one axis at a time
+ * could stop on a local peak). Each pixel is compared once with each output
+ * cell its row and column can take. For the y shift at hand, each column
+ * keeps its counted pixels and its matches at each of its places; a y shift
+ * moves only the rows that change place, and an x shift only the columns
+ * that do. So each pixel is compared with at most four output cells (nine
+ * below a step of 2), the cost hardly depends on the step, and the tallies
+ * are the rule's own counts: the result always equals cellScoreAt at the
+ * shifts it gives. The first best pair found is kept.
  */
-function bestShift(
+function bestShifts(
   input: Uint8ClampedArray,
   inW: number,
   inH: number,
   output: Uint8ClampedArray,
   outW: number,
   outH: number,
-  alongX: boolean,
-  fixed: Int32Array,
-  current: number,
-): Tally {
-  const inSize = alongX ? inW : inH;
-  const outSize = alongX ? outW : outH;
-  const reach = maxShift(inSize, outSize);
-  const lo = new Int32Array(inSize);
-  for (let a = 0; a < inSize; a++) lo[a] = Math.floor(((a - reach) * outSize) / inSize);
-  const visible = new Int32Array(inSize);
-  const nearer = new Int32Array(inSize);
-  const further = new Int32Array(inSize);
-  if (alongX) {
-    for (let y = 0; y < inH; y++) {
-      if (fixed[y] < 0) continue;
-      const row = fixed[y] * outW;
-      for (let x = 0, i = y * inW * 4; x < inW; x++, i += 4) {
-        if (input[i + 3] < VISIBLE_ALPHA) continue;
-        const c = lo[x];
-        visible[x]++;
-        if (c >= 0 && reproduces(input, i, output, (row + c) * 4)) nearer[x]++;
-        if (c + 1 < outW && reproduces(input, i, output, (row + c + 1) * 4)) further[x]++;
+): Shifts {
+  const ax = shiftAxis(inW, outW);
+  const ay = shiftAxis(inH, outH);
+  const codes = new Uint16Array(inW * inH);
+  for (let y = 0; y < inH; y++) {
+    const rows = ay.taken[y];
+    if (rows === 0) continue;
+    for (let x = 0, i = y * inW * 4; x < inW; x++, i += 4) {
+      const cols = ax.taken[x];
+      if (cols === 0 || input[i + 3] < VISIBLE_ALPHA) continue;
+      let code = COUNTS;
+      for (let py = 0; py < 3; py++) {
+        if ((rows & (1 << py)) === 0) continue;
+        const cell = (ay.lo[y] + py) * outW + ax.lo[x];
+        for (let px = 0; px < 3; px++) {
+          if ((cols & (1 << px)) !== 0 && reproduces(input, i, output, (cell + px) * 4)) code |= 1 << (3 * py + px);
+        }
       }
-    }
-  } else {
-    for (let y = 0; y < inH; y++) {
-      const near = lo[y] >= 0 ? lo[y] * outW : -1;
-      const far = lo[y] + 1 < outH ? (lo[y] + 1) * outW : -1;
-      let v = 0;
-      let n = 0;
-      let f = 0;
-      for (let x = 0, i = y * inW * 4; x < inW; x++, i += 4) {
-        const cx = fixed[x];
-        if (cx < 0 || input[i + 3] < VISIBLE_ALPHA) continue;
-        v++;
-        if (near >= 0 && reproduces(input, i, output, (near + cx) * 4)) n++;
-        if (far >= 0 && reproduces(input, i, output, (far + cx) * 4)) f++;
-      }
-      visible[y] = v;
-      nearer[y] = n;
-      further[y] = f;
+      codes[y * inW + x] = code;
     }
   }
-  const tally = (shift: number): Tally => {
-    const cells = coreCells(inSize, outSize, shift);
+  const counts = new Int32Array(inW);
+  const matches = new Int32Array(3 * inW);
+  const addRow = (y: number, py: number, by: number) => {
+    for (let x = 0, k = y * inW; x < inW; x++, k++) {
+      const code = codes[k];
+      if (code === 0) continue;
+      const bits = code >> (3 * py);
+      counts[x] += by;
+      matches[3 * x] += by * (bits & 1);
+      matches[3 * x + 1] += by * ((bits >> 1) & 1);
+      matches[3 * x + 2] += by * ((bits >> 2) & 1);
+    }
+  };
+  let best: Shifts = { shiftX: 0, shiftY: 0, counted: 0, matched: 0 };
+  const scanX = (shiftY: number) => {
     let counted = 0;
     let matched = 0;
-    for (let a = 0; a < inSize; a++) {
-      const c = cells[a];
-      if (c < 0) continue;
-      counted += visible[a];
-      matched += c === lo[a] ? nearer[a] : further[a];
+    for (let x = 0; x < inW; x++) {
+      const p = ax.first[x];
+      if (p < 0) continue;
+      counted += counts[x];
+      matched += matches[3 * x + p];
     }
-    return { shift, cells, counted, matched };
+    if (better(counted, matched, best)) best = { shiftX: -ax.reach, shiftY, counted, matched };
+    for (let k = 0; k < 2 * ax.reach; k++) {
+      for (let c = ax.ends[k]; c < ax.ends[k + 1]; c += 3) {
+        const x = ax.changes[c];
+        const was = ax.changes[c + 1];
+        const now = ax.changes[c + 2];
+        if (was >= 0) {
+          counted -= counts[x];
+          matched -= matches[3 * x + was];
+        }
+        if (now >= 0) {
+          counted += counts[x];
+          matched += matches[3 * x + now];
+        }
+      }
+      if (better(counted, matched, best)) best = { shiftX: k + 1 - ax.reach, shiftY, counted, matched };
+    }
   };
-  let best = tally(current);
-  for (let shift = -reach; shift <= reach; shift++) {
-    if (shift === current) continue;
-    const t = tally(shift);
-    if (better(t, best)) best = t;
+  for (let y = 0; y < inH; y++) if (ay.first[y] >= 0) addRow(y, ay.first[y], 1);
+  scanX(-ay.reach);
+  for (let k = 0; k < 2 * ay.reach; k++) {
+    for (let c = ay.ends[k]; c < ay.ends[k + 1]; c += 3) {
+      const y = ay.changes[c];
+      if (ay.changes[c + 1] >= 0) addRow(y, ay.changes[c + 1], -1);
+      if (ay.changes[c + 2] >= 0) addRow(y, ay.changes[c + 2], 1);
+    }
+    scanX(k + 1 - ay.reach);
   }
   return best;
 }
 
-/** Sweeps of the coordinate search: x, y, x, y. It settles in two or three. */
-const SHIFT_SWEEPS = 4;
-
 /**
  * The share of the input's cell centers that the fixed image reproduces,
- * scored against the cells the art really has. The fixer cuts even cells
- * from the image's corner and gives each the color of the art's cell that
- * covers most of it, but the art's grid may start partway into a cell (an AI
- * image, a crop): so each axis's cell edges may move by whole px, up to half
- * a cell either way, and the best score over those shifts counts. The shifts
- * are found one axis at a time, x then y and again, until neither moves.
- * Only input pixels with alpha >= 128 away from their cell's edges count
+ * scored against the cells the art really has, and the shifts that give it.
+ * The fixer cuts even cells from the image's corner and gives each the color
+ * of the art's cell that covers most of it, but the art's grid may start
+ * partway into a cell (an AI image, a crop, a padded edge): so each axis's
+ * cell edges may move by whole px, up to half a cell either way (maxShift),
+ * and the best score over every pair of shifts counts (bestShifts). Only
+ * input pixels with alpha >= 128 away from their cell's edges count
  * (coreCells on both axes). One matches when its output cell has alpha >=
- * 128 and every RGB channel is within CELL_CENTER_TOLERANCE. 0 when nothing
- * counts: there is nothing to fix.
+ * 128 and every RGB channel is within CELL_CENTER_TOLERANCE. A score of 0
+ * when nothing counts: there is nothing to fix.
  */
+export function cellCenterSearch(
+  input: Uint8ClampedArray,
+  inW: number,
+  inH: number,
+  output: Uint8ClampedArray,
+  outW: number,
+  outH: number,
+): { score: number; shiftX: number; shiftY: number } {
+  if (!(inW > 0 && inH > 0 && outW > 0 && outH > 0)) return { score: 0, shiftX: 0, shiftY: 0 };
+  const best = bestShifts(input, inW, inH, output, outW, outH);
+  return { score: best.counted > 0 ? best.matched / best.counted : 0, shiftX: best.shiftX, shiftY: best.shiftY };
+}
+
+/** cellCenterSearch's score: what the guard compares with CELL_CENTER_MIN. */
 export function cellCenterScore(
   input: Uint8ClampedArray,
   inW: number,
@@ -245,21 +337,7 @@ export function cellCenterScore(
   outW: number,
   outH: number,
 ): number {
-  if (!(inW > 0 && inH > 0 && outW > 0 && outH > 0)) return 0;
-  const shifts = [0, 0];
-  let held = coreCells(inH, outH, 0);
-  let best: Tally | null = null;
-  for (let sweep = 0; sweep < SHIFT_SWEEPS; sweep++) {
-    const axis = sweep % 2;
-    const t = bestShift(input, inW, inH, output, outW, outH, axis === 0, held, shifts[axis]);
-    const moved = t.shift !== shifts[axis];
-    shifts[axis] = t.shift;
-    best = t;
-    held = t.cells;
-    // The other axis was swept with these cells already.
-    if (sweep > 0 && !moved) break;
-  }
-  return best && best.counted > 0 ? best.matched / best.counted : 0;
+  return cellCenterSearch(input, inW, inH, output, outW, outH).score;
 }
 
 /** Whether the grid's x and y steps are within GRID_STEP_MAX_DIFFERENCE of

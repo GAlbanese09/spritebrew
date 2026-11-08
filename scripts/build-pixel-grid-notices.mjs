@@ -3,8 +3,8 @@
 // Writes the license notices for public/wasm/pixel-grid.wasm: every crate
 // compiled into it, from cargo metadata, with the license it is taken under
 // and its copyright lines, the Rust standard library with its own notices
-// (COPYRIGHT-library.html from the pinned toolchain, as text), then each
-// license text once.
+// (COPYRIGHT-library.html from the pinned toolchain, as text, which covers
+// the standard library on every target), then each license text once.
 //   public/wasm/THIRD-PARTY-NOTICES.txt  served beside the .wasm
 //   src/lib/pixelGridCredits.json        the rows of /credits
 // Deterministic: sorted, no dates, no paths, so a rerun leaves git status
@@ -248,15 +248,23 @@ const STD = {
   repository: 'https://github.com/rust-lang/rust',
 };
 
+/** The standard library's notices are the toolchain's, for every target, so
+ *  they list packages this .wasm does not hold; their heading says so and
+ *  names the parts it does (audit r3, finding 6). scripts/pixel-grid-test.mjs
+ *  checks those names against the .wasm. */
+const STD_HEADING = 'The Rust standard library\'s notices, as the Rust toolchain ships them, for every target. '
+  + 'This .wasm uses its wasm32 parts: core, alloc, std, compiler_builtins, hashbrown and dlmalloc.';
+
 const notices = [
-  'Third-party software in pixel-grid.wasm',
-  'pixel-grid.wasm is the WebAssembly build behind "Fix pixel grid" in SpriteBrew. It contains the software listed here. '
-    + 'Each entry gives the license it is used under and its copyright lines; the license texts follow the entries. '
-    + 'The Rust standard library\'s entry is followed by its own notices, which cover the crates it is built with. '
+  'Third-party notices for pixel-grid.wasm',
+  'pixel-grid.wasm is the WebAssembly build behind "Fix pixel grid" in SpriteBrew. This file holds its license notices: '
+    + 'an entry for each crate compiled into it and one for the Rust standard library, each with the license it is used '
+    + 'under and its copyright lines; then the standard library\'s own notices as the Rust toolchain ships them, which '
+    + 'cover every target and so list packages this .wasm does not hold; then the license texts. '
     + 'Written by scripts/build-pixel-grid-notices.mjs.',
   ...crates.map((c) => block(c.name === FIXER ? { ...c, name: FIXER_TITLE } : c)),
   block({ name: STD.name, version: STD.version, license: 'MIT', copyright: ['Copyright (c) The Rust Project Developers'] }),
-  `Notices of the ${STD.name} ${STD.version}, from COPYRIGHT-library.html in its toolchain:`,
+  STD_HEADING,
   standardLibraryNotices(STD.version),
   `End of the notices of the ${STD.name}.`,
   `MIT License\n\nApplies to every entry marked MIT, each with its copyright lines above.\n\n${licenseBody(readText(FIXER_LICENSE), 'Permission is hereby granted')}`,

@@ -52,7 +52,7 @@ export default function ExportPage() {
               : 'No sprite data loaded.'}
           </p>
           <Link href="/upload">
-            <Button variant="secondary" size="md">
+            <Button variant="secondary" size="md" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11">
               Go to Upload
             </Button>
           </Link>

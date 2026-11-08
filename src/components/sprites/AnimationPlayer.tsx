@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Play,
   Pause,
@@ -23,8 +23,16 @@ const ZOOM_OPTIONS = [1, 2, 4, 8, 16] as const;
 // pointer; desktop keeps its compact chips.
 const TOUCH_CHIP = 'pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3 pointer-coarse:text-xs';
 const TOUCH_LABEL = 'pointer-coarse:text-xs';
-// The canvas box's border and padding (p-3), in CSS px, around the canvas.
-const BOX_INSET = 2 * (12 + 1);
+// 44 px on a coarse pointer at every width for the transport buttons (Button's
+// own floor stops at md).
+const TOUCH_BUTTON = 'pointer-coarse:min-h-11 pointer-coarse:min-w-11';
+// The canvas box's padding (p-3) and border, in CSS px, around the canvas.
+const BOX_PAD = 12;
+const BOX_INSET = 2 * (BOX_PAD + 1);
+// After the first fit, the row must change width by more than this to fit
+// again. A scrollbar (about 15 px) coming and going stays under it, so it
+// cannot flip the zoom back and forth.
+const REFIT_PX = 24;
 
 type BgMode = 'checkerboard' | 'black' | 'white' | 'green' | 'custom';
 
@@ -45,6 +53,14 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
   const rowRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const pinchStartRef = useRef(8);
+  // The zoom as of the last handler, ahead of the render, so two wheel notches
+  // before a render make two steps.
+  const zoomRef = useRef<number | null>(null);
+  // The row width the last fit used.
+  const fitWidthRef = useRef(0);
+  // The canvas point at the box's visible middle, saved before a zoom change
+  // and restored after the canvas resizes.
+  const centerRef = useRef<{ x: number; y: number } | null>(null);
 
   const [selectedAnimId, setSelectedAnimId] = useState<string>('');
   const [playing, setPlaying] = useState(true);
@@ -52,7 +68,7 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
   const [speed, setSpeed] = useState(1);
   // Fit on open: the largest zoom whose frame fits the box's width and 60% of
   // the viewport height, until the person picks a zoom; theirs is kept. No
-  // frame is drawn before the box is measured.
+  // frame is drawn, and the canvas stays hidden, before the box is measured.
   const [fittedZoom, setFittedZoom] = useState<number | null>(null);
   const [pickedZoom, setPickedZoom] = useState<number | null>(null);
   const zoom = pickedZoom ?? fittedZoom;
@@ -66,46 +82,67 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
   const lastTimeRef = useRef(0);
   const accumRef = useRef(0);
 
-  // Pick the active animation
+  // Pick the active animation: only animations with frames can play, so an
+  // empty one (an Idle group with nothing in it) is skipped.
+  const playable = useMemo(() => animations.filter((a) => a.frames.length > 0), [animations]);
   const anim: SpriteAnimation | undefined =
-    animations.find((a) => a.id === selectedAnimId) ?? animations[0];
+    playable.find((a) => a.id === selectedAnimId) ?? playable[0];
   const frameW = spriteSheet?.frameWidth ?? anim?.frames[0]?.width ?? 0;
   const frameH = spriteSheet?.frameHeight ?? anim?.frames[0]?.height ?? 0;
   const hasFrames = !!anim && anim.frames.length > 0;
 
-  useEffect(() => {
+  // Fit once, before paint, when the frame size is known and the row first
+  // measured; again when the frame size changes; and otherwise only when the
+  // row's width changes by more than REFIT_PX (height alone never refits).
+  useLayoutEffect(() => {
     const row = rowRef.current;
     if (!row || !(frameW > 0) || !(frameH > 0)) return;
-    const measure = () => {
-      const boxWidth = row.clientWidth - BOX_INSET;
-      setFittedZoom(fitZoomToBox(frameW, frameH, boxWidth, window.innerHeight * 0.6, ZOOM_OPTIONS));
+    const fit = (width: number) => {
+      fitWidthRef.current = width;
+      setFittedZoom(fitZoomToBox(frameW, frameH, width - BOX_INSET, window.innerHeight * 0.6, ZOOM_OPTIONS));
     };
-    const ro = new ResizeObserver(measure);
+    fit(row.clientWidth);
+    const ro = new ResizeObserver(() => {
+      const width = row.clientWidth;
+      if (Math.abs(width - fitWidthRef.current) > REFIT_PX) fit(width);
+    });
     ro.observe(row);
     return () => ro.disconnect();
   }, [frameW, frameH, hasFrames]);
 
+  useLayoutEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  // A picked zoom: saves the canvas point at the box's visible middle, so the
+  // layout effect below keeps it there after the canvas resizes.
+  const pickZoom = (next: number) => {
+    const box = boxRef.current;
+    const canvas = canvasRef.current;
+    if (box && canvas && canvas.width > 0 && canvas.height > 0 && zoomRef.current !== null) {
+      centerRef.current = {
+        x: (box.scrollLeft + box.clientWidth / 2 - BOX_PAD) / canvas.width,
+        y: (box.scrollTop + box.clientHeight / 2 - BOX_PAD) / canvas.height,
+      };
+    }
+    zoomRef.current = next;
+    setPickedZoom(next);
+  };
+
   // Pinch or ctrl or cmd wheel on the canvas steps through the zoom options;
   // the page still zooms everywhere else.
   useStagePinch(boxRef, {
-    onPinchStart: () => { pinchStartRef.current = zoom ?? 8; },
+    onPinchStart: () => { pinchStartRef.current = zoomRef.current ?? 8; },
     onPinch: (gestureScale) => {
       const next = snapZoom(pinchStartRef.current, gestureScale, ZOOM_OPTIONS);
-      if (next !== zoom) setPickedZoom(next);
+      if (next !== zoomRef.current) pickZoom(next);
     },
     onWheelStep: (direction) => {
-      if (zoom === null) return;
-      const next = stepZoom(zoom, direction, ZOOM_OPTIONS);
-      if (next !== zoom) setPickedZoom(next);
+      if (zoomRef.current === null) return;
+      const next = stepZoom(zoomRef.current, direction, ZOOM_OPTIONS);
+      if (next !== zoomRef.current) pickZoom(next);
     },
   });
-
-  // Auto-select first animation
-  useEffect(() => {
-    if (animations.length > 0 && !animations.find((a) => a.id === selectedAnimId)) {
-      setSelectedAnimId(animations[0].id);
-    }
-  }, [animations, selectedAnimId]);
 
   // Preload frame images
   useEffect(() => {
@@ -244,10 +281,24 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
     return () => cancelAnimationFrame(rafRef.current);
   }, [anim, playing, speed, pingPong, loop, currentFrame, drawFrame]);
 
-  // Draw when frame changes while paused
-  useEffect(() => {
-    if (!playing) drawFrame(currentFrame);
-  }, [currentFrame, playing, drawFrame]);
+  // Draw before paint whenever the frame, zoom or background changes, so a
+  // new canvas size is never painted blank; the loop keeps drawing while
+  // playing.
+  useLayoutEffect(() => {
+    drawFrame(currentFrame);
+  }, [currentFrame, drawFrame]);
+
+  // After a zoom change, put the saved middle back in the middle of the box.
+  // The first fit has nothing saved, so it opens at scroll 0.
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    const canvas = canvasRef.current;
+    const center = centerRef.current;
+    centerRef.current = null;
+    if (!box || !canvas || !center) return;
+    box.scrollLeft = center.x * canvas.width + BOX_PAD - box.clientWidth / 2;
+    box.scrollTop = center.y * canvas.height + BOX_PAD - box.clientHeight / 2;
+  }, [zoom]);
 
   const handleStop = () => {
     setPlaying(false);
@@ -284,13 +335,13 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
   return (
     <div className="space-y-4">
       {/* Animation selector */}
-      {animations.length > 1 && (
+      {playable.length > 1 && (
         <div>
           <label className="block text-[10px] font-mono text-text-muted mb-1 uppercase tracking-wider">
             Animation
           </label>
           <select
-            value={selectedAnimId}
+            value={anim.id}
             onChange={(e) => {
               setSelectedAnimId(e.target.value);
               setCurrentFrame(0);
@@ -299,7 +350,7 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
             className="w-full max-w-xs rounded bg-bg-elevated border border-border-default px-3 py-2
               text-sm font-mono text-text-primary focus:outline-none focus:border-accent-amber cursor-pointer"
           >
-            {animations.map((a) => (
+            {playable.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name} ({a.frames.length} frames, {a.fps} fps)
               </option>
@@ -312,11 +363,16 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
           scrolls inside the box (one finger pans it) instead of shrinking the
           canvas, so a bigger zoom is really bigger. The box takes one-finger
           pans in both directions but no browser pinch: that one zooms the
-          canvas (useStagePinch). */}
+          canvas (useStagePinch). It takes focus, so arrow keys scroll it in
+          every browser, Safari included. */}
       <div ref={rowRef} className="flex justify-center w-full">
         <div
           ref={boxRef}
-          className="rounded-lg border border-border-default bg-bg-elevated p-3 max-w-full overflow-auto"
+          tabIndex={0}
+          role="region"
+          aria-label="Animation preview (scroll when zoomed in)"
+          className="rounded-lg border border-border-default bg-bg-elevated p-3 max-w-full overflow-auto
+            focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber"
           style={{ maxHeight: '70vh', touchAction: 'pan-x pan-y' }}
         >
           <canvas
@@ -325,6 +381,7 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
             style={{
               imageRendering: 'pixelated',
               display: 'block',
+              visibility: zoom === null ? 'hidden' : undefined,
             }}
           />
         </div>
@@ -332,21 +389,23 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
 
       {/* Transport controls */}
       <div className="flex items-center justify-center gap-2">
-        <Button variant="ghost" size="sm" onClick={handleStepBack} title="Step back">
+        <Button variant="ghost" size="sm" className={TOUCH_BUTTON} onClick={handleStepBack} title="Step back" aria-label="Step back">
           <SkipBack size={14} />
         </Button>
-        <Button variant="ghost" size="sm" onClick={handleStop} title="Stop">
+        <Button variant="ghost" size="sm" className={TOUCH_BUTTON} onClick={handleStop} title="Stop" aria-label="Stop">
           <Square size={14} />
         </Button>
         <Button
           variant={playing ? 'secondary' : 'primary'}
           size="sm"
+          className={TOUCH_BUTTON}
           onClick={() => setPlaying(!playing)}
           title={playing ? 'Pause' : 'Play'}
+          aria-label={playing ? 'Pause' : 'Play'}
         >
           {playing ? <Pause size={14} /> : <Play size={14} />}
         </Button>
-        <Button variant="ghost" size="sm" onClick={handleStepForward} title="Step forward">
+        <Button variant="ghost" size="sm" className={TOUCH_BUTTON} onClick={handleStepForward} title="Step forward" aria-label="Step forward">
           <SkipForward size={14} />
         </Button>
 
@@ -355,16 +414,22 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
         <Button
           variant={loop ? 'secondary' : 'ghost'}
           size="sm"
+          className={TOUCH_BUTTON}
           onClick={() => setLoop(!loop)}
           title="Loop"
+          aria-label="Loop"
+          aria-pressed={loop}
         >
           <Repeat size={14} />
         </Button>
         <Button
           variant={pingPong ? 'secondary' : 'ghost'}
           size="sm"
+          className={TOUCH_BUTTON}
           onClick={() => setPingPong(!pingPong)}
           title="Ping-pong"
+          aria-label="Ping-pong"
+          aria-pressed={pingPong}
         >
           <ArrowLeftRight size={14} />
         </Button>
@@ -416,7 +481,7 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
                 key={z}
                 type="button"
                 aria-pressed={zoom === z}
-                onClick={() => setPickedZoom(z)}
+                onClick={() => pickZoom(z)}
                 className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors ${TOUCH_CHIP}
                   ${zoom === z
                     ? 'bg-accent-amber text-bg-primary'
@@ -436,11 +501,11 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
           </label>
           <div className="flex gap-1 items-center">
             {([
-              { id: 'checkerboard', label: '🏁' },
-              { id: 'black', label: '⬛' },
-              { id: 'white', label: '⬜' },
-              { id: 'green', label: '🟩' },
-            ] as const).map(({ id, label }) => (
+              { id: 'checkerboard', label: '🏁', name: 'Checkerboard background' },
+              { id: 'black', label: '⬛', name: 'Black background' },
+              { id: 'white', label: '⬜', name: 'White background' },
+              { id: 'green', label: '🟩', name: 'Green background' },
+            ] as const).map(({ id, label, name }) => (
               <button
                 key={id}
                 type="button"
@@ -451,7 +516,8 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
                     ? 'bg-accent-amber text-bg-primary ring-1 ring-accent-amber'
                     : 'bg-bg-elevated hover:bg-bg-hover border border-border-subtle'
                   }`}
-                title={id}
+                title={name}
+                aria-label={name}
               >
                 {label}
               </button>

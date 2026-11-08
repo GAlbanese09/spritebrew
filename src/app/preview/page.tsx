@@ -58,7 +58,7 @@ export default function PreviewPage() {
               : 'No sprite data loaded.'}
           </p>
           <Link href="/upload">
-            <Button variant="secondary" size="md">
+            <Button variant="secondary" size="md" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11">
               Go to Upload
             </Button>
           </Link>
@@ -73,6 +73,7 @@ export default function PreviewPage() {
             <button
               onClick={() => setTab('demo')}
               className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono cursor-pointer transition-colors
+                pointer-coarse:min-h-11 pointer-coarse:min-w-11
                 ${tab === 'demo'
                   ? 'bg-accent-amber text-bg-primary'
                   : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
@@ -84,6 +85,7 @@ export default function PreviewPage() {
             <button
               onClick={() => setTab('player')}
               className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono cursor-pointer transition-colors
+                pointer-coarse:min-h-11 pointer-coarse:min-w-11
                 ${tab === 'player'
                   ? 'bg-accent-amber text-bg-primary'
                   : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'

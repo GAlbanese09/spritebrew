@@ -25,9 +25,9 @@ TextureSource.defaultOptions.scaleMode = 'nearest';
 const VALID_WORLD_SCALES = [1, 2, 4, 8] as const;
 const WORLD_SCALES = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 
-// Touch size for the toolbar chips: 44 px tall, 12 px text on a coarse
-// pointer; desktop keeps its compact chips.
-const TOUCH_CHIP = 'pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-xs';
+// Touch size for the toolbar chips: 44 px tall and at least 44 px wide, 12 px
+// text on a coarse pointer; desktop keeps its compact chips.
+const TOUCH_CHIP = 'pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3 pointer-coarse:text-xs';
 const TOUCH_LABEL = 'pointer-coarse:text-xs';
 
 type CharState = 'idle' | 'walking' | 'running' | 'attacking' | 'jumping' | 'hurt';
@@ -105,7 +105,10 @@ function parseDirectional(name: string): { state: CharState; direction: Directio
  * - dirMap: state+direction → SpriteAnimation
  * - flatMap: state → SpriteAnimation (non-directional fallback)
  */
-function buildAnimMaps(animations: SpriteAnimation[]) {
+function buildAnimMaps(allAnimations: SpriteAnimation[]) {
+  // An animation with no frames cannot play: an empty Idle group must not
+  // become the idle and blank the stage.
+  const animations = allAnimations.filter((a) => a.frames.length > 0);
   const dirMap = new Map<string, SpriteAnimation>(); // key: "state:direction"
   const flatMap = new Map<CharState, SpriteAnimation>();
   let hasRealIdle = false; // tracks whether a genuine idle animation exists
@@ -210,6 +213,9 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
   }, [animations]);
   const [pickedScale, setPickedScale] = useState<number | null>(null);
   const worldScale = pickedScale ?? fittedScale;
+  // The scale read aloud by the status line: set when a pinch ends or a
+  // wheel or key picks a scale, never on every pinch move.
+  const [spokenScale, setSpokenScale] = useState<number | null>(null);
   const [showcaseMode, setShowcaseMode] = useState(false);
   const [naturalFacing, setNaturalFacing] = useState<NaturalFacing>('right');
   const [overlayInfo, setOverlayInfo] = useState({
@@ -233,15 +239,27 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
 
   // Pinch or ctrl or cmd wheel on the stage zooms it, live, snapping to whole
   // scales; the page still zooms everywhere else.
+  // The ref is set at once, ahead of the render, so two wheel notches before
+  // a render make two steps.
+  const pickScale = (next: number) => {
+    worldScaleRef.current = next;
+    setPickedScale(next);
+  };
   useStagePinch(stageRef, {
     onPinchStart: () => { pinchStartRef.current = worldScaleRef.current; },
     onPinch: (gestureScale) => {
       const next = snapZoom(pinchStartRef.current, gestureScale, WORLD_SCALES);
-      if (next !== worldScaleRef.current) setPickedScale(next);
+      if (next !== worldScaleRef.current) pickScale(next);
+    },
+    onPinchEnd: () => {
+      if (worldScaleRef.current !== pinchStartRef.current) setSpokenScale(worldScaleRef.current);
     },
     onWheelStep: (direction) => {
       const next = stepZoom(worldScaleRef.current, direction, WORLD_SCALES);
-      if (next !== worldScaleRef.current) setPickedScale(next);
+      if (next !== worldScaleRef.current) {
+        pickScale(next);
+        setSpokenScale(next);
+      }
     },
   });
 
@@ -563,13 +581,15 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
 
             // Boundary clamp uses scale-adjusted world bounds AND subtracts
             // halfSprite so the sprite stays fully visible (anchor is centered
-            // at 0.5,0.5 — without the half-offset, half the sprite would clip
-            // offscreen at the extremes). Falls back to no offset before the
-            // first sprite is visible.
+            // at 0.5,0.5; without the half-offset, half the sprite would clip
+            // offscreen at the extremes). The sprite is a child of the scaled
+            // world, so its width and height are already in world units
+            // (Pixi 8) and are not divided by the scale. Falls back to no
+            // offset before the first sprite is visible.
             const ws = worldScaleRef.current;
             const activeSprite = activeSpriteRef.current;
-            const halfW = activeSprite ? (activeSprite.width / 2) / ws : 0;
-            const halfH = activeSprite ? (activeSprite.height / 2) / ws : 0;
+            const halfW = activeSprite ? activeSprite.width / 2 : 0;
+            const halfH = activeSprite ? activeSprite.height / 2 : 0;
             posRef.current.x = Math.max(halfW, Math.min(CANVAS_W / ws - halfW, posRef.current.x));
             posRef.current.y = Math.max(halfH, Math.min(CANVAS_H / ws - halfH, posRef.current.y));
 
@@ -774,10 +794,10 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
       }
 
       // Scale toggle — keys 1, 2, 4, 8
-      if (e.key === '1') { setPickedScale(1); return; }
-      if (e.key === '2') { setPickedScale(2); return; }
-      if (e.key === '4') { setPickedScale(4); return; }
-      if (e.key === '8') { setPickedScale(8); return; }
+      if (e.key === '1') { setPickedScale(1); setSpokenScale(1); return; }
+      if (e.key === '2') { setPickedScale(2); setSpokenScale(2); return; }
+      if (e.key === '4') { setPickedScale(4); setSpokenScale(4); return; }
+      if (e.key === '8') { setPickedScale(8); setSpokenScale(8); return; }
 
       if (!lockedRef.current) {
         if (e.key === ' ') {
@@ -832,10 +852,9 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
     [getAnimForState]
   );
 
-  // The scale row: 1x, 2x, 4x, 8x, plus the scale a pinch landed on between them.
-  const scaleChips: number[] = (VALID_WORLD_SCALES as readonly number[]).includes(worldScale)
-    ? [...VALID_WORLD_SCALES]
-    : [...VALID_WORLD_SCALES, worldScale].sort((a, b) => a - b);
+  // The scale row is always 1x, 2x, 4x, 8x, so it never slides during a
+  // pinch. A scale between them presses no chip and shows in the label.
+  const betweenChips = !(VALID_WORLD_SCALES as readonly number[]).includes(worldScale);
 
   if (animations.length === 0 || animations.every((a) => a.frames.length === 0)) {
     return (
@@ -883,7 +902,7 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
               {overlayInfo.directional && ' (4-dir)'}
             </p>
             <p className="text-[10px] font-mono text-text-muted">
-              Pos: {overlayInfo.x}, {overlayInfo.y}
+              Pos: {Math.round(overlayInfo.x)}, {Math.round(overlayInfo.y)}
             </p>
             <p className="text-[10px] font-mono text-text-muted">
               FPS: {overlayInfo.fps}
@@ -1057,15 +1076,20 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
 
           {/* Scale toggle (1×/2×/4×/8×) + Showcase mode button */}
           <div className="flex items-center gap-2 flex-wrap">
-            <label className={`text-[10px] font-mono text-text-muted uppercase tracking-wider ${TOUCH_LABEL}`}>
-              Scale
+            {/* min-w holds room for "Scale 3×", so the chips do not move
+                when the label changes. */}
+            <label className={`min-w-[9ch] text-[10px] font-mono text-text-muted uppercase tracking-wider ${TOUCH_LABEL}`}>
+              {betweenChips ? `Scale ${worldScale}×` : 'Scale'}
             </label>
-            {scaleChips.map((s) => (
+            <span role="status" className="sr-only">
+              {spokenScale === null ? '' : `Scale ${spokenScale}×`}
+            </span>
+            {VALID_WORLD_SCALES.map((s) => (
               <button
                 key={s}
                 type="button"
                 aria-pressed={worldScale === s}
-                onClick={() => setPickedScale(s)}
+                onClick={() => pickScale(s)}
                 className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors ${TOUCH_CHIP}
                   ${worldScale === s
                     ? 'bg-accent-amber text-bg-primary'

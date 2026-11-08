@@ -18,6 +18,7 @@ export default function PreviewPage() {
   useSheetLeaveGuard();
   const sheetSession = useSheetSession();
   const animations = useSpriteStore((s) => s.animations);
+  const hasSheet = useSpriteStore((s) => s.spriteSheet !== null);
   const frameDataUrls = useSpriteStore((s) => s.frameDataUrls);
 
   const hasData = animations.length > 0 && animations.some((a) => a.frames.length > 0);
@@ -29,8 +30,8 @@ export default function PreviewPage() {
       <div>
         <h1 className="font-display text-sm text-accent-amber mb-2">Preview & Play</h1>
         <p className="text-sm font-mono text-text-secondary">
-          Test your sprite animations in a live sandbox with keyboard controls,
-          or step through frames in the animation player.
+          Test your sprite animations in a live sandbox, or step through frames
+          in the animation player.
         </p>
       </div>
 
@@ -49,8 +50,12 @@ export default function PreviewPage() {
           <div className="flex items-center justify-center w-14 h-14 rounded-lg bg-bg-elevated mb-4">
             <UploadCloud size={28} className="text-text-muted" />
           </div>
-          <p className="text-sm font-mono text-text-secondary mb-3">
-            No sprite data loaded.
+          {/* A sheet with no animation with frames (what a restore of such a
+              sheet leaves) says what to do next. */}
+          <p className="text-sm font-mono text-text-secondary mb-3 max-w-md text-center px-4">
+            {hasSheet
+              ? 'Your sheet is loaded, but it has no animations yet. Group frames into an animation on Upload, then come back.'
+              : 'No sprite data loaded.'}
           </p>
           <Link href="/upload">
             <Button variant="secondary" size="md">

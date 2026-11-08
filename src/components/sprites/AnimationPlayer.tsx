@@ -11,11 +11,20 @@ import {
   ArrowLeftRight,
 } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
+import { useStagePinch } from '@/hooks/useStagePinch';
+import { fitZoomToBox, snapZoom, stepZoom } from '@/lib/stageZoom';
 import type { SpriteAnimation } from '@/lib/types';
 import Button from '@/components/ui/Button';
 
 const SPEED_OPTIONS = [0.25, 0.5, 1, 1.5, 2] as const;
 const ZOOM_OPTIONS = [1, 2, 4, 8, 16] as const;
+
+// Touch size for the control chips: 44 px tall, 12 px text on a coarse
+// pointer; desktop keeps its compact chips.
+const TOUCH_CHIP = 'pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3 pointer-coarse:text-xs';
+const TOUCH_LABEL = 'pointer-coarse:text-xs';
+// The canvas box's border and padding (p-3), in CSS px, around the canvas.
+const BOX_INSET = 2 * (12 + 1);
 
 type BgMode = 'checkerboard' | 'black' | 'white' | 'green' | 'custom';
 
@@ -31,12 +40,22 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
   const frameImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  // The row the canvas box sits in, measured for the fitting zoom, and the
+  // box itself, which pinches and scrolls.
+  const rowRef = useRef<HTMLDivElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const pinchStartRef = useRef(8);
 
   const [selectedAnimId, setSelectedAnimId] = useState<string>('');
   const [playing, setPlaying] = useState(true);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [speed, setSpeed] = useState(1);
-  const [zoom, setZoom] = useState(8);
+  // Fit on open: the largest zoom whose frame fits the box's width and 60% of
+  // the viewport height, until the person picks a zoom; theirs is kept. No
+  // frame is drawn before the box is measured.
+  const [fittedZoom, setFittedZoom] = useState<number | null>(null);
+  const [pickedZoom, setPickedZoom] = useState<number | null>(null);
+  const zoom = pickedZoom ?? fittedZoom;
   const [bgMode, setBgMode] = useState<BgMode>('checkerboard');
   const [customBgColor, setCustomBgColor] = useState('#808080');
   const [pingPong, setPingPong] = useState(false);
@@ -50,6 +69,36 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
   // Pick the active animation
   const anim: SpriteAnimation | undefined =
     animations.find((a) => a.id === selectedAnimId) ?? animations[0];
+  const frameW = spriteSheet?.frameWidth ?? anim?.frames[0]?.width ?? 0;
+  const frameH = spriteSheet?.frameHeight ?? anim?.frames[0]?.height ?? 0;
+  const hasFrames = !!anim && anim.frames.length > 0;
+
+  useEffect(() => {
+    const row = rowRef.current;
+    if (!row || !(frameW > 0) || !(frameH > 0)) return;
+    const measure = () => {
+      const boxWidth = row.clientWidth - BOX_INSET;
+      setFittedZoom(fitZoomToBox(frameW, frameH, boxWidth, window.innerHeight * 0.6, ZOOM_OPTIONS));
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(row);
+    return () => ro.disconnect();
+  }, [frameW, frameH, hasFrames]);
+
+  // Pinch or ctrl or cmd wheel on the canvas steps through the zoom options;
+  // the page still zooms everywhere else.
+  useStagePinch(boxRef, {
+    onPinchStart: () => { pinchStartRef.current = zoom ?? 8; },
+    onPinch: (gestureScale) => {
+      const next = snapZoom(pinchStartRef.current, gestureScale, ZOOM_OPTIONS);
+      if (next !== zoom) setPickedZoom(next);
+    },
+    onWheelStep: (direction) => {
+      if (zoom === null) return;
+      const next = stepZoom(zoom, direction, ZOOM_OPTIONS);
+      if (next !== zoom) setPickedZoom(next);
+    },
+  });
 
   // Auto-select first animation
   useEffect(() => {
@@ -87,7 +136,7 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
   const drawFrame = useCallback(
     (frameIdx: number) => {
       const canvas = canvasRef.current;
-      if (!canvas || !anim || anim.frames.length === 0) return;
+      if (!canvas || !anim || anim.frames.length === 0 || zoom === null) return;
 
       const frame = anim.frames[frameIdx];
       if (!frame) return;
@@ -259,19 +308,23 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
         </div>
       )}
 
-      {/* Canvas — responsive: intrinsic canvas dimensions become a CEILING via
-          maxWidth: 100% so the canvas downscales to fit the wrapper instead of
-          overflowing the viewport at high zoom levels. */}
-      <div className="flex justify-center w-full">
-        <div className="rounded-lg border border-border-default bg-bg-elevated p-3 max-w-full">
+      {/* Canvas: drawn at its real zoom. A zoom wider or taller than the box
+          scrolls inside the box (one finger pans it) instead of shrinking the
+          canvas, so a bigger zoom is really bigger. The box takes one-finger
+          pans in both directions but no browser pinch: that one zooms the
+          canvas (useStagePinch). */}
+      <div ref={rowRef} className="flex justify-center w-full">
+        <div
+          ref={boxRef}
+          className="rounded-lg border border-border-default bg-bg-elevated p-3 max-w-full overflow-auto"
+          style={{ maxHeight: '70vh', touchAction: 'pan-x pan-y' }}
+        >
           <canvas
             ref={canvasRef}
             className="pixel-art-render"
             style={{
               imageRendering: 'pixelated',
               display: 'block',
-              maxWidth: '100%',
-              height: 'auto',
             }}
           />
         </div>
@@ -330,15 +383,17 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
       <div className="flex flex-wrap gap-6 justify-center">
         {/* Speed */}
         <div>
-          <label className="block text-[10px] font-mono text-text-muted mb-1 text-center uppercase tracking-wider">
+          <label className={`block text-[10px] font-mono text-text-muted mb-1 text-center uppercase tracking-wider ${TOUCH_LABEL}`}>
             Speed
           </label>
           <div className="flex gap-1">
             {SPEED_OPTIONS.map((s) => (
               <button
                 key={s}
+                type="button"
+                aria-pressed={speed === s}
                 onClick={() => setSpeed(s)}
-                className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
+                className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors ${TOUCH_CHIP}
                   ${speed === s
                     ? 'bg-accent-amber text-bg-primary'
                     : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
@@ -352,15 +407,17 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
 
         {/* Zoom */}
         <div>
-          <label className="block text-[10px] font-mono text-text-muted mb-1 text-center uppercase tracking-wider">
+          <label className={`block text-[10px] font-mono text-text-muted mb-1 text-center uppercase tracking-wider ${TOUCH_LABEL}`}>
             Zoom
           </label>
           <div className="flex gap-1">
             {ZOOM_OPTIONS.map((z) => (
               <button
                 key={z}
-                onClick={() => setZoom(z)}
-                className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
+                type="button"
+                aria-pressed={zoom === z}
+                onClick={() => setPickedZoom(z)}
+                className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors ${TOUCH_CHIP}
                   ${zoom === z
                     ? 'bg-accent-amber text-bg-primary'
                     : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
@@ -374,7 +431,7 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
 
         {/* Background */}
         <div>
-          <label className="block text-[10px] font-mono text-text-muted mb-1 text-center uppercase tracking-wider">
+          <label className={`block text-[10px] font-mono text-text-muted mb-1 text-center uppercase tracking-wider ${TOUCH_LABEL}`}>
             Background
           </label>
           <div className="flex gap-1 items-center">
@@ -386,8 +443,10 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
             ] as const).map(({ id, label }) => (
               <button
                 key={id}
+                type="button"
+                aria-pressed={bgMode === id}
                 onClick={() => setBgMode(id)}
-                className={`px-2 py-1 rounded text-[10px] cursor-pointer transition-colors
+                className={`px-2 py-1 rounded text-[10px] cursor-pointer transition-colors ${TOUCH_CHIP}
                   ${bgMode === id
                     ? 'bg-accent-amber text-bg-primary ring-1 ring-accent-amber'
                     : 'bg-bg-elevated hover:bg-bg-hover border border-border-subtle'
@@ -405,7 +464,7 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
                   setCustomBgColor(e.target.value);
                   setBgMode('custom');
                 }}
-                className="w-6 h-6 rounded cursor-pointer border border-border-default"
+                className="w-6 h-6 pointer-coarse:w-11 pointer-coarse:h-11 rounded cursor-pointer border border-border-default"
                 title="Custom color"
               />
             </div>

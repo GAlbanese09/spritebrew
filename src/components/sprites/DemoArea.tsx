@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Application,
   AnimatedSprite,
@@ -11,16 +11,24 @@ import {
   TextureSource,
 } from 'pixi.js';
 import { DropShadowFilter } from 'pixi-filters';
-import { ChevronDown, ChevronUp, Eye, EyeOff, Maximize2, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Swords, Zap } from 'lucide-react';
+import { ChevronDown, ChevronUp, Maximize2, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Swords, Zap } from 'lucide-react';
 import { DEMO_CONTROLS } from '@/lib/constants';
 import { useSpriteStore } from '@/stores/spriteStore';
+import { useStagePinch } from '@/hooks/useStagePinch';
+import { fitScale, snapZoom, stepZoom } from '@/lib/stageZoom';
 import type { SpriteAnimation } from '@/lib/types';
 
 // Force nearest-neighbor globally for pixel art
 TextureSource.defaultOptions.scaleMode = 'nearest';
 
+// The scale buttons and keys. A pinch may land on any whole scale between.
 const VALID_WORLD_SCALES = [1, 2, 4, 8] as const;
-type WorldScale = typeof VALID_WORLD_SCALES[number];
+const WORLD_SCALES = [1, 2, 3, 4, 5, 6, 7, 8] as const;
+
+// Touch size for the toolbar chips: 44 px tall and at least 44 px wide, 12 px
+// text on a coarse pointer; desktop keeps its compact chips.
+const TOUCH_CHIP = 'pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3 pointer-coarse:text-xs';
+const TOUCH_LABEL = 'pointer-coarse:text-xs';
 
 type CharState = 'idle' | 'walking' | 'running' | 'attacking' | 'jumping' | 'hurt';
 type Direction = 'up' | 'down' | 'left' | 'right';
@@ -97,7 +105,10 @@ function parseDirectional(name: string): { state: CharState; direction: Directio
  * - dirMap: state+direction → SpriteAnimation
  * - flatMap: state → SpriteAnimation (non-directional fallback)
  */
-function buildAnimMaps(animations: SpriteAnimation[]) {
+function buildAnimMaps(allAnimations: SpriteAnimation[]) {
+  // An animation with no frames cannot play: an empty Idle group must not
+  // become the idle and blank the stage.
+  const animations = allAnimations.filter((a) => a.frames.length > 0);
   const dirMap = new Map<string, SpriteAnimation>(); // key: "state:direction"
   const flatMap = new Map<CharState, SpriteAnimation>();
   let hasRealIdle = false; // tracks whether a genuine idle animation exists
@@ -173,7 +184,12 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
   const facingRef = useRef<1 | -1>(1);
   const directionRef = useRef<Direction>('down');
   const lockedRef = useRef(false);
-  const worldScaleRef = useRef<WorldScale>(2);
+  const worldScaleRef = useRef(2);
+  // The scale a pinch began at, while one is under way.
+  const pinchStartRef = useRef(2);
+  const stageRef = useRef<HTMLDivElement>(null);
+  // The ticker publishes the stats readout only while it is shown.
+  const showOverlayRef = useRef(false);
   const naturalFacingRef = useRef<NaturalFacing>('right');
 
   const animMapsRef = useRef<ReturnType<typeof buildAnimMaps>>({
@@ -185,10 +201,21 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
 
   const [focused, setFocused] = useState(false);
   const [bgPreset, setBgPreset] = useState<BgPreset>('grid');
-  const [showOverlay, setShowOverlay] = useState(true);
+  // The stats readout is opt in (PILOT sweep 1): hidden until Stats or H.
+  const [showOverlay, setShowOverlay] = useState(false);
   const [showControls, setShowControls] = useState(true);
-  // Default 2× — most generated sprites are 64–128 and 2× reads well on 1280×720.
-  const [worldScale, setWorldScale] = useState<WorldScale>(2);
+  // Fit on open: the sprite at about a third of the stage height, from its
+  // tallest frame, until the person picks a scale (button, key or pinch);
+  // theirs is kept from then on.
+  const fittedScale = useMemo(() => {
+    const tallest = Math.max(0, ...animations.flatMap((a) => a.frames.map((f) => f.height)));
+    return tallest > 0 ? fitScale(tallest, CANVAS_H, WORLD_SCALES) : 2;
+  }, [animations]);
+  const [pickedScale, setPickedScale] = useState<number | null>(null);
+  const worldScale = pickedScale ?? fittedScale;
+  // The scale read aloud by the status line: set when a pinch ends or a
+  // wheel or key picks a scale, never on every pinch move.
+  const [spokenScale, setSpokenScale] = useState<number | null>(null);
   const [showcaseMode, setShowcaseMode] = useState(false);
   const [naturalFacing, setNaturalFacing] = useState<NaturalFacing>('right');
   const [overlayInfo, setOverlayInfo] = useState({
@@ -205,6 +232,36 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
   useEffect(() => {
     animMapsRef.current = buildAnimMaps(animations);
   }, [animations]);
+
+  useEffect(() => {
+    showOverlayRef.current = showOverlay;
+  }, [showOverlay]);
+
+  // Pinch or ctrl or cmd wheel on the stage zooms it, live, snapping to whole
+  // scales; the page still zooms everywhere else.
+  // The ref is set at once, ahead of the render, so two wheel notches before
+  // a render make two steps.
+  const pickScale = (next: number) => {
+    worldScaleRef.current = next;
+    setPickedScale(next);
+  };
+  useStagePinch(stageRef, {
+    onPinchStart: () => { pinchStartRef.current = worldScaleRef.current; },
+    onPinch: (gestureScale) => {
+      const next = snapZoom(pinchStartRef.current, gestureScale, WORLD_SCALES);
+      if (next !== worldScaleRef.current) pickScale(next);
+    },
+    onPinchEnd: () => {
+      if (worldScaleRef.current !== pinchStartRef.current) setSpokenScale(worldScaleRef.current);
+    },
+    onWheelStep: (direction) => {
+      const next = stepZoom(worldScaleRef.current, direction, WORLD_SCALES);
+      if (next !== worldScaleRef.current) {
+        pickScale(next);
+        setSpokenScale(next);
+      }
+    },
+  });
 
   // Sync natural-facing into a ref so the game loop reads it without re-render churn.
   useEffect(() => {
@@ -524,13 +581,15 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
 
             // Boundary clamp uses scale-adjusted world bounds AND subtracts
             // halfSprite so the sprite stays fully visible (anchor is centered
-            // at 0.5,0.5 — without the half-offset, half the sprite would clip
-            // offscreen at the extremes). Falls back to no offset before the
-            // first sprite is visible.
+            // at 0.5,0.5; without the half-offset, half the sprite would clip
+            // offscreen at the extremes). The sprite is a child of the scaled
+            // world, so its width and height are already in world units
+            // (Pixi 8) and are not divided by the scale. Falls back to no
+            // offset before the first sprite is visible.
             const ws = worldScaleRef.current;
             const activeSprite = activeSpriteRef.current;
-            const halfW = activeSprite ? (activeSprite.width / 2) / ws : 0;
-            const halfH = activeSprite ? (activeSprite.height / 2) / ws : 0;
+            const halfW = activeSprite ? activeSprite.width / 2 : 0;
+            const halfH = activeSprite ? activeSprite.height / 2 : 0;
             posRef.current.x = Math.max(halfW, Math.min(CANVAS_W / ws - halfW, posRef.current.x));
             posRef.current.y = Math.max(halfH, Math.min(CANVAS_H / ws - halfH, posRef.current.y));
 
@@ -630,8 +689,8 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
         prevAnimId = targetAnimId;
         prevIdleFallback = idleFallback;
 
-        // Update overlay
-        setOverlayInfo({
+        // Update the stats readout, only while it is shown (it re-renders).
+        if (showOverlayRef.current) setOverlayInfo({
           animation: targetAnim?.name ?? 'none',
           state: currentState,
           direction: currentDir,
@@ -735,10 +794,10 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
       }
 
       // Scale toggle — keys 1, 2, 4, 8
-      if (e.key === '1') { setWorldScale(1); return; }
-      if (e.key === '2') { setWorldScale(2); return; }
-      if (e.key === '4') { setWorldScale(4); return; }
-      if (e.key === '8') { setWorldScale(8); return; }
+      if (e.key === '1') { setPickedScale(1); setSpokenScale(1); return; }
+      if (e.key === '2') { setPickedScale(2); setSpokenScale(2); return; }
+      if (e.key === '4') { setPickedScale(4); setSpokenScale(4); return; }
+      if (e.key === '8') { setPickedScale(8); setSpokenScale(8); return; }
 
       if (!lockedRef.current) {
         if (e.key === ' ') {
@@ -793,6 +852,10 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
     [getAnimForState]
   );
 
+  // The scale row is always 1x, 2x, 4x, 8x, so it never slides during a
+  // pinch. A scale between them presses no chip and shows in the label.
+  const betweenChips = !(VALID_WORLD_SCALES as readonly number[]).includes(worldScale);
+
   if (animations.length === 0 || animations.every((a) => a.frames.length === 0)) {
     return (
       <div className="rounded-lg border border-dashed border-border-default bg-bg-surface p-12 text-center">
@@ -814,6 +877,7 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           shows the whole canvas plus the toolbar without vertical overflow.
           mx-auto centers it when narrower than its parent. */}
       <div
+        ref={stageRef}
         className={`relative rounded-lg border-2 overflow-hidden transition-colors w-full mx-auto ${
           focused ? 'border-accent-amber glow-amber' : 'border-border-default'
         }`}
@@ -838,7 +902,7 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
               {overlayInfo.directional && ' (4-dir)'}
             </p>
             <p className="text-[10px] font-mono text-text-muted">
-              Pos: {overlayInfo.x}, {overlayInfo.y}
+              Pos: {Math.round(overlayInfo.x)}, {Math.round(overlayInfo.y)}
             </p>
             <p className="text-[10px] font-mono text-text-muted">
               FPS: {overlayInfo.fps}
@@ -846,9 +910,9 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           </div>
         )}
 
-        {/* Click-to-focus hint */}
+        {/* Click-to-focus hint, at the bottom so it stays off the sprite */}
         {!focused && (
-          <div className="absolute inset-0 flex pointer-coarse:hidden items-center justify-center bg-black/30 pointer-events-none">
+          <div className="absolute inset-0 flex pointer-coarse:hidden items-end justify-center pb-3 bg-black/30 pointer-events-none">
             <p className="text-sm font-mono text-text-primary bg-black/60 px-4 py-2 rounded">
               Click to focus &middot; Use keyboard to control
             </p>
@@ -865,8 +929,8 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           (up / leave / cancel) are wired — iOS pointercancel would otherwise
           strand a direction (same lesson as the editor's cancelStroke). */}
       {!showcaseMode && (
-        <p className="hidden pointer-coarse:block text-[11px] font-mono text-text-muted">
-          Use the buttons below to move
+        <p className="hidden pointer-coarse:block text-xs font-mono text-text-muted">
+          Use the buttons below to move. Pinch or use the buttons to zoom.
         </p>
       )}
       {!showcaseMode && (
@@ -971,7 +1035,7 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
         <>
           {/* Background selector */}
           <div className="flex items-center gap-2 flex-wrap">
-            <label className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
+            <label className={`text-[10px] font-mono text-text-muted uppercase tracking-wider ${TOUCH_LABEL}`}>
               Background
             </label>
             {([
@@ -983,8 +1047,10 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
             ] as const).map(({ id, label }) => (
               <button
                 key={id}
+                type="button"
+                aria-pressed={bgPreset === id}
                 onClick={() => setBgPreset(id)}
-                className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
+                className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors ${TOUCH_CHIP}
                   ${bgPreset === id
                     ? 'bg-accent-amber text-bg-primary'
                     : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
@@ -994,24 +1060,37 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
               </button>
             ))}
             <button
+              type="button"
               onClick={() => setShowOverlay((v) => !v)}
-              className="ml-auto p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"
-              title={showOverlay ? 'Hide overlay (H)' : 'Show overlay (H)'}
+              aria-pressed={showOverlay}
+              className={`ml-auto px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors ${TOUCH_CHIP}
+                ${showOverlay
+                  ? 'bg-accent-amber text-bg-primary'
+                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
+                }`}
+              title={showOverlay ? 'Hide stats (H)' : 'Show stats (H)'}
             >
-              {showOverlay ? <Eye size={14} /> : <EyeOff size={14} />}
+              Stats
             </button>
           </div>
 
           {/* Scale toggle (1×/2×/4×/8×) + Showcase mode button */}
           <div className="flex items-center gap-2 flex-wrap">
-            <label className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
-              Scale
+            {/* min-w holds room for "Scale 3×", so the chips do not move
+                when the label changes. */}
+            <label className={`min-w-[9ch] text-[10px] font-mono text-text-muted uppercase tracking-wider ${TOUCH_LABEL}`}>
+              {betweenChips ? `Scale ${worldScale}×` : 'Scale'}
             </label>
+            <span role="status" className="sr-only">
+              {spokenScale === null ? '' : `Scale ${spokenScale}×`}
+            </span>
             {VALID_WORLD_SCALES.map((s) => (
               <button
                 key={s}
-                onClick={() => setWorldScale(s)}
-                className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
+                type="button"
+                aria-pressed={worldScale === s}
+                onClick={() => pickScale(s)}
+                className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors ${TOUCH_CHIP}
                   ${worldScale === s
                     ? 'bg-accent-amber text-bg-primary'
                     : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
@@ -1022,8 +1101,8 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
             ))}
             <button
               onClick={() => setShowcaseMode(true)}
-              className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
-                bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle"
+              className={`ml-auto inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors ${TOUCH_CHIP}
+                bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle`}
               title="Showcase mode (F)"
             >
               <Maximize2 size={12} />
@@ -1034,7 +1113,7 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           {/* Natural facing toggle — for sheets generated facing left
               (single-direction sheets only; ignored when directional anims exist). */}
           <div className="flex items-center gap-2 flex-wrap">
-            <label className="text-[10px] font-mono text-text-muted uppercase tracking-wider">
+            <label className={`text-[10px] font-mono text-text-muted uppercase tracking-wider ${TOUCH_LABEL}`}>
               Facing
             </label>
             {([
@@ -1043,8 +1122,10 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
             ] as const).map(({ id, label }) => (
               <button
                 key={id}
+                type="button"
+                aria-pressed={naturalFacing === id}
                 onClick={() => setNaturalFacing(id)}
-                className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
+                className={`px-2 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors ${TOUCH_CHIP}
                   ${naturalFacing === id
                     ? 'bg-accent-amber text-bg-primary'
                     : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
@@ -1057,9 +1138,10 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
         </>
       )}
 
-      {/* Controls reference — hidden in showcase mode */}
+      {/* Controls reference: hidden in showcase mode, and on a coarse
+          pointer (phones and tablets), which has the buttons above instead */}
       {!showcaseMode && (
-      <div className="rounded-lg border border-border-default bg-bg-surface">
+      <div className="rounded-lg border border-border-default bg-bg-surface pointer-coarse:hidden">
         <button
           onClick={() => setShowControls((v) => !v)}
           className="flex items-center justify-between w-full px-4 py-3 text-xs font-mono
@@ -1111,7 +1193,7 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
                   H
                 </kbd>
                 <span className="text-[10px] font-mono text-text-muted">
-                  Toggle info overlay
+                  Show or hide stats
                 </span>
               </div>
               <div className="flex items-center gap-3">
@@ -1128,6 +1210,17 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
                 </div>
                 <span className="text-[10px] font-mono text-text-muted">
                   Set scale (1×/2×/4×/8×)
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <kbd
+                  className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5
+                    rounded bg-bg-elevated border border-border-default text-[10px] font-mono text-text-primary"
+                >
+                  Ctrl
+                </kbd>
+                <span className="text-[10px] font-mono text-text-muted">
+                  (or Cmd) + wheel, or a pinch on the stage: zoom
                 </span>
               </div>
               <div className="flex items-center gap-3">

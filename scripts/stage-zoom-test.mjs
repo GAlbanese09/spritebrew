@@ -25,14 +25,14 @@ await build({
   alias: { '@': path.join(ROOT, 'src') },
 });
 const { snapZoom, stepZoom, fitScale, fitZoomToBox } = await import(pathToFileURL(path.join(OUT_DIR, 'stageZoom.mjs')).href);
-// The player, for its pure fitRoomWidth; packages stay external and nothing
-// renders.
+// The player, for its pure fitRoomWidth and shouldRefit; packages stay
+// external and nothing renders.
 await build({
   entryPoints: { player: path.join(ROOT, 'src/components/sprites/AnimationPlayer.tsx') },
   bundle: true, format: 'esm', platform: 'node', outdir: OUT_DIR, outExtension: { '.js': '.mjs' }, logLevel: 'silent',
   alias: { '@': path.join(ROOT, 'src') }, packages: 'external', jsx: 'automatic',
 });
-const { fitRoomWidth } = await import(pathToFileURL(path.join(OUT_DIR, 'player.mjs')).href);
+const { fitRoomWidth, shouldRefit } = await import(pathToFileURL(path.join(OUT_DIR, 'player.mjs')).href);
 
 let failed = 0;
 function check(name, ok, detail) {
@@ -404,8 +404,8 @@ check('fitZoomToBox: nothing fits, the smallest', fitZoomToBox(512, 512, 300, 60
   check('pin: the /preview lead line', /Test your sprite animations in a live sandbox, or step through frames\s+in the animation player\./.test(preview));
   // Audit r1 fixes (build/preview-audit.md).
   const fitEffect = between(player, 'useLayoutEffect(() => {\n    const row = rowRef.current;', '}, [frameW, frameH, hasFrames]);');
-  check('pin F1: the player fits in a layout effect, once on measure, and refits only past 24 px of width', /const REFIT_PX = 24;/.test(player)
-    && /fit\(row\.clientWidth\);/.test(fitEffect) && /if \(Math\.abs\(width - fitWidthRef\.current\) > REFIT_PX\) fit\(width\);/.test(fitEffect) && !/clientHeight/.test(fitEffect));
+  check('pin F1: the player fits in a layout effect, once on measure, and refits past 24 px of width', /const REFIT_PX = 24;/.test(player)
+    && /fit\(row\.clientWidth\);/.test(fitEffect) && /if \(Math\.abs\(rowWidth - lastFitWidth\) > REFIT_PX\) return true;/.test(player) && !/clientHeight/.test(fitEffect));
   check('pin F1: the canvas is hidden until the first fit and drawn before paint', /visibility: zoom === null \? 'hidden' : undefined/.test(player)
     && /useLayoutEffect\(\(\) => \{\s*drawFrame\(currentFrame\);\s*\}, \[currentFrame, drawFrame\]\);/.test(player));
   check('pin F2: the six transport buttons are 44 px on a coarse pointer', /const TOUCH_BUTTON = 'pointer-coarse:min-h-11 pointer-coarse:min-w-11';/.test(player)
@@ -448,6 +448,19 @@ check('fitZoomToBox: nothing fits, the smallest', fitZoomToBox(512, 512, 300, 60
     const at = (thickness, bar) => fitZoomToBox(64, 64, fitRoomWidth(545, thickness, bar) - 26, 600, ZOOM);
     check('G2: a 64 px frame in a 545 px row fits 4x with room for a 15 px bar, 8x with overlay bars', at(15, 0) === 4 && at(0, 0) === 8, [at(15, 0), at(0, 0)]);
   }
+  // Harness r2 fix (build/harness/polish-preview-r2, P3 (b)).
+  check('pin G4: the observer asks shouldRefit with the fitted-zoom ref, set where the fitted zoom is set',
+    /new ResizeObserver\(\(\) => \{\s*const width = row\.clientWidth;\s*if \(shouldRefit\(width, fitWidthRef\.current, frameW, fittedZoomRef\.current\)\) fit\(width\);\s*\}\);/.test(fitEffect)
+    && /fittedZoomRef\.current = fitted;\s*setFittedZoom\(fitted\);/.test(fitEffect) && (player.match(/setFittedZoom\(/g) ?? []).length === 1
+    && /return fittedZoom !== null && frameWidth \* fittedZoom \+ BOX_INSET > rowWidth;/.test(player));
+  {
+    // The r2 sweep: a 64 px frame fitted 8x (512 + 26 = 538 px) at a 556 px row.
+    const sweep = [[541, false], [537, true], [535, true], [533, true]].map(([row, want]) => [row, shouldRefit(row, 556, 64, 8), want]);
+    check('G4: after an 8x fit at 556, rows 541 (no), 537, 535 and 533 (yes)', sweep.every(([, got, want]) => got === want), sweep);
+  }
+  check('G4: growth of 15 px does not refit', shouldRefit(571, 556, 64, 8) === false, shouldRefit(571, 556, 64, 8));
+  check('G4: growth of 25 px refits', shouldRefit(581, 556, 64, 8) === true, shouldRefit(581, 556, 64, 8));
+  check('G4: a fitted zoom of null does not refit within 24 px', shouldRefit(533, 556, 64, null) === false, shouldRefit(533, 556, 64, null));
   {
     const hint = between(demo, '{/* Click-to-focus hint', 'Click to focus &middot;');
     check('pin G3: the focus hint sits at the bottom of the stage, dimmed, untouchable, hidden on touch',

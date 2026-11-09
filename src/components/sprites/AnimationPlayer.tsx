@@ -58,6 +58,18 @@ export function fitRoomWidth(rowWidth: number, thickness: number, mainBarPx: num
   return mainBarPx > 0 ? rowWidth : rowWidth - thickness;
 }
 
+/**
+ * Whether the row's new width calls for a fit again: it moved more than
+ * REFIT_PX from the width the last fit used, or the fitted zoom (null before
+ * the first fit) no longer fits the row with the box's inset. A refit down
+ * cannot flip back: losing <main>'s bar widens the row by less than REFIT_PX,
+ * and the smaller zoom fits.
+ */
+export function shouldRefit(rowWidth: number, lastFitWidth: number, frameWidth: number, fittedZoom: number | null): boolean {
+  if (Math.abs(rowWidth - lastFitWidth) > REFIT_PX) return true;
+  return fittedZoom !== null && frameWidth * fittedZoom + BOX_INSET > rowWidth;
+}
+
 type BgMode = 'checkerboard' | 'black' | 'white' | 'green' | 'custom';
 
 interface AnimationPlayerProps {
@@ -80,8 +92,9 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
   // The zoom as of the last handler, ahead of the render, so two wheel notches
   // before a render make two steps.
   const zoomRef = useRef<number | null>(null);
-  // The row width the last fit used.
+  // The row width the last fit used, and the zoom it fitted.
   const fitWidthRef = useRef(0);
+  const fittedZoomRef = useRef<number | null>(null);
   // The canvas point at the box's visible middle, saved before a zoom change
   // and restored after the canvas resizes.
   const centerRef = useRef<{ x: number; y: number } | null>(null);
@@ -117,7 +130,8 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
 
   // Fit once, before paint, when the frame size is known and the row first
   // measured; again when the frame size changes; and otherwise only when the
-  // row's width changes by more than REFIT_PX (height alone never refits).
+  // row's width changes by more than REFIT_PX or the fitted zoom stops fitting
+  // the row (height alone never refits).
   useLayoutEffect(() => {
     const row = rowRef.current;
     if (!row || !(frameW > 0) || !(frameH > 0)) return;
@@ -126,12 +140,14 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
       const main = row.closest('main');
       const mainBarPx = main ? main.offsetWidth - main.clientWidth : 0;
       const room = fitRoomWidth(width, scrollbarThickness(), mainBarPx);
-      setFittedZoom(fitZoomToBox(frameW, frameH, room - BOX_INSET, window.innerHeight * 0.6, ZOOM_OPTIONS));
+      const fitted = fitZoomToBox(frameW, frameH, room - BOX_INSET, window.innerHeight * 0.6, ZOOM_OPTIONS);
+      fittedZoomRef.current = fitted;
+      setFittedZoom(fitted);
     };
     fit(row.clientWidth);
     const ro = new ResizeObserver(() => {
       const width = row.clientWidth;
-      if (Math.abs(width - fitWidthRef.current) > REFIT_PX) fit(width);
+      if (shouldRefit(width, fitWidthRef.current, frameW, fittedZoomRef.current)) fit(width);
     });
     ro.observe(row);
     return () => ro.disconnect();

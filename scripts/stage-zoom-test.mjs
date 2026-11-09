@@ -25,6 +25,14 @@ await build({
   alias: { '@': path.join(ROOT, 'src') },
 });
 const { snapZoom, stepZoom, fitScale, fitZoomToBox } = await import(pathToFileURL(path.join(OUT_DIR, 'stageZoom.mjs')).href);
+// The player, for its pure fitRoomWidth; packages stay external and nothing
+// renders.
+await build({
+  entryPoints: { player: path.join(ROOT, 'src/components/sprites/AnimationPlayer.tsx') },
+  bundle: true, format: 'esm', platform: 'node', outdir: OUT_DIR, outExtension: { '.js': '.mjs' }, logLevel: 'silent',
+  alias: { '@': path.join(ROOT, 'src') }, packages: 'external', jsx: 'automatic',
+});
+const { fitRoomWidth } = await import(pathToFileURL(path.join(OUT_DIR, 'player.mjs')).href);
 
 let failed = 0;
 function check(name, ok, detail) {
@@ -389,7 +397,7 @@ check('fitZoomToBox: nothing fits, the smallest', fitZoomToBox(512, 512, 300, 60
     page.includes(`? '${noAnimations}'`) && page.includes(": 'No sprite data loaded.'") && /const hasSheet = useSpriteStore\(\(s\) => s\.spriteSheet !== null\);/.test(page) && /\{hasSheet\s*\?/.test(page)));
   check('pin: Stats is a real toggle with aria-pressed and its H titles', /aria-pressed=\{showOverlay\}/.test(demo) && /title=\{showOverlay \? 'Hide stats \(H\)' : 'Show stats \(H\)'\}/.test(demo) && /\n\s*Stats\n\s*<\/button>/.test(demo) && !/Eye/.test(demo));
   check('pin: the Demo Area fits on open from the tallest frame, and a pick is kept', /fitScale\(tallest, CANVAS_H, WORLD_SCALES\)/.test(demo) && /const worldScale = pickedScale \?\? fittedScale;/.test(demo) && !/setWorldScale/.test(demo));
-  check('pin: the player fits the box with a ResizeObserver, at 60% of the viewport height', /fitZoomToBox\(frameW, frameH, width - BOX_INSET, window\.innerHeight \* 0\.6, ZOOM_OPTIONS\)/.test(player) && /new ResizeObserver\(/.test(player) && /const zoom = pickedZoom \?\? fittedZoom;/.test(player));
+  check('pin: the player fits the box with a ResizeObserver, at 60% of the viewport height', /fitZoomToBox\(frameW, frameH, room - BOX_INSET, window\.innerHeight \* 0\.6, ZOOM_OPTIONS\)/.test(player) && /new ResizeObserver\(/.test(player) && /const zoom = pickedZoom \?\? fittedZoom;/.test(player));
   check('pin: the player box scrolls instead of shrinking the canvas', /p-3 max-w-full overflow-auto/.test(player) && !/maxWidth: '100%'/.test(player));
   check('pin: touch size on a coarse pointer, both stages', [demo, player].every((text) => /const TOUCH_CHIP = '[^']*pointer-coarse:min-h-11[^']*pointer-coarse:text-xs'/.test(text)) && (demo.match(/\$\{TOUCH_CHIP\}/g) ?? []).length === 5 && (player.match(/\$\{TOUCH_CHIP\}/g) ?? []).length === 3);
   check('pin: the phone hint says pinch zooms', /Use the buttons below to move\. Pinch or use the buttons to zoom\./.test(demo));
@@ -425,6 +433,27 @@ check('fitZoomToBox: nothing fits, the smallest', fitZoomToBox(512, 512, 300, 60
   check('pin F11: empty animations are skipped in the player and the Demo Area', /const playable = useMemo\(\(\) => animations\.filter\(\(a\) => a\.frames\.length > 0\), \[animations\]\);/.test(player)
     && /\{playable\.length > 1 && \(/.test(player) && /\{playable\.map\(\(a\) => \(/.test(player) && !/animations\[0\]/.test(player)
     && /function buildAnimMaps\(allAnimations: SpriteAnimation\[\]\) \{[\s\S]{0,200}?const animations = allAnimations\.filter\(\(a\) => a\.frames\.length > 0\);/.test(demo));
+  // Harness r1 fixes (build/harness/polish-preview).
+  check('pin G1: the Animation select is 44 px on a coarse pointer', /<select\s+value=\{anim\.id\}[\s\S]{0,300}?className="[^"]*\bpointer-coarse:min-h-11\b[^"]*"/.test(player));
+  check('pin G2: the fit subtracts the probed thickness only when main shows no scrollbar',
+    /const main = row\.closest\('main'\);/.test(fitEffect) && /const mainBarPx = main \? main\.offsetWidth - main\.clientWidth : 0;/.test(fitEffect)
+    && /const room = fitRoomWidth\(width, scrollbarThickness\(\), mainBarPx\);/.test(fitEffect) && /fitZoomToBox\(frameW, frameH, room - BOX_INSET,/.test(fitEffect) && /fitWidthRef\.current = width;/.test(fitEffect)
+    && /export function fitRoomWidth\(rowWidth: number, thickness: number, mainBarPx: number\): number \{\s*return mainBarPx > 0 \? rowWidth : rowWidth - thickness;\s*\}/.test(player)
+    && /if \(scrollbarPx === null\) \{[\s\S]{0,400}?overflow:scroll[\s\S]{0,200}?scrollbarPx = probe\.offsetWidth - probe\.clientWidth;\s*probe\.remove\(\);/.test(player));
+  check('G2: overlay scrollbars (thickness 0) leave the width alone', fitRoomWidth(660, 0, 0) === 660, fitRoomWidth(660, 0, 0));
+  check('G2: thickness 15 with no bar on main leaves 15 px for it', fitRoomWidth(660, 15, 0) === 645, fitRoomWidth(660, 15, 0));
+  check('G2: thickness 15 with the bar already showing subtracts nothing', fitRoomWidth(645, 15, 15) === 645, fitRoomWidth(645, 15, 15));
+  {
+    // The harness's case: a 64 px frame in a 545 px row (a 660 px window).
+    const at = (thickness, bar) => fitZoomToBox(64, 64, fitRoomWidth(545, thickness, bar) - 26, 600, ZOOM);
+    check('G2: a 64 px frame in a 545 px row fits 4x with room for a 15 px bar, 8x with overlay bars', at(15, 0) === 4 && at(0, 0) === 8, [at(15, 0), at(0, 0)]);
+  }
+  {
+    const hint = between(demo, '{/* Click-to-focus hint', 'Click to focus &middot;');
+    check('pin G3: the focus hint sits at the bottom of the stage, dimmed, untouchable, hidden on touch',
+      /className="absolute inset-0 flex pointer-coarse:hidden items-end justify-center pb-3 bg-black\/30 pointer-events-none"/.test(hint) && !/items-center/.test(hint)
+      && demo.includes('Click to focus &middot; Use keyboard to control'));
+  }
   check('pin: a 48 px sprite opens at 5x on the Demo Area (the share stays 0.35)', fitScale(48, 720, WORLD) === 5, fitScale(48, 720, WORLD));
   check('the library has no React and no DOM calls', !/from 'react'|document\.|window\.|addEventListener/.test(lib));
   check('no em dashes in the new files', ![hook, lib, fs.readFileSync(new URL(import.meta.url), 'utf8')].some((text) => text.includes('\u2014')));

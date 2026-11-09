@@ -34,6 +34,30 @@ const BOX_INSET = 2 * (BOX_PAD + 1);
 // cannot flip the zoom back and forth.
 const REFIT_PX = 24;
 
+// The platform's scrollbar thickness, from an off-screen probe, measured once.
+// It is 0 where scrollbars overlay the page (phones, most Macs).
+let scrollbarPx: number | null = null;
+function scrollbarThickness(): number {
+  if (scrollbarPx === null) {
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:absolute;top:-9999px;left:-9999px;width:100px;height:100px;overflow:scroll';
+    document.body.appendChild(probe);
+    scrollbarPx = probe.offsetWidth - probe.clientWidth;
+    probe.remove();
+  }
+  return scrollbarPx;
+}
+
+/**
+ * The width the fit may use: the row's width, less the scrollbar's thickness
+ * when the page's <main> shows no scrollbar yet (mainBarPx is 0), so a fitted
+ * zoom that makes <main> gain its bar still fits. A bar already showing has
+ * taken its room, so nothing is subtracted then.
+ */
+export function fitRoomWidth(rowWidth: number, thickness: number, mainBarPx: number): number {
+  return mainBarPx > 0 ? rowWidth : rowWidth - thickness;
+}
+
 type BgMode = 'checkerboard' | 'black' | 'white' | 'green' | 'custom';
 
 interface AnimationPlayerProps {
@@ -99,7 +123,10 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
     if (!row || !(frameW > 0) || !(frameH > 0)) return;
     const fit = (width: number) => {
       fitWidthRef.current = width;
-      setFittedZoom(fitZoomToBox(frameW, frameH, width - BOX_INSET, window.innerHeight * 0.6, ZOOM_OPTIONS));
+      const main = row.closest('main');
+      const mainBarPx = main ? main.offsetWidth - main.clientWidth : 0;
+      const room = fitRoomWidth(width, scrollbarThickness(), mainBarPx);
+      setFittedZoom(fitZoomToBox(frameW, frameH, room - BOX_INSET, window.innerHeight * 0.6, ZOOM_OPTIONS));
     };
     fit(row.clientWidth);
     const ro = new ResizeObserver(() => {
@@ -347,7 +374,7 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
               setCurrentFrame(0);
               pingPongDirRef.current = 1;
             }}
-            className="w-full max-w-xs rounded bg-bg-elevated border border-border-default px-3 py-2
+            className="w-full max-w-xs rounded bg-bg-elevated border border-border-default px-3 py-2 pointer-coarse:min-h-11
               text-sm font-mono text-text-primary focus:outline-none focus:border-accent-amber cursor-pointer"
           >
             {playable.map((a) => (

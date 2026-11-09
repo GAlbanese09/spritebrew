@@ -910,9 +910,9 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
           </div>
         )}
 
-        {/* Click-to-focus hint */}
+        {/* Click-to-focus hint, at the bottom so it stays off the sprite */}
         {!focused && (
-          <div className="absolute inset-0 flex pointer-coarse:hidden items-center justify-center bg-black/30 pointer-events-none">
+          <div className="absolute inset-0 flex pointer-coarse:hidden items-end justify-center pb-3 bg-black/30 pointer-events-none">
             <p className="text-sm font-mono text-text-primary bg-black/60 px-4 py-2 rounded">
               Click to focus &middot; Use keyboard to control
             </p>

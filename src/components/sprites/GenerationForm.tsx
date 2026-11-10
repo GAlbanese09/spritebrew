@@ -1,18 +1,18 @@
 'use client';
 
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { Sparkles, X, Check, Loader2, AlertCircle, ChevronDown, ChevronUp, Maximize2 } from 'lucide-react';
+import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { Sparkles, X, Loader2, AlertCircle } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
+import PixelCoin from '@/components/ui/PixelCoin';
 import ReferenceImagesPanel from '@/components/sprites/ReferenceImagesPanel';
 import {
   GENERATION_STYLES,
   getStyleById,
-  getTierLabel,
   type GenerationStyle,
-  type StyleCategory,
 } from '@/lib/styleRegistry';
+import { pushRecent, readRecent, visibleRecent, writeRecent, type RecentStorage } from '@/lib/recentStyles';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
@@ -20,6 +20,8 @@ import { type FinishedJob } from '@/lib/pollResume';
 import { finishJob, type JobResultIO } from '@/lib/jobResult';
 import { despillIfTransparent, decodedSize } from '@/lib/spriteUtils';
 import { StyleExamplesLightbox } from './StyleExamplesLightbox';
+import StyleField from './StyleField';
+import StylePicker from './StylePicker';
 
 /** The browser steps for finishing a job's result (see jobResult.ts). */
 const JOB_RESULT_IO: JobResultIO = { despill: despillIfTransparent, decodedSize };
@@ -33,30 +35,19 @@ const EXAMPLE_PROMPTS = [
   'robot with laser gun',
 ];
 
-const CATEGORY_LABELS: Record<StyleCategory, string> = {
-  characters: 'Characters',
-  items: 'Items',
-  animations: 'Animations',
-  tiles: 'Tiles',
-  ui: 'UI',
-  environments: 'Environments',
-};
+const STYLE_IDS = GENERATION_STYLES.map((s) => s.id);
 
-// Group styles by category for the picker
-const GROUPED_STYLES = (() => {
-  const groups: Partial<Record<StyleCategory, GenerationStyle[]>> = {};
-  for (const style of GENERATION_STYLES) {
-    (groups[style.category] ??= []).push(style);
+/** This browser's localStorage, or null where it cannot be reached. */
+function recentStorage(): RecentStorage | null {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage;
+  } catch {
+    return null;
   }
-  return groups;
-})();
+}
 
-const TIER_COLORS: Record<string, string> = {
-  pro: 'text-purple-400 border-purple-400/30',
-  plus: 'text-accent-amber border-accent-amber/30',
-  fast: 'text-green-400 border-green-400/30',
-  animation: 'text-accent-teal border-accent-teal/30',
-};
+/** Token numbers with thousands separators (10,021). */
+const formatCount = (n: number) => n.toLocaleString('en-US');
 
 interface GenerationFormProps {
   onGenerated: (imageUrl: string, prompt: string, style: string, animateContext?: FinishedJob['animate'], jobId?: string) => void;
@@ -134,24 +125,32 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const [customHeight, setCustomHeight] = useState(256);
   const [removeBg, setRemoveBg] = useState(true);
   const [referenceImages, setReferenceImages] = useState<string[]>([]);
-  // Per-category collapse state — empty Set = all expanded (default).
-  // Not persisted; resets per page load to keep discoverability.
-  const [collapsedCategories, setCollapsedCategories] = useState<Set<StyleCategory>>(new Set());
 
   // Style whose examples are open in the lightbox carousel. null = closed.
   const [lightboxStyle, setLightboxStyle] = useState<GenerationStyle | null>(null);
 
-  const toggleCategory = (category: StyleCategory) => {
-    setCollapsedCategories((prev) => {
-      const next = new Set(prev);
-      if (next.has(category)) {
-        next.delete(category);
-      } else {
-        next.add(category);
-      }
-      return next;
-    });
-  };
+  // The style picker, Recent styles (per browser) and the polite announcement
+  // of a style change. This form renders only inside the signed-in Show on
+  // /generate, which renders nothing on the server, so Recent can read
+  // localStorage on its first render.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [recentIds, setRecentIds] = useState<string[]>(() => readRecent(recentStorage(), STYLE_IDS));
+  const [styleAnnouncement, setStyleAnnouncement] = useState('');
+  const changeStyleRef = useRef<HTMLButtonElement>(null);
+
+  // Every style change goes through here: the picker, a Recent badge and the
+  // lightbox's Use this style. Recent is computed from the current values, not
+  // inside a state updater, so a double call in development cannot push twice.
+  const chooseStyle = useCallback((id: string) => {
+    if (id === selectedStyleId) return;
+    const next = getStyleById(id);
+    if (!next) return;
+    const list = pushRecent(recentIds, selectedStyleId, id);
+    setRecentIds(list);
+    writeRecent(recentStorage(), list);
+    setSelectedStyleId(id);
+    setStyleAnnouncement(`Style: ${next.label}, ${next.tokenCost} tokens`);
+  }, [selectedStyleId, recentIds]);
 
   const selectedStyle = useMemo(
     () => getStyleById(selectedStyleId) ?? GENERATION_STYLES[0],
@@ -362,20 +361,54 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   // outlives the form whose poll set it; the other tab's form resumes the job.
   useEffect(() => () => setGenerationProgress(null, null, null, null), [setGenerationProgress]);
 
+  // Character and animated styles ask for a character; the others for a thing.
+  const asksForCharacter = selectedStyle.category === 'characters' || selectedStyle.isAnimation;
+  const recentStyles = visibleRecent(recentIds, selectedStyleId)
+    .map((id) => getStyleById(id))
+    .filter((s): s is GenerationStyle => !!s);
+  const sizeLabel = effectiveWidth === effectiveHeight ? `${effectiveWidth}` : `${effectiveWidth}×${effectiveHeight}`;
+
+  // Why Generate is disabled, when the person can act on it (none while brewing).
+  const reasonId = GENERATION_PAUSED ? 'generate-paused-reason' : 'generate-reason';
+  let disabledReason: ReactNode = null;
+  if (!isGenerating) {
+    if (GENERATION_PAUSED) {
+      disabledReason = GENERATION_PAUSED_MESSAGE;
+    } else if (insufficientTokens) {
+      disabledReason = (
+        <>
+          You need {formatCount(tokensNeeded)} more tokens for this style.{' '}
+          <a
+            href="/buy-tokens"
+            className="inline-flex items-center pointer-coarse:min-h-11 text-accent-amber underline hover:text-accent-amber-strong"
+          >
+            Get tokens
+          </a>
+        </>
+      );
+    } else if (!prompt.trim()) {
+      disabledReason = asksForCharacter ? 'Describe a character to start.' : 'Describe what to generate to start.';
+    }
+  }
+
   return (
     <>
     <div className="space-y-6">
       {/* Prompt */}
       <div>
-        <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2">
-          {selectedStyle.isAnimation ? 'Describe the character to animate' : 'Describe what to generate'}
+        <label
+          htmlFor="create-prompt"
+          className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2"
+        >
+          {asksForCharacter ? 'Describe your character' : 'Describe what to generate'}
         </label>
         <textarea
+          id="create-prompt"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           placeholder={
-            selectedStyle.isAnimation
-              ? "Describe the character. Keep it simple — 'knight with sword', 'goblin with club'."
+            asksForCharacter
+              ? 'e.g. a small knight in a blue cape, full body, facing down'
               : "Describe what you want to generate. Be specific about style and details."
           }
           rows={3}
@@ -387,10 +420,11 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
           {EXAMPLE_PROMPTS.map((ex) => (
             <button
               key={ex}
+              type="button"
               onClick={() => setPrompt(ex)}
-              className="px-2.5 py-1 rounded text-[10px] font-mono bg-bg-elevated text-text-muted
-                border border-border-subtle hover:bg-bg-hover hover:text-text-secondary cursor-pointer
-                transition-colors"
+              className="inline-flex items-center min-h-8 pointer-coarse:min-h-11 px-3 rounded-2xl text-[13px] font-mono
+                bg-bg-secondary text-text-secondary border border-border-default
+                hover:bg-bg-hover hover:text-text-secondary cursor-pointer transition-colors"
             >
               {ex}
             </button>
@@ -398,89 +432,22 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         </div>
       </div>
 
-      {/* Style picker — grouped by category */}
+      {/* Style: the chosen style, Change style and Recent */}
       <div>
-        <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-3">
-          Style
-          <span className="text-text-muted font-normal ml-2">
-            ({GENERATION_STYLES.length} styles across {Object.keys(GROUPED_STYLES).length} categories)
-          </span>
-        </label>
-        <div className="space-y-3">
-          {(Object.entries(GROUPED_STYLES) as [StyleCategory, GenerationStyle[]][]).map(
-            ([category, styles]) => {
-              const isCollapsed = collapsedCategories.has(category);
-              return (
-                <div key={category}>
-                  <button
-                    type="button"
-                    onClick={() => toggleCategory(category)}
-                    className="flex w-full items-center justify-between py-2 text-left text-text-muted hover:text-text-default transition-colors"
-                  >
-                    <span className="text-[10px] font-mono uppercase tracking-wider">
-                      {CATEGORY_LABELS[category]} ({styles.length})
-                    </span>
-                    {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-                  </button>
-                  {!isCollapsed && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                      {styles.map((style) => {
-                        const active = selectedStyleId === style.id;
-                        return (
-                          <div key={style.id} className="relative group/example">
-                            <button
-                              onClick={() => setSelectedStyleId(style.id)}
-                              className={`w-full h-full block text-left rounded-lg border px-3 py-2 transition-all duration-150 cursor-pointer
-                                ${active
-                                  ? 'border-accent-amber bg-accent-amber-glow'
-                                  : 'border-border-default bg-bg-surface hover:border-border-strong hover:bg-bg-elevated'
-                                }`}
-                            >
-                              {style.examplePaths && style.examplePaths.length > 0 && (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={style.examplePaths[0]}
-                                  alt={`${style.label} example`}
-                                  loading="lazy"
-                                  className="w-full aspect-square mb-2 rounded-md object-contain bg-[#1a1614]"
-                                  style={{ imageRendering: 'pixelated' }}
-                                />
-                              )}
-                              <div className="flex items-center gap-1.5">
-                                <h3 className={`text-[11px] font-mono font-semibold truncate ${active ? 'text-accent-amber' : 'text-text-primary'}`}>
-                                  {style.label}
-                                </h3>
-                                {active && <Check size={10} className="text-accent-amber flex-shrink-0" />}
-                                <span className={`ml-auto text-[8px] font-mono px-1.5 py-0.5 rounded border flex-shrink-0 ${TIER_COLORS[style.tier] ?? 'text-text-muted border-border-subtle'}`}>
-                                  {getTierLabel(style.tier)}
-                                </span>
-                              </div>
-                              <p className="text-[9px] font-mono text-text-muted mt-0.5 truncate">
-                                {style.description}
-                              </p>
-                            </button>
-                            {style.examplePaths && style.examplePaths.length > 0 && (
-                              <button
-                                type="button"
-                                aria-label={`View ${style.label} examples`}
-                                onClick={() => setLightboxStyle(style)}
-                                className="absolute top-1.5 right-1.5 p-1.5 rounded-md bg-black/60 hover:bg-black/80 text-amber-400 backdrop-blur-sm transition-opacity opacity-70 group-hover/example:opacity-100 focus-visible:opacity-100"
-                              >
-                                <Maximize2 size={14} strokeWidth={2.5} />
-                              </button>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-          )}
-        </div>
-        <p className="text-[9px] font-mono text-text-muted mt-2">
+        <StyleField
+          ref={changeStyleRef}
+          style={selectedStyle}
+          recent={recentStyles}
+          pickerOpen={pickerOpen}
+          onOpenPicker={() => setPickerOpen(true)}
+          onViewExamples={setLightboxStyle}
+          onChooseRecent={chooseStyle}
+        />
+        <p className="text-[13px] font-mono text-text-secondary mt-3">
           For animating an existing character, use the Animate My Character tab.
+        </p>
+        <p className="sr-only" role="status" aria-live="polite">
+          {styleAnnouncement}
         </p>
       </div>
 
@@ -493,47 +460,47 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
       {/* Size controls — only if not fixed */}
       <div>
-        <label className="block text-[10px] font-mono text-text-muted mb-1">
+        <label className="block text-xs font-mono text-text-secondary mb-1">
           Size: {effectiveWidth}x{effectiveHeight}
           {selectedStyle.fixedSize && (
-            <span className="ml-2 text-text-muted/60">(fixed for this style)</span>
+            <span className="ml-2 text-text-secondary">(fixed for this style)</span>
           )}
         </label>
         {!selectedStyle.fixedSize ? (
           <div className="flex gap-3">
             <div className="flex-1">
-              <label className="block text-[9px] font-mono text-text-muted mb-1">Width</label>
+              <label className="block text-xs font-mono text-text-secondary mb-1">Width</label>
               <input
                 type="number"
                 min={selectedStyle.minSize}
                 max={selectedStyle.maxSize}
                 value={customWidth}
                 onChange={(e) => setCustomWidth(Math.max(selectedStyle.minSize, Math.min(selectedStyle.maxSize, Number(e.target.value))))}
-                className="w-full rounded bg-bg-elevated border border-border-default px-3 py-1.5
+                className="w-full rounded bg-bg-elevated border border-border-default px-3 py-1.5 pointer-coarse:min-h-11
                   text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
               />
             </div>
             <div className="flex-1">
-              <label className="block text-[9px] font-mono text-text-muted mb-1">Height</label>
+              <label className="block text-xs font-mono text-text-secondary mb-1">Height</label>
               <input
                 type="number"
                 min={selectedStyle.minSize}
                 max={selectedStyle.maxSize}
                 value={customHeight}
                 onChange={(e) => setCustomHeight(Math.max(selectedStyle.minSize, Math.min(selectedStyle.maxSize, Number(e.target.value))))}
-                className="w-full rounded bg-bg-elevated border border-border-default px-3 py-1.5
+                className="w-full rounded bg-bg-elevated border border-border-default px-3 py-1.5 pointer-coarse:min-h-11
                   text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
               />
             </div>
           </div>
         ) : (
-          <p className="text-[9px] font-mono text-text-muted">
+          <p className="text-[13px] font-mono text-text-secondary">
             This style uses fixed {effectiveWidth}x{effectiveHeight} dimensions.
           </p>
         )}
         {!selectedStyle.fixedSize && (
-          <p className="text-[9px] font-mono text-text-muted/70 mt-1">
-            Larger canvas = more room for detail and extended poses. Tokens scale with canvas size.
+          <p className="text-[13px] font-mono text-text-secondary mt-1">
+            Larger canvas = more room for detail and extended poses.
           </p>
         )}
       </div>
@@ -561,7 +528,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
           {generationError.includes('top up') && (
             <a
               href="/buy-tokens"
-              className="inline-block mt-2 ml-6 px-3 py-1.5 rounded text-[10px] font-mono
+              className="inline-block mt-2 ml-6 px-3 py-1.5 rounded text-xs font-mono
                 bg-accent-amber text-bg-primary hover:bg-accent-amber/90 transition-colors"
             >
               Buy Tokens
@@ -585,15 +552,23 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     >
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
-          <p className="text-[10px] font-mono text-text-muted">
-            {effectiveWidth}x{effectiveHeight}px &middot; {tokenCost} tokens
+          <p className="text-[13px] font-mono text-text-secondary tabular-nums">
+            {selectedStyle.label} &middot; {sizeLabel} px &middot;{' '}
+            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+              <PixelCoin />
+              <span>
+                {formatCount(tokenCost)}
+                {userId ? (
+                  <span className={insufficientTokens ? 'text-red-400' : undefined}>
+                    {' '}of {formatCount(tokenBalance)} tokens
+                  </span>
+                ) : (
+                  ' tokens'
+                )}
+              </span>
+            </span>
             {isAdmin && (
               <span> &middot; ~${selectedStyle.costPerGeneration.toFixed(2)}</span>
-            )}
-            {userId && (
-              <span className={`ml-2 ${insufficientTokens ? 'text-red-400' : 'text-accent-amber'}`}>
-                &middot; Balance: {tokenBalance} 🪙
-              </span>
             )}
           </p>
           {/* Toggles group — column wrapper so the conditional warning sits
@@ -613,50 +588,59 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
               )}
             </div>
           </div>
-          <Button
-            size="lg"
-            onClick={handleGenerate}
-            disabled={GENERATION_PAUSED || !prompt.trim() || isGenerating || insufficientTokens}
-            className={`w-full sm:w-auto whitespace-nowrap ${!GENERATION_PAUSED && !isGenerating && prompt.trim() && !insufficientTokens ? 'animate-pulse' : ''}`}
-            title={GENERATION_PAUSED ? GENERATION_PAUSED_MESSAGE : insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
-            aria-describedby={GENERATION_PAUSED ? 'generate-paused-reason' : undefined}
-          >
-            {isGenerating ? (
-              <>
-                <Loader2 size={16} className="animate-spin" />
-                Brewing...
-              </>
-            ) : insufficientTokens ? (
-              <>
-                <Sparkles size={16} />
-                Need {tokensNeeded} more 🪙
-              </>
-            ) : (
-              <>
-                <Sparkles size={16} />
-                {selectedStyle.isAnimation ? 'Generate Animation' : 'Generate Sprite'} ({tokenCost} 🪙)
-              </>
+          {/* The reason sits left of the button from 640 px, under it below. */}
+          <div className="flex flex-col-reverse items-stretch gap-1 sm:flex-row sm:items-center sm:gap-3">
+            {disabledReason && (
+              <p id={reasonId} className="text-[13px] font-mono text-text-secondary text-center sm:text-right">
+                {disabledReason}
+              </p>
             )}
-          </Button>
-          {GENERATION_PAUSED && (
-            <span id="generate-paused-reason" className="sr-only">
-              {GENERATION_PAUSED_MESSAGE}
-            </span>
-          )}
+            <Button
+              size="lg"
+              onClick={handleGenerate}
+              disabled={GENERATION_PAUSED || !prompt.trim() || isGenerating || insufficientTokens}
+              className={`w-full sm:w-auto whitespace-nowrap pointer-coarse:min-h-11 ${!GENERATION_PAUSED && !isGenerating && prompt.trim() && !insufficientTokens ? 'animate-pulse motion-reduce:animate-none' : ''}`}
+              title={GENERATION_PAUSED ? GENERATION_PAUSED_MESSAGE : insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
+              aria-describedby={disabledReason ? reasonId : undefined}
+            >
+              {isGenerating ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" />
+                  Brewing...
+                </>
+              ) : (
+                <>
+                  <Sparkles size={16} />
+                  Generate
+                  <span className="hidden sm:inline-flex items-center gap-1.5 tabular-nums">
+                    &middot; <PixelCoin /> {formatCount(tokenCost)}
+                  </span>
+                </>
+              )}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
 
-    {/* Style-examples lightbox carousel — opened by the ⤢ overlay on style cards. */}
+    {/* Style-examples lightbox carousel, opened from the style field's thumbnail. */}
     <StyleExamplesLightbox
       style={lightboxStyle}
       onClose={() => setLightboxStyle(null)}
       onUseStyle={() => {
         if (lightboxStyle) {
-          setSelectedStyleId(lightboxStyle.id);
+          chooseStyle(lightboxStyle.id);
         }
         setLightboxStyle(null);
       }}
+    />
+
+    {/* The style picker: a dialog from 768 px, a bottom sheet below. */}
+    <StylePicker
+      open={pickerOpen}
+      currentStyleId={selectedStyleId}
+      onChoose={chooseStyle}
+      onClose={() => setPickerOpen(false)}
     />
     </>
   );

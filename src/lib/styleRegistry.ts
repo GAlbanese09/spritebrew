@@ -51,7 +51,7 @@ export const GENERATION_STYLES: GenerationStyle[] = [
   // ── RD PRO ($0.22/image, 96-256px) — 40 tokens ──
   {
     id: 'pro-default', label: 'Character (Pro)', description: 'Clean modern pixel art with detailed prompting',
-    examplePaths: ['/style-examples/pro-default-1.png', '/style-examples/pro-default-2.png', '/style-examples/pro-default-3.png', '/style-examples/pro-default-4.png', '/style-examples/pro-default-5.png'],
+    examplePaths: ['/style-examples/pro-default-5.png', '/style-examples/pro-default-1.png', '/style-examples/pro-default-2.png', '/style-examples/pro-default-3.png', '/style-examples/pro-default-4.png'],
     promptStyle: 'rd_pro__default', tier: 'pro', category: 'characters',
     defaultWidth: 256, defaultHeight: 256, minSize: 96, maxSize: 256,
     fixedSize: false, costPerGeneration: 0.22, tokenCost: 40, isAnimation: false, supportsRemoveBg: true,

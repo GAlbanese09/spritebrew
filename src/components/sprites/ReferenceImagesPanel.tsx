@@ -153,25 +153,25 @@ export default function ReferenceImagesPanel({
       <div className="flex items-center justify-between mb-2">
         <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider">
           Reference Images
-          <span className="text-text-muted font-normal normal-case ml-2">(optional)</span>
+          <span className="text-text-secondary font-normal normal-case ml-2">(optional)</span>
         </label>
-        <span className={`text-[10px] font-mono ${count > 0 ? 'text-accent-amber' : 'text-text-muted'}`}>
+        <span className={`text-xs font-mono ${count > 0 ? 'text-accent-amber' : 'text-text-secondary'}`}>
           {count} / {MAX_REFS}
         </span>
       </div>
 
-      <p className="text-[10px] font-mono text-text-muted leading-relaxed mb-3">
+      <p className="text-xs font-mono text-text-secondary leading-relaxed mb-3">
         Up to 9 images that guide the style, palette, and design feel of your sprite.
         References do NOT preserve a specific character&apos;s identity across new poses.
       </p>
 
       {!enabled && (
         <div className="rounded-lg bg-bg-elevated border border-border-subtle px-3 py-2 mb-3">
-          <p className="text-[10px] font-mono text-text-muted leading-relaxed">
+          <p className="text-xs font-mono text-text-secondary leading-relaxed">
             Reference images only work with Pro styles. Switch to a Pro style to enable uploads.
           </p>
           {count > 0 && (
-            <p className="text-[10px] font-mono text-amber-300/80 leading-relaxed mt-1">
+            <p className="text-xs font-mono text-amber-300/80 leading-relaxed mt-1">
               Your {count} reference image{count === 1 ? '' : 's'} won&apos;t be used with the
               current style. They&apos;ll be sent if you switch back to a Pro style.
             </p>
@@ -204,10 +204,10 @@ export default function ReferenceImagesPanel({
           }`}
         >
           <ImagePlus size={20} className={enabled ? 'text-text-secondary' : 'text-text-muted'} />
-          <p className={`text-xs font-mono ${enabled ? 'text-text-secondary' : 'text-text-muted'}`}>
+          <p className="text-xs font-mono text-text-secondary">
             Add Images
           </p>
-          <p className="text-[10px] font-mono text-text-muted">
+          <p className="text-xs font-mono text-text-secondary">
             Drop images or click to browse · {MAX_REFS} max · PNG/JPG/WEBP
           </p>
         </div>
@@ -266,7 +266,7 @@ export default function ReferenceImagesPanel({
                 }`}
               >
                 <ImagePlus size={16} className={enabled ? 'text-text-secondary' : 'text-text-muted'} />
-                <span className={`text-[9px] font-mono ${enabled ? 'text-text-secondary' : 'text-text-muted'}`}>
+                <span className="text-xs font-mono text-text-secondary">
                   Add More
                 </span>
               </button>
@@ -278,7 +278,7 @@ export default function ReferenceImagesPanel({
       {error && (
         <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2 mt-2">
           <AlertCircle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
-          <p className="text-[10px] font-mono text-red-400 leading-relaxed">{error}</p>
+          <p className="text-xs font-mono text-red-400 leading-relaxed">{error}</p>
         </div>
       )}
     </div>

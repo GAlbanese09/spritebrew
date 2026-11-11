@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Pencil, Eraser, Pipette, Undo2, Redo2, FlipHorizontal, History, Save, X, ArrowLeft, Film, AlertCircle, Download, ScanEye, Sparkles, Layers, Minus, Plus, ChevronDown, Check } from 'lucide-react';
@@ -16,6 +16,7 @@ import {
   editorDimsRejectionMessage,
   type Tool,
   type DirtyRect,
+  selectHasPixelChanges,
 } from './editorStore';
 import type { SpriteProjectSource, SpriteProjectV1 } from '@/lib/spriteProject';
 import { scanResidue, residueOverlay } from '@/lib/residueCleanup';
@@ -112,6 +113,7 @@ import EditorLeaveDialog from './EditorLeaveDialog';
 import { isDevHost } from '@/lib/isDevHost';
 import { devRecoverySelfTest } from '@/lib/editorRecovery';
 import { pixelsToPngDataUrl } from '@/lib/editorImage';
+import { DOWNLOAD_PNG_LABEL, DOWNLOAD_PNG_SHORT, downloadPngHint } from '@/lib/editorCopy';
 
 /** Module-scope so the dev self-test runs at most once per page load, even
  *  if the editor body remounts (e.g. Strict Mode double-invoke in dev). */
@@ -1565,6 +1567,10 @@ export default function PixelEditorBody({
     [isDrawing, cancelStroke]
   );
 
+  // The modal header's download button: its tooltip and description.
+  const downloadHintId = useId();
+  const downloadHint = downloadPngHint(source);
+
   // Serialize current store pixels to a PNG dataURL.
   const renderToDataUrl = useCallback((): string | null => {
     const { pixels, width, height } = useEditorStore.getState();
@@ -1586,11 +1592,13 @@ export default function PixelEditorBody({
     // draft (read now, before the close resets the store), which is then
     // marked closed so Generate does not offer it.
     void closeEditorDraft(draftKey);
-    // Skip onSave when there are no committed edits (historyIndex === 0): the
-    // pixels are byte-identical to load (e.g. a pinch-cancelled stroke left the
-    // session dirty only via hasAttemptedEdit), and pushing them downstream
-    // falsely flips "Edited" state. Still close either way.
-    if (useEditorStore.getState().historyIndex > 0) {
+    // Write whenever the pixels differ from the loaded image, and only then:
+    // a session that is dirty only via hasAttemptedEdit (a pinch-cancelled
+    // stroke) has byte-identical pixels, and pushing them downstream falsely
+    // flips "Edited" state. The test is the pixels, not the history index,
+    // which can read 0 with edits on the canvas (selectHasPixelChanges).
+    // Still close either way.
+    if (selectHasPixelChanges(useEditorStore.getState())) {
       const dataUrl = renderToDataUrl();
       if (dataUrl) onSave(dataUrl);
     }
@@ -1880,18 +1888,28 @@ export default function PixelEditorBody({
 
         {layout === 'modal' ? (
           <div className="flex items-center gap-2 shrink-0">
-            {/* "Keep a copy" — backs the modal header with the same
-                doSaveAsDownload that page mode uses. Primary Save sitting
-                between Download and X keeps the two icon buttons from
-                being mistaken for each other. */}
-            <button
+            {/* "Download PNG": a labelled ghost button, so it is not taken
+                for Save (George, Nov 10; DESIGN 2026-11-11-007). It saves a
+                file with the same doSaveAsDownload that page mode uses and
+                leaves the caller's image alone; the sentence saying so is
+                its tooltip and its description, and its name stays the
+                visible label. The description's span is hidden, so it is
+                read as the button's description only, not a second time as
+                text beside it. */}
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={doSaveAsDownload}
-              className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer shrink-0 min-h-11 min-w-11 flex items-center justify-center md:min-h-0 md:min-w-0"
-              aria-label="Download a copy (PNG)"
-              title="Download a copy (PNG)"
+              aria-label={DOWNLOAD_PNG_LABEL}
+              aria-describedby={downloadHintId}
+              title={downloadHint}
+              className="shrink-0 whitespace-nowrap"
             >
-              <Download size={16} />
-            </button>
+              <Download size={14} />
+              <span className="md:hidden">{DOWNLOAD_PNG_SHORT}</span>
+              <span className="hidden md:inline">{DOWNLOAD_PNG_LABEL}</span>
+            </Button>
+            <span id={downloadHintId} hidden>{downloadHint}</span>
             {/* Primary Save in the always-visible header — replaces the
                 sidepanel footer Save, which lived under `hidden md:flex`
                 and was inaccessible on mobile. Routes through the same

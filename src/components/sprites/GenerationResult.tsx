@@ -18,6 +18,7 @@ import { encodeGif, framesFromSheet, GIF_SCALES, GIF_SCALE_DEFAULT, type GifScal
 import { canvasToBlob, downloadFile } from '@/lib/downloadUtils';
 import { assemblePlayedSheet, playedIsIdentity } from '@/lib/playedSheet';
 import { borderMostlyTransparent } from '@/lib/sheetAlpha';
+import { deliveredOf, resultKeyOf, shownOf, type CardImage, type CardVersion } from '@/lib/cardImage';
 import {
   loadHistory,
   clearHistory,
@@ -32,6 +33,20 @@ const ZOOM_OPTIONS = [1, 2, 4, 8] as const;
 /** Target display width in px for the looping preview; the frame is scaled
  *  by the largest whole number that fits, then capped to the box width. */
 const LOOP_TARGET_PX = 320;
+
+/** The card's two toggles (Sheet and Playing; Edited and Before edit) are
+ *  one kind of control, so they share one look: the track, and a button of
+ *  12 px text, 32 px tall, 44 px on touch (DESIGN 2026-11-11-009). From lg
+ *  the page has two columns and the card is narrow, so the side padding
+ *  drops 2 px there: at 1280 px both groups fit one row. Where they do not
+ *  fit (a phone, and windows from 1024 to about 1270 px wide), the second
+ *  group wraps whole under the first, never mid-group. */
+const TOGGLE_TRACK = 'flex gap-1 rounded-lg bg-bg-secondary p-1 w-fit';
+const TOGGLE_BUTTON =
+  'px-3 lg:px-2.5 min-h-8 pointer-coarse:min-h-11 rounded-md text-xs font-mono whitespace-nowrap cursor-pointer transition-colors ' +
+  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber';
+const TOGGLE_ON = 'bg-accent-amber text-bg-primary';
+const TOGGLE_OFF = 'text-text-secondary hover:text-text-primary hover:bg-bg-hover';
 
 /** Fit-to-container default zoom — picks the largest value from ZOOM_OPTIONS
  *  such that naturalWidth × zoom fits within the measured container width.
@@ -62,7 +77,28 @@ interface GenerationResultProps {
 export default function GenerationResult({ onReset }: GenerationResultProps) {
   const router = useRouter();
   const { userId } = useAuth();
-  const generatedImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
+  // The store's working image (what the Slicer, the Animator and the forms
+  // read) and the versions kept beside it. Below, generatedImageDataUrl is
+  // the image THIS CARD SHOWS and every button on it acts on: the edit, the
+  // sheet from before it, or, with no editor save, the working image itself
+  // (src/lib/cardImage.ts). A switch between versions changes cardVersion
+  // only, so nothing outside the card takes it for a new image.
+  const workingImageDataUrl = useSpriteStore((s) => s.generatedImageDataUrl);
+  const originalGeneratedImageDataUrl = useSpriteStore((s) => s.originalGeneratedImageDataUrl);
+  const editedImageDataUrl = useSpriteStore((s) => s.editedImageDataUrl);
+  const beforeEditImageDataUrl = useSpriteStore((s) => s.beforeEditImageDataUrl);
+  const cardVersion = useSpriteStore((s) => s.cardVersion);
+  const card = useMemo<CardImage>(
+    () => ({
+      working: workingImageDataUrl,
+      original: originalGeneratedImageDataUrl,
+      edited: editedImageDataUrl,
+      beforeEdit: beforeEditImageDataUrl,
+      version: cardVersion,
+    }),
+    [workingImageDataUrl, originalGeneratedImageDataUrl, editedImageDataUrl, beforeEditImageDataUrl, cardVersion]
+  );
+  const generatedImageDataUrl = shownOf(card);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generatingAction = useSpriteStore((s) => s.generatingAction);
   const generationStartedAt = useSpriteStore((s) => s.generationStartedAt);
@@ -70,7 +106,14 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const generationMode = useSpriteStore((s) => s.generationMode);
   const generationPausedMessage = useSpriteStore((s) => s.generationPausedMessage);
   const clearGeneratedImage = useSpriteStore((s) => s.clearGeneratedImage);
-  const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
+  const saveEditedImage = useSpriteStore((s) => s.saveEditedImage);
+  const showCardVersion = useSpriteStore((s) => s.showCardVersion);
+  const setWorkingImage = useSpriteStore((s) => s.setWorkingImage);
+  // The same for every image of one result (the delivered sheet): what the
+  // user set on the card for a result (the view, the loop, the zoom) is held
+  // with it, so an editor save and a switch between "Edited" and "Before
+  // edit" keep it. A new result has a new key.
+  const resultKey = resultKeyOf(card);
   const originalCharacterDataUrl = useSpriteStore((s) => s.originalCharacterDataUrl);
   const rescueInfo = useSpriteStore((s) => s.rescueInfo);
   const currentSheetMetadata = useSpriteStore((s) => s.currentSheetMetadata);
@@ -84,10 +127,10 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   // on each new generation so a stale dim × current zoom can't briefly render
   // mis-sized before the new onLoad fires.
   const [naturalDims, setNaturalDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
-  // Track the generatedImageDataUrl the size-aware default was last computed
-  // for. Tracks the *source* (not displayImageDataUrl) so toggling background
-  // removal — which swaps displayImageDataUrl to the transparent variant with
-  // the same natural dimensions — doesn't re-fire the default and clobber a
+  // Track the result (resultKey) the size-aware default was last computed
+  // for. Tracks the result (not displayImageDataUrl) so toggling background
+  // removal, an editor save or a version switch, which swap the image for one
+  // with the same natural dimensions, don't re-fire the default and clobber a
   // user-picked zoom. Only a genuinely new generation triggers a recompute.
   const lastDefaultZoomSrcRef = useRef<string | null>(null);
   // Ref to the overflow-auto preview container. Read at onLoad time so the
@@ -95,14 +138,15 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   // rather than a hardcoded magic number.
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [history, setHistory] = useState<GenerationHistoryEntry[]>([]);
-  // Sheet / Playing toggle for animate results. Holds the source the user
-  // switched to Sheet for, so a new generation lands Playing again without
-  // resetting state in an effect.
+  // Sheet / Playing toggle for animate results. Holds the result (resultKey)
+  // the user switched to Sheet for, so a new generation lands Playing again
+  // without resetting state in an effect.
   const [sheetViewSrc, setSheetViewSrc] = useState<string | null>(null);
   // The user's edit of the playing loop (order, speed, ping-pong), held with
-  // the source and frame count it was made for. A new generation or a new
-  // frame count falls back to the default without resetting state in an
-  // effect; a background-removal toggle keeps both, so the edit survives it.
+  // the result (resultKey) and frame count it was made for. A new generation
+  // or a new frame count falls back to the default without resetting state in
+  // an effect; a background-removal toggle, an editor save and a version
+  // switch keep both, so the loop survives them.
   const [loopEdit, setLoopEdit] = useState<{ src: string; frames: number; seq: LoopSequence } | null>(null);
   // Download GIF: output scale, an in-flight flag, and the last encode error
   // held with the source it was for, so a new generation drops it without
@@ -125,9 +169,13 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   // Whether the sheet's border is already transparent, held with the source
   // it was read for, so a new generation reads as unknown (null) without
   // resetting state in an effect.
-  const [sheetAlpha, setSheetAlpha] = useState<{ src: string; transparent: boolean } | null>(null);
+  // An editor save and a version switch show another image of the same
+  // result: while its own border is read (a few frames), the last answer for
+  // this result stands, so the note, the toggle and the buttons under them
+  // do not blink out and back (audit r1, finding 3).
+  const [sheetAlpha, setSheetAlpha] = useState<{ src: string; key: string | null; transparent: boolean } | null>(null);
   const sheetIsTransparent =
-    sheetAlpha && sheetAlpha.src === generatedImageDataUrl ? sheetAlpha.transparent : null;
+    sheetAlpha && (sheetAlpha.src === generatedImageDataUrl || sheetAlpha.key === resultKey) ? sheetAlpha.transparent : null;
 
   // Background removal state. removeBackgroundColor averages the corners' RGB
   // and ignores alpha, so a transparent sheet's corners read as black and only
@@ -169,26 +217,32 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     setHistory(loadHistory(userId));
     setHistorySaveFailed((noted) => failedSaveAfter(noted, change, userId));
   }), [userId]);
-  const historyNote = historySaveFailed !== null && historySaveFailed.userId === (userId ?? null) && historySaveFailed.image === generatedImageDataUrl;
+  const historyNote = historySaveFailed !== null && historySaveFailed.userId === (userId ?? null) && historySaveFailed.image === resultKey;
 
-  // Reset background removal when a new generation arrives. Also reset
-  // naturalDims so the new image isn't briefly rendered at the previous
-  // generation's dimensions × current zoom — the undefined-width fallback in
-  // the <img> style lets the browser layout-size from the source's natural
-  // dims for the one frame before onLoad fires the fit-zoom recompute.
+  // Reset background removal when the card's image changes. For a new
+  // generation also reset naturalDims so the new image isn't briefly rendered
+  // at the previous generation's dimensions × current zoom: the
+  // undefined-width fallback in the <img> style lets the browser layout-size
+  // from the source's natural dims for the one frame before onLoad fires the
+  // fit-zoom recompute. An editor save and a version switch show another
+  // image of the same result, the same size, so the dims stay and the loop,
+  // the toggles and the buttons under them do not blink out and back.
+  const dimsResultKeyRef = useRef(resultKey);
   useEffect(() => {
     setBgRemovalWanted(false);
     setBgRemovedDataUrl(null);
     setDetectedBgColor(null);
     setBgRemovalError(null);
-    setNaturalDims({ w: 0, h: 0 });
-  }, [generatedImageDataUrl]);
+    if (dimsResultKeyRef.current !== resultKey) setNaturalDims({ w: 0, h: 0 });
+    dimsResultKeyRef.current = resultKey;
+  }, [generatedImageDataUrl, resultKey]);
 
   // Read the sheet's border. On any error the answer stays unknown, and the
   // card behaves as it did before this check.
   useEffect(() => {
     if (!generatedImageDataUrl) return;
     const src = generatedImageDataUrl;
+    const key = resultKey;
     let cancelled = false;
     (async () => {
       try {
@@ -203,13 +257,13 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         if (!ctx) return;
         ctx.drawImage(img, 0, 0);
         const px = ctx.getImageData(0, 0, W, H).data;
-        if (!cancelled) setSheetAlpha({ src, transparent: borderMostlyTransparent(px, W, H) });
+        if (!cancelled) setSheetAlpha({ src, key, transparent: borderMostlyTransparent(px, W, H) });
       } catch {
         // Unknown: keep today's behaviour.
       }
     })();
     return () => { cancelled = true; };
-  }, [generatedImageDataUrl]);
+  }, [generatedImageDataUrl, resultKey]);
 
   // Recompute background removal when tolerance changes
   useEffect(() => {
@@ -254,21 +308,21 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         : null,
     [isAnimateResult, naturalDims.w, naturalDims.h, currentSheetMetadata]
   );
-  const showLoop = !!loopGeometry && sheetViewSrc !== generatedImageDataUrl;
+  const showLoop = !!loopGeometry && sheetViewSrc !== resultKey;
   const loopFrames = loopGeometry?.frames ?? 0;
   const loopSeq = useMemo(
     () =>
-      loopEdit && loopEdit.src === generatedImageDataUrl && loopEdit.frames === loopFrames
+      loopEdit && loopEdit.src === resultKey && loopEdit.frames === loopFrames
         ? loopEdit.seq
         : createSequence(loopFrames),
-    [loopEdit, generatedImageDataUrl, loopFrames]
+    [loopEdit, resultKey, loopFrames]
   );
   const loopPlayback = useMemo(() => playback(loopSeq), [loopSeq]);
   const handleLoopChange = useCallback(
     (seq: LoopSequence) => {
-      if (generatedImageDataUrl) setLoopEdit({ src: generatedImageDataUrl, frames: loopFrames, seq });
+      if (resultKey) setLoopEdit({ src: resultKey, frames: loopFrames, seq });
     },
-    [generatedImageDataUrl, loopFrames]
+    [resultKey, loopFrames]
   );
 
   // An Animate result's Download saves the frames as they play, so the file
@@ -315,11 +369,14 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     }
   }, [displayImageDataUrl, generatedImageDataUrl, loopGeometry, loopFrames, loopPlayback, sheetPreparing]);
 
-  // The sheet as delivered, with no canvas in the way, so this one always works.
+  // The sheet as delivered, with no canvas in the way, so this one always
+  // works. After an editor save the card's image is the edit or the sheet
+  // from before it, and the store keeps the delivered sheet beside them.
   const handleDownloadOriginal = useCallback(() => {
-    if (!generatedImageDataUrl) return;
-    saveDataUrl(generatedImageDataUrl, `spritebrew_animation_${Date.now()}_original.png`);
-  }, [generatedImageDataUrl]);
+    const delivered = deliveredOf(card);
+    if (!delivered) return;
+    saveDataUrl(delivered, `spritebrew_animation_${Date.now()}_original.png`);
+  }, [card]);
 
   // Encodes the loop as it plays (A1's order, ping-pong and speed) from the
   // displayed image, so background removal applies. Errors show inline.
@@ -343,19 +400,19 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   }, [displayImageDataUrl, generatedImageDataUrl, loopGeometry, loopPlayback, loopSeq.fps, gifScale, gifEncoding]);
 
   const handleSendToSlicer = useCallback(() => {
-    // If background removal is active, push the transparent version into the
-    // store so the slicer receives the transparent sprite.
-    if (bgRemovalActive && bgRemovedDataUrl) {
-      setGeneratedImage(bgRemovedDataUrl, bgRemovedDataUrl);
-    }
+    // The version shown, or its transparent variant when background removal
+    // is active, becomes the working image, so the slicer receives what the
+    // card shows. Nothing changes when that is the working image already.
+    const handed = bgRemovalActive && bgRemovedDataUrl ? bgRemovedDataUrl : generatedImageDataUrl;
+    if (handed) setWorkingImage(handed);
     router.push('/upload');
-  }, [router, bgRemovalActive, bgRemovedDataUrl, setGeneratedImage]);
+  }, [router, bgRemovalActive, bgRemovedDataUrl, generatedImageDataUrl, setWorkingImage]);
 
   const handleSendToEditor = useCallback(async () => {
     // Snapshot bytes + dims at click time. We deliberately do NOT pre-stage
-    // the bg-removed variant in the store: setGeneratedImage triggers the
-    // [generatedImageDataUrl] reset effect, which zeros naturalDims and
-    // crashes the modal mid-mount with a 0×0 error. The snapshot is what
+    // the bg-removed variant in the store: a new store image used to zero
+    // naturalDims in the [generatedImageDataUrl] reset effect and crash the
+    // modal mid-mount with a 0×0 error. The snapshot is what
     // the editor reads from now, so the store can wait until Save commits
     // the EDITED bytes (which is what we actually want downstream anyway).
     //
@@ -385,34 +442,66 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     }
   }, [naturalDims, displayImageDataUrl]);
 
-  // Editor Save: write the cleaned image back as the working generated image.
-  // The result card re-renders with the edited pixels, and every downstream
-  // action (Animate, Send to Slicer, Download) automatically uses the edit.
-  // Mirrors CharacterAutoPrep.handleEditorSave's "edited becomes the base"
-  // contract.
+  // Editor Save: the edit becomes the card's image and the working image,
+  // and every downstream action (Animate, Send to Slicer, Download PNG,
+  // Download GIF) uses it. The store keeps the sheet from before the edit and
+  // the delivered sheet, so the card's "Before edit" and "Download original"
+  // still give them (src/lib/cardImage.ts).
+  //
+  // Each save is announced once, for the edit it made: the note is cleared
+  // and set again one frame later, so a second save is read out too and the
+  // text arrives after the editor's dialog has gone (audit r1, finding 4).
+  const [announcedEdit, setAnnouncedEdit] = useState<string | null>(null);
+  const announceFrameRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (announceFrameRef.current !== null) cancelAnimationFrame(announceFrameRef.current);
+  }, []);
   const handleEditorSave = useCallback((editedDataUrl: string) => {
-    setGeneratedImage(editedDataUrl, editedDataUrl);
+    saveEditedImage(editedDataUrl);
     setEditorSnapshot(null);
-  }, [setGeneratedImage]);
+    setAnnouncedEdit(null);
+    if (announceFrameRef.current !== null) cancelAnimationFrame(announceFrameRef.current);
+    announceFrameRef.current = requestAnimationFrame(() => {
+      announceFrameRef.current = null;
+      setAnnouncedEdit(editedDataUrl);
+    });
+  }, [saveEditedImage]);
+  const editNote =
+    cardVersion === 'edited' && announcedEdit !== null && announcedEdit === generatedImageDataUrl
+      ? 'Your edit is on the card. Before edit is one tap away.'
+      : '';
+
+  // The card's switch: a view change only. Notes made for the version being
+  // left (the save note, "Sheet ready.", a GIF or sheet failure) are dropped
+  // with it, so nothing stale is shown or read out again on the way back.
+  const handleShowVersion = useCallback((version: CardVersion) => {
+    if (version === cardVersion) return;
+    showCardVersion(version);
+    setAnnouncedEdit(null);
+    setSheetReadySrc(null);
+    setSheetFailedSrc(null);
+    setGifError(null);
+  }, [cardVersion, showCardVersion]);
 
   const handleSendToAnimator = useCallback(() => {
     // Honor bg-removal toggle the same way Send to Editor / Send to Slicer do.
     // Same route as the user's already on (/generate) — receiving effects must
     // be reactive subscriptions, not mount-only. Two-stage state machine:
     // GeneratePage flips the tab; AnimateForm consumes the flag on mount.
-    if (bgRemovalActive && bgRemovedDataUrl) {
-      setGeneratedImage(bgRemovedDataUrl, bgRemovedDataUrl);
-    }
+    // The animator reads the working image: hand it the version shown (its
+    // transparent variant when background removal is active).
+    const handed = bgRemovalActive && bgRemovedDataUrl ? bgRemovedDataUrl : generatedImageDataUrl;
+    if (handed) setWorkingImage(handed);
     // Communicate the user's bg-removal CHOICE to AutoPrep. If the result-side
     // toggle was OFF, the user wants to keep the bg — tell AutoPrep to skip
     // removal too. (When toggle is ON, the transparent variant lands in the
-    // store via setGeneratedImage above and AutoPrep auto-detects alpha and
+    // store via setWorkingImage above and AutoPrep auto-detects alpha and
     // skips removal regardless — so the skip flag is essentially a no-op on
     // that branch, but setting it consistently keeps the intent explicit.)
     setPendingAnimatorSkipBgRemoval(!bgRemovalActive);
     setPendingAnimatorHandoff(true);
     router.push('/generate');
-  }, [router, bgRemovalActive, bgRemovedDataUrl, setGeneratedImage, setPendingAnimatorHandoff, setPendingAnimatorSkipBgRemoval]);
+  }, [router, bgRemovalActive, bgRemovedDataUrl, generatedImageDataUrl, setWorkingImage, setPendingAnimatorHandoff, setPendingAnimatorSkipBgRemoval]);
 
   const handleToggleBgRemoval = useCallback(() => {
     if (sheetIsTransparent === true) return;
@@ -626,25 +715,48 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           content > container). Image uses explicit width/height (not
           transform: scale) so the layout box matches the visual size — that's
           what makes overflow-auto compute scroll correctly. */}
-      {loopGeometry && (
-        <div className="flex gap-1 rounded-lg bg-bg-secondary p-1 w-fit" role="group" aria-label="Result view">
-          {([['sheet', 'Sheet'], ['loop', 'Playing']] as const).map(([view, label]) => {
-            const selected = view === 'loop' ? showLoop : !showLoop;
-            return (
-              <button
-                key={view}
-                onClick={() => setSheetViewSrc(view === 'sheet' ? generatedImageDataUrl : null)}
-                aria-pressed={selected}
-                className={`px-3 py-1.5 rounded-md text-[10px] font-mono cursor-pointer transition-colors
-                  ${selected
-                    ? 'bg-accent-amber text-bg-primary'
-                    : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
-                  }`}
-              >
-                {label}
-              </button>
-            );
-          })}
+      {(loopGeometry || cardVersion) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {loopGeometry && (
+            <div className={TOGGLE_TRACK} role="group" aria-label="Result view">
+              {([['sheet', 'Sheet'], ['loop', 'Playing']] as const).map(([view, label]) => {
+                const selected = view === 'loop' ? showLoop : !showLoop;
+                return (
+                  <button
+                    key={view}
+                    type="button"
+                    onClick={() => setSheetViewSrc(view === 'sheet' ? resultKey : null)}
+                    aria-pressed={selected}
+                    className={`${TOGGLE_BUTTON} ${selected ? TOGGLE_ON : TOGGLE_OFF}`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {/* After an editor save: the edit, or the card's sheet from before
+              it. Both are kept until a new result, so there is nothing to
+              undo; every button below acts on the version shown. The group
+              never splits across rows (it wraps whole). */}
+          {cardVersion && (
+            <div className={TOGGLE_TRACK} role="group" aria-label="Version">
+              {([['edited', 'Edited'], ['before', 'Before edit']] as const).map(([version, label]) => {
+                const selected = cardVersion === version;
+                return (
+                  <button
+                    key={version}
+                    type="button"
+                    onClick={() => handleShowVersion(version)}
+                    aria-pressed={selected}
+                    className={`${TOGGLE_BUTTON} ${selected ? TOGGLE_ON : TOGGLE_OFF}`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -701,13 +813,13 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
               setNaturalDims({ w: nw, h: nh });
 
               // Fit-to-container default zoom — fires once per new generation.
-              // Skip if this load is just a bg-removal toggle on the same
-              // source (ref still matches the current generatedImageDataUrl).
+              // Skip if this load is just a bg-removal toggle, an editor save
+              // or a version switch on the same result (ref still matches).
               // Once a user manually picks a zoom, no further loads happen
               // until a genuinely new source URL arrives — so manual zoom
               // sticks.
-              if (lastDefaultZoomSrcRef.current === generatedImageDataUrl) return;
-              lastDefaultZoomSrcRef.current = generatedImageDataUrl;
+              if (lastDefaultZoomSrcRef.current === resultKey) return;
+              lastDefaultZoomSrcRef.current = resultKey;
 
               // clientWidth includes the container's p-4 padding (16px each
               // side = 32px total). Subtract it to get usable content width.
@@ -916,6 +1028,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
       )}
       {/* Always rendered, so a screen reader announces each change. */}
       <p className="sr-only" role="status">{sheetStatus}</p>
+      <p className="sr-only" role="status">{editNote}</p>
 
       {/* A Recent entry that could not be saved (localStorage full); the
           Gallery has the sheet either way, since the server writes it.

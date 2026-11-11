@@ -17,11 +17,20 @@
 //    images, the stills in the picker and the field, the lightbox, and the
 //    result card's Playing view.
 //
+// Fix round 1 (audit r1 of PR #53; HQ room 2026-11-11-034, ENG -043, DESIGN
+// -010): the style follows the balance until the person acts, the note names
+// the ready style and offers the newsletter only once the reward's answer is
+// known, middleEllipsis never lengthens, the lightbox with one example, and
+// 8. the latch and the visit driven through the real createFormVisit and
+//    openingStyle, the newsletter flag through the real dailyRewardClient
+//    and store, the border read run on real pixel data from the result
+//    card's own source, and the pins for L and M.
+//
 // Run from the repo root: `node scripts/polish-pr2-test.mjs`. Bundles with
 // esbuild into local/.polish-pr2-test/ (gitignored). Prints only case names
 // and pass or fail. Source pins read the source with comments stripped.
 
-import { build } from 'esbuild';
+import { build, transform } from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -32,10 +41,32 @@ const OUT_DIR = path.join(ROOT, 'local', '.polish-pr2-test');
 
 await build({
   entryPoints: ['src/lib/affordableStyle.ts', 'src/lib/middleEllipsis.ts', 'src/lib/sheetSession.ts', 'src/lib/styleRegistry.ts', 'src/lib/constants.ts',
-    'src/components/sprites/animatedStills.ts']
+    'src/components/sprites/animatedStills.ts', 'src/lib/createFormVisit.ts', 'src/lib/sheetAlpha.ts']
     .map((p) => path.join(ROOT, p)),
   bundle: true, format: 'esm', platform: 'node', outdir: OUT_DIR, outExtension: { '.js': '.mjs' }, entryNames: '[name]', logLevel: 'silent',
   alias: { '@': path.join(ROOT, 'src') },
+});
+// The lightbox, with next/dynamic standing in for YARL's lazy load (the
+// component is a plain function, so calling it gives the element YARL gets),
+// and dailyRewardClient with the store, its claimer swapped for one that
+// hands its apply to the test.
+const STAND_INS = path.join(OUT_DIR, 'stand-ins');
+fs.mkdirSync(STAND_INS, { recursive: true });
+fs.writeFileSync(path.join(STAND_INS, 'next-dynamic.mjs'), 'export default function dynamic() { return function Lightbox() { return null; }; }\n');
+fs.writeFileSync(path.join(STAND_INS, 'claim.mjs'),
+  'export function createDailyRewardClaimer(io) { globalThis.__rewardApply = io.apply; return { claimOnce: async () => {}, reset: () => {} }; }\n');
+fs.writeFileSync(path.join(STAND_INS, 'client-entry.mjs'),
+  `export { resetDailyRewardClaim } from ${JSON.stringify(path.join(ROOT, 'src/lib/dailyRewardClient.ts'))};\n`
+  + `export { useSpriteStore } from ${JSON.stringify(path.join(ROOT, 'src/stores/spriteStore.ts'))};\n`);
+await build({
+  entryPoints: { lightbox: path.join(ROOT, 'src/components/sprites/StyleExamplesLightbox.tsx'), rewardClient: path.join(STAND_INS, 'client-entry.mjs') },
+  bundle: true, format: 'esm', platform: 'node', outdir: OUT_DIR, outExtension: { '.js': '.mjs' }, logLevel: 'silent', jsx: 'automatic',
+  alias: { '@': path.join(ROOT, 'src') }, loader: { '.css': 'empty' },
+  external: ['react', 'react/jsx-runtime'],
+  plugins: [{ name: 'stand-ins', setup(b) {
+    b.onResolve({ filter: /^next\/dynamic$/ }, () => ({ path: path.join(STAND_INS, 'next-dynamic.mjs') }));
+    b.onResolve({ filter: /^@\/lib\/dailyRewardClaim$/ }, () => ({ path: path.join(STAND_INS, 'claim.mjs') }));
+  } }],
 });
 const load = (name) => import(pathToFileURL(path.join(OUT_DIR, `${name}.mjs`)).href);
 const { openingStyle, affordableNote } = await load('affordableStyle');
@@ -44,6 +75,10 @@ const { sheetLeaveLosesWork } = await load('sheetSession');
 const { getStyleById, GENERATION_STYLES } = await load('styleRegistry');
 const { DAILY_LOGIN_TOKENS, EMAIL_LIST_BONUS_TOKENS } = await load('constants');
 const { ANIMATED_STILLS, stillFrameStyle } = await load('animatedStills');
+const { createFormVisit } = await load('createFormVisit');
+const { borderMostlyTransparent } = await load('sheetAlpha');
+const { StyleExamplesLightbox } = await load('lightbox');
+const { resetDailyRewardClaim, useSpriteStore } = await load('rewardClient');
 
 let failed = 0;
 let cases = 0;
@@ -61,31 +96,32 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
 {
   const classic = getStyleById('plus-classic');
   const fast = getStyleById('fast-retro');
-  const open = (balance, currentId = 'plus-classic', picked = false) => openingStyle({ balance, currentId, picked });
+  const open = (balance, currentId = 'plus-classic', acted = false) => openingStyle({ balance, currentId, acted });
 
   check('1: balance 8 opens Retro Arcade (fast-retro)', open(8) === 'fast-retro', open(8));
   check('1: balance 5, exactly Retro Arcade\'s cost, opens fast-retro', open(fast.tokenCost) === 'fast-retro');
   check('1: balance 16 keeps plus-classic', open(16) === 'plus-classic');
   check('1: balance 10,021 keeps plus-classic', open(10021) === 'plus-classic');
   check('1: balance 4 (covers nothing) keeps plus-classic', open(4) === 'plus-classic');
-  check('1: picked true keeps the pick', open(8, 'plus-classic', true) === 'plus-classic' && open(3, 'pro-fantasy', true) === 'pro-fantasy');
-  check('1: a currentId other than plus-classic is kept', open(8, 'pro-fantasy') === 'pro-fantasy' && open(0, 'fast-no-style') === 'fast-no-style');
+  check('1: acted keeps the current style whatever the balance', open(8, 'plus-classic', true) === 'plus-classic' && open(3, 'pro-fantasy', true) === 'pro-fantasy');
+  check('1: not acted, a current style other than plus-classic follows the balance', open(8, 'pro-fantasy') === 'fast-retro' && open(0, 'fast-no-style') === 'plus-classic');
 
-  const more = (claimed) => `+${DAILY_LOGIN_TOKENS} a day${claimed ? '' : `, +${EMAIL_LIST_BONUS_TOKENS} for the newsletter`}`;
-  const tier = fast.tier.charAt(0).toUpperCase() + fast.tier.slice(1);
-  const note8 = (claimed) => `You have 8 tokens: ${tier} styles are ready. ${classic.label} needs ${classic.tokenCost} (${more(claimed)}).`;
-  const note3 = (claimed) => `You have 3 tokens. ${fast.label} needs ${fast.tokenCost} (${more(claimed)}).`;
+  // The newsletter is offered only once the reward's answer is known and unclaimed.
+  const more = (offered) => `+${DAILY_LOGIN_TOKENS} a day${offered ? `, +${EMAIL_LIST_BONUS_TOKENS} for the newsletter` : ''}`;
+  const note8 = (offered) => `You have 8 tokens: ${fast.label} is ready at ${fast.tokenCost}. ${classic.label} needs ${classic.tokenCost} (${more(offered)}).`;
+  const note3 = (offered) => `You have 3 tokens. ${fast.label} needs ${fast.tokenCost} (${more(offered)}).`;
+  const known = (balance, emailListClaimed) => affordableNote({ balance, emailListClaimed, emailListClaimKnown: true });
   check('1: note for 8, newsletter not claimed (numbers and names from the registry and constants)',
-    affordableNote({ balance: 8, emailListClaimed: false }) === note8(false), affordableNote({ balance: 8, emailListClaimed: false }));
+    known(8, false) === note8(true), known(8, false));
   check('1: note for 8, newsletter claimed, leaves the newsletter out',
-    affordableNote({ balance: 8, emailListClaimed: true }) === note8(true), affordableNote({ balance: 8, emailListClaimed: true }));
+    known(8, true) === note8(false), known(8, true));
   check('1: note for 3, newsletter not claimed',
-    affordableNote({ balance: 3, emailListClaimed: false }) === note3(false), affordableNote({ balance: 3, emailListClaimed: false }));
+    known(3, false) === note3(true), known(3, false));
   check('1: note for 3, newsletter claimed',
-    affordableNote({ balance: 3, emailListClaimed: true }) === note3(true), affordableNote({ balance: 3, emailListClaimed: true }));
-  check('1: today\'s values give the words HQ -020 wrote',
-    affordableNote({ balance: 8, emailListClaimed: false }) === 'You have 8 tokens: Fast styles are ready. Classic Pixel Art needs 16 (+3 a day, +5 for the newsletter).'
-    && affordableNote({ balance: 3, emailListClaimed: false }) === 'You have 3 tokens. Retro Arcade needs 5 (+3 a day, +5 for the newsletter).');
+    known(3, true) === note3(false), known(3, true));
+  check('1: today\'s values give the words HQ -034 wrote',
+    known(8, false) === 'You have 8 tokens: Retro Arcade is ready at 5. Classic Pixel Art needs 16 (+3 a day, +5 for the newsletter).'
+    && known(3, false) === 'You have 3 tokens. Retro Arcade needs 5 (+3 a day, +5 for the newsletter).');
   check('1: no note once the balance covers plus-classic (16, 10,021)',
     affordableNote({ balance: 16, emailListClaimed: false }) === null && affordableNote({ balance: 10021, emailListClaimed: true }) === null);
   check('1: one token reads "1 token"', affordableNote({ balance: 1, emailListClaimed: true })?.startsWith('You have 1 token. '));
@@ -190,7 +226,7 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     /if \(userId === undefined\) return;/.test(gallery) && /setLoading\(true\);\s*setError\(null\);\s*try \{/.test(gallery));
 
   const upload = stripComments(read('src/app/upload/page.tsx'));
-  check('4: /upload\'s banner shows only for Send to Slicer\'s image, with the new words',
+  check('4: /upload\'s banner shows only for the generated image /upload loads by itself (however /upload is opened), with the new words',
     /\{fromSlicerHandoff && uploaded && \(/.test(upload) && upload.includes('Generated image loaded. Set the frame size, then slice.')
     && (upload.match(/setFromSlicerHandoff\(true\)/g) ?? []).length === 1
     && /setFromGenerated\(false\);\s*setFromSlicerHandoff\(false\);\s*setPreferredFrameW\(undefined\);/.test(upload));
@@ -284,10 +320,10 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     /\{moreRight && \(\s*<div\s+className="pointer-events-none absolute top-0 right-0 bottom-1 w-6 bg-linear-to-r from-transparent to-bg-surface"/.test(form)
     && /setMoreRight\(row\.scrollLeft \+ row\.clientWidth < row\.scrollWidth - 1\)/.test(form)
     && /className="flex flex-nowrap gap-1\.5 overflow-x-auto/.test(form));
-  check('7: under 640 px the bar leads with the cost and the balance; from 640 px it reads as before',
+  check('7: under 640 px the bar leads with the cost and the balance; from 640 px the same order, the cost never shrinking; a short balance reads "tokens · you have", in red',
     /<span className="sm:hidden">\s*\{summaryCost\} &middot; \{selectedStyle\.label\} &middot; \{sizeLabel\} px\s*<\/span>/.test(form)
-    && /<span className="hidden sm:inline">\s*\{selectedStyle\.label\} &middot; \{sizeLabel\} px &middot;\{' '\}\s*\{summaryCost\}\s*<\/span>/.test(form)
-    && /<span className=\{insufficientTokens \? 'text-red-400' : undefined\}>\s*\{' '\}of \{formatCount\(tokenBalance\)\} tokens/.test(form)
+    && /<span className="max-sm:hidden inline-flex max-w-full items-center gap-\[1ch\] align-bottom">\s*<span className="min-w-0 truncate">\{selectedStyle\.label\} &middot; \{sizeLabel\} px &middot;<\/span>\{' '\}\s*<span className="flex-shrink-0">\{summaryCost\}<\/span>\s*<\/span>/.test(form)
+    && /\{formatCount\(tokenCost\)\}\s*\{!userId \? \(\s*' tokens'\s*\) : insufficientTokens \? \(\s*<>\s*\{' '\}tokens &middot;\{' '\}\s*<span className="text-red-400">you have \{formatCount\(tokenBalance\)\}<\/span>\s*<\/>\s*\) : \(\s*<span>\s*\{' '\}of \{formatCount\(tokenBalance\)\} tokens\s*<\/span>\s*\)\}/.test(form)
     && /className="min-w-0 sm:flex-1 truncate /.test(form));
   check('7: the Generate button carries the cost at every width (no hidden sm:inline-flex)',
     !form.includes('hidden sm:inline-flex') && /<span className="inline-flex items-center gap-1\.5 tabular-nums">\s*&middot; <PixelCoin \/> \{formatCount\(tokenCost\)\}/.test(form));
@@ -311,9 +347,25 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
       && /<Film size=\{32\}/.test(src))
     && /const still = ANIMATED_STILLS\[s\.id\];/.test(picker) && /const still = ANIMATED_STILLS\[style\.id\];/.test(field));
 
-  const lightbox = fs.readFileSync(path.join(ROOT, 'src/components/sprites/StyleExamplesLightbox.tsx'));
-  const blob = createHash('sha1').update(Buffer.concat([Buffer.from(`blob ${lightbox.length}\0`), lightbox])).digest('hex');
-  check('7: StyleExamplesLightbox.tsx is unchanged (blob 58a7a957, as at 886df520)', blob === '58a7a95753becd13d98ff75f2827e6bda9e81d8f', blob);
+  // DESIGN 010 item 2: one example, no Previous or Next (this lightbox has no
+  // dots plugin); two or more, YARL's own buttons as before.
+  const classicStyle = getStyleById('plus-classic');
+  const one = StyleExamplesLightbox({ style: classicStyle, onClose() {}, onUseStyle() {} });
+  const two = StyleExamplesLightbox({ style: { ...classicStyle, examplePaths: ['/a.png', '/b.png'] }, onClose() {}, onUseStyle() {} });
+  const oneRender = one?.props?.render ?? {};
+  const twoRender = two?.props?.render ?? {};
+  check('7: the lightbox with one example renders no Previous and no Next',
+    one?.props?.slides?.length === 1 && typeof oneRender.slide === 'function'
+    && typeof oneRender.buttonPrev === 'function' && oneRender.buttonPrev() === null
+    && typeof oneRender.buttonNext === 'function' && oneRender.buttonNext() === null, Object.keys(oneRender));
+  check('7: the lightbox with two examples keeps YARL\'s Previous and Next, and everything else as it was',
+    two?.props?.slides?.length === 2 && Object.keys(twoRender).join() === 'slide' && twoRender.slide === oneRender.slide
+    && JSON.stringify({ ...one.props, render: null, slides: null, toolbar: null }) === JSON.stringify({ ...two.props, render: null, slides: null, toolbar: null })
+    && two.props.labels.Previous === 'Previous example' && two.props.labels.Next === 'Next example' && two.props.carousel.finite === true, Object.keys(twoRender));
+  const yarl = read('node_modules/yet-another-react-lightbox/dist/index.js');
+  check('7: YARL renders render.buttonPrev and render.buttonNext in place of its own buttons (what the one-example case relies on)',
+    yarl.includes('buttonPrev ? (buttonPrev()) : (React.createElement(NavigationButton, { label: "Previous"')
+    && yarl.includes('buttonNext ? (buttonNext()) : (React.createElement(NavigationButton, { label: "Next"'));
 
   const result = stripComments(read('src/components/sprites/GenerationResult.tsx'));
   check('7: the result card: the sheet takes no height while Playing, the loop none in Sheet view, and the frame strip keeps its space',
@@ -321,6 +373,322 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     && result.includes("[grid-area:1/1] self-center mx-auto ${showLoop ? '' : 'invisible h-0 overflow-hidden'}")
     && /<div className=\{showLoop \? undefined : 'invisible'\} inert=\{!showLoop\} aria-hidden=\{!showLoop \|\| undefined\}>\s*<LoopFrameStrip/.test(result)
     && /onLoad=\{\(e\) => \{\s*const nw = e\.currentTarget\.naturalWidth;/.test(result));
+}
+
+// ── 8. Fix round 1 ──
+
+{
+  // openingStyle (HQ -034): until the person acts, the balance decides, from
+  // any current style; once they act, the current style stays.
+  const TABLE = [[0, 'plus-classic'], [1, 'plus-classic'], [4, 'plus-classic'], [5, 'fast-retro'], [15, 'fast-retro'], [16, 'plus-classic'], [10021, 'plus-classic']];
+  const open = (balance, currentId, acted) => openingStyle({ balance, currentId, acted });
+  const OTHERS = ['pro-fantasy', 'fast-retro', 'fast-no-style', 'anim-any', 'plus-low-res'];
+  check('8: openingStyle, not acted, from the default: 0, 1, 4 Classic; 5, 15 Retro Arcade; 16, 10,021 Classic',
+    TABLE.every(([b, id]) => open(b, 'plus-classic', false) === id), TABLE.map(([b]) => open(b, 'plus-classic', false)));
+  check('8: openingStyle, not acted, from a style other than the default: the same table',
+    OTHERS.every((cur) => TABLE.every(([b, id]) => open(b, cur, false) === id)));
+  check('8: openingStyle, acted: the current style at every balance',
+    ['plus-classic', ...OTHERS].every((cur) => TABLE.every(([b]) => open(b, cur, true) === cur)));
+
+  // affordableNote (HQ -034, ENG -043): the ready style by name and cost; the
+  // newsletter only when the reward's answer is known and unclaimed.
+  const note = (balance, emailListClaimed = false, emailListClaimKnown = true) => affordableNote({ balance, emailListClaimed, emailListClaimKnown });
+  const NEWS = ', +5 for the newsletter';
+  check('8: the new sentence at 5, 8 and 15',
+    [5, 8, 15].every((n) => note(n) === `You have ${n} tokens: Retro Arcade is ready at 5. Classic Pixel Art needs 16 (+3 a day${NEWS}).`), [5, 8, 15].map((n) => note(n)));
+  check('8: the old sentence at 0 and 4',
+    [0, 4].every((n) => note(n) === `You have ${n} tokens. Retro Arcade needs 5 (+3 a day${NEWS}).`), [0, 4].map((n) => note(n)));
+  check('8: no note at 16', note(16) === null && note(16, false, false) === null);
+  check('8: the newsletter part only when the answer is known and unclaimed',
+    note(8, false, true).includes(NEWS) && !note(8, true, true).includes(NEWS)
+    && !note(8, false, false).includes(NEWS) && !note(8, true, false).includes(NEWS)
+    && note(3, false, true).includes(NEWS) && !note(3, false, false).includes(NEWS));
+  check('8: 1 token reads "1 token"', note(1) === `You have 1 token. Retro Arcade needs 5 (+3 a day${NEWS}).`, note(1));
+  check('8: the note names no tier word', [1, 5, 8, 15].every((n) => !/\b(Fast|Plus|Pro) styles\b/.test(note(n))));
+
+  // The flag, through the real dailyRewardClient and store.
+  const apply = globalThis.__rewardApply;
+  const knownNow = () => useSpriteStore.getState().emailListClaimKnown;
+  const startsFalse = knownNow() === false;
+  apply({ balance: 8 });
+  const noAnswer = knownNow() === false;
+  apply({ emailListClaimed: 'yes' });
+  const notBoolean = knownNow() === false;
+  apply({ emailListClaimed: false });
+  const afterAnswer = knownNow() === true && useSpriteStore.getState().emailListClaimed === false;
+  resetDailyRewardClaim();
+  const afterReset = knownNow() === false;
+  check('8: the newsletter flag: false at start and without a boolean answer, true after one, false after sign-out',
+    typeof apply === 'function' && startsFalse && noAnswer && notBoolean && afterAnswer && afterReset,
+    { startsFalse, noAnswer, notBoolean, afterAnswer, afterReset });
+  const formForNote = stripComments(read('src/components/sprites/GenerationForm.tsx'));
+  check('8: the form passes the flag to the note',
+    /affordableNote\(\{ balance: tokenBalance, emailListClaimed, emailListClaimKnown \}\)/.test(formForNote)
+    && /const emailListClaimKnown = useSpriteStore\(\(s\) => s\.emailListClaimKnown\);/.test(formForNote));
+}
+
+{
+  // The latch and the visit (ENG -043 condition 3), driving the real
+  // createFormVisit and openingStyle as GenerationForm does: a mount reads
+  // the visit; the layout effect follows the balance until the latch; the
+  // prompt box (non-empty), a chip and chooseStyle set it in their handler,
+  // and every style change is written to the visit (pinned in
+  // generate-picker-test section 6).
+  const formSrc = read('src/components/sprites/GenerationForm.tsx');
+  const bodyStart = formSrc.indexOf('      const body: Payload = {');
+  const bodyEndAt = formSrc.indexOf('      body.idempotencyKey = idempotencyKey;', bodyStart);
+  const bodyBlock = bodyStart < 0 || bodyEndAt < 0 ? '' : formSrc.slice(bodyStart, formSrc.indexOf('\n', bodyEndAt) + 1);
+  check('8: the request body block still has sha256 1ef149e1',
+    sha256(bodyBlock) === '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce9700539');
+  const { code } = await transform(`function run(capturedPrompt, selectedStyle, effectiveWidth, effectiveHeight, removeBg, referenceImages, referencesEnabled, crypto) {\n${bodyBlock}\nreturn body;\n}`, { loader: 'ts' });
+  const runBody = new Function(`${code}\nreturn run;`)();
+  const bodyFor = (styleId, prompt) => {
+    const st = getStyleById(styleId);
+    return JSON.stringify(runBody(prompt, st, st.defaultWidth, st.defaultHeight, st.supportsRemoveBg, [], st.supportsReferenceImages === true, { randomUUID: () => 'k' }));
+  };
+
+  // The form's own code for the opening style, the latch and the visit, cut
+  // from GenerationForm.tsx and run with React's state as plain variables:
+  // the first style, the latch's start, markActed, chooseStyle, the layout
+  // effect (run again after each change, as React does when its deps move),
+  // the prompt box's onChange and the chip handler.
+  const grab = (from, to) => {
+    const a = formSrc.indexOf(from);
+    const b = a < 0 ? -1 : formSrc.indexOf(to, a + from.length);
+    return a < 0 || b < 0 ? null : formSrc.slice(a + from.length, b);
+  };
+  const parts = {
+    visit: formSrc.match(/const \[visitAtMount\] = useState\(\(\) => (.+)\);\n/)?.[1],
+    acted: formSrc.match(/const actedRef = useRef\((.+)\);\n/)?.[1],
+    init: grab('  const [selectedStyleId, setSelectedStyleId] = useState(() => {\n', '\n  });\n'),
+    mark: grab('  const markActed = useCallback(() => {\n', '\n  }, [userId]);'),
+    choose: grab('  const chooseStyle = useCallback((id: string) => {\n', '\n  }, [selectedStyleId, recentIds, markActed, userId]);'),
+    effect: grab('  useLayoutEffect(() => {\n', '\n  }, [serverBalanceKnown, tokenBalance, selectedStyleId, userId]);'),
+    change: grab('          onChange={(e) => {\n', '\n          }}'),
+    chip: grab('          onPick={(example) => {\n', '\n          }}'),
+  };
+  const missing = Object.entries(parts).filter(([, v]) => !v).map(([k]) => k);
+  check('8: the form\'s opening, latch and visit code is found in GenerationForm.tsx', missing.length === 0, missing);
+  let makeForm = null;
+  try {
+    const { code: formCode } = await transform(`function makeForm({ formVisit, openingStyle, getStyleById, DEFAULT_STYLE_ID, userId, pushRecent, writeRecent }) {
+  const visitAtMount = ${parts.visit};
+  const state = { selectedStyleId: null, prompt: '', recentIds: [], announcement: '', serverBalanceKnown: false, tokenBalance: 0 };
+  state.selectedStyleId = (() => {\n${parts.init}\n})();
+  const actedRef = { current: ${parts.acted} };
+  const setSelectedStyleId = (id) => { state.selectedStyleId = id; };
+  const setPrompt = (p) => { state.prompt = p; };
+  const setRecentIds = (l) => { state.recentIds = l; };
+  const setStyleAnnouncement = (t) => { state.announcement = t; };
+  const recentStorage = () => null;
+  const markActed = () => {\n${parts.mark}\n};
+  const effect = () => { const { serverBalanceKnown, tokenBalance, selectedStyleId } = state;\n${parts.effect}\n};
+  const chooseStyle = (id) => { const { selectedStyleId, recentIds } = state;\n${parts.choose}\n  effect();\n};
+  return {
+    state, actedRef,
+    balance(b) { state.serverBalanceKnown = true; state.tokenBalance = b; effect(); effect(); },
+    type(value) { const e = { target: { value } };\n${parts.change}\n  effect();\n},
+    chip(example) {\n${parts.chip}\n  effect();\n},
+    choose: chooseStyle,
+  };
+}`, { loader: 'ts' });
+    makeForm = new Function(`${formCode}\nreturn makeForm;`)();
+  } catch (e) { makeForm = null; console.log(String(e)); }
+  const mountForm = (visit, userId) => {
+    // Without the form's code every check below fails by its title.
+    if (!makeForm) return { style: 'missing', acted: null, prompt: null, balance() {}, type() {}, chip() {}, choose() {}, note: () => 'missing', disabled: () => null, announced: () => 'missing', recent: () => ['missing'] };
+    const real = makeForm({
+      formVisit: visit, openingStyle, getStyleById, DEFAULT_STYLE_ID: 'plus-classic', userId,
+      pushRecent: (list, prev, id) => [prev, ...list.filter((x) => x !== id && x !== prev)], writeRecent: () => {},
+    });
+    const f = {
+      get style() { return real.state.selectedStyleId; },
+      get acted() { return real.actedRef.current; },
+      get prompt() { return real.state.prompt; },
+      balance: (b) => real.balance(b),
+      type: (t) => real.type(t),
+      chip: (t) => real.chip(t),
+      choose: (id) => real.choose(id),
+      note: () => affordableNote({ balance: real.state.tokenBalance, emailListClaimed: false, emailListClaimKnown: true }),
+      disabled: () => real.state.tokenBalance < getStyleById(real.state.selectedStyleId).tokenCost,
+      announced: () => real.state.announcement,
+      recent: () => real.state.recentIds,
+    };
+    return f;
+  };
+
+  {
+    const f = mountForm(createFormVisit(), 'user_a');
+    f.balance(8);
+    const at8 = f.style === 'fast-retro' && f.note() !== null;
+    f.balance(508);
+    check('8: balance 8 opens on Retro Arcade; then 508 with nothing typed returns to Classic and the note goes',
+      at8 && f.style === 'plus-classic' && f.note() === null, f.style);
+  }
+  {
+    const f = mountForm(createFormVisit(), 'user_a');
+    f.balance(13);
+    const at13 = f.style;
+    f.balance(16);
+    const g = mountForm(createFormVisit(), 'user_a');
+    g.balance(3);
+    const at3 = g.style;
+    g.balance(6);
+    check('8: 13 then 16: Retro Arcade then Classic; 3 then 6: Classic then Retro Arcade with the note',
+      at13 === 'fast-retro' && f.style === 'plus-classic' && at3 === 'plus-classic' && g.style === 'fast-retro' && g.note() !== null,
+      { at13, at16: f.style, at3, at6: g.style });
+  }
+  {
+    const f = mountForm(createFormVisit(), 'user_a');
+    f.balance(8);
+    f.type('a small knight');
+    const before = bodyFor(f.style, f.prompt);
+    const styleBefore = f.style;
+    f.balance(508);
+    const g = mountForm(createFormVisit(), 'user_a');
+    g.balance(21);
+    g.type('a small knight');
+    g.balance(8);
+    check('8: after a non-empty prompt, 8 to 508 and 21 to 8 leave the style and the request body unchanged; at 8 on Classic the button is disabled',
+      f.style === styleBefore && bodyFor(f.style, f.prompt) === before && g.style === 'plus-classic' && g.disabled(), { f: f.style, g: g.style });
+  }
+  {
+    const f = mountForm(createFormVisit(), 'user_a');
+    f.balance(8);
+    f.type('');
+    f.balance(508);
+    const emptyTypingKeepsFollowing = f.style === 'plus-classic' && f.acted === false;
+    const g = mountForm(createFormVisit(), 'user_a');
+    g.balance(8);
+    g.chip('pixel art knight with sword');
+    g.balance(508);
+    const h = mountForm(createFormVisit(), 'user_a');
+    h.balance(508);
+    h.choose('plus-classic');
+    h.balance(8);
+    check('8: an empty prompt is not an act; a chip and choosing the current style are (the current style: no Recent, no announcement)',
+      emptyTypingKeepsFollowing && g.style === 'fast-retro' && h.style === 'plus-classic' && h.acted
+      && h.recent().length === 0 && h.announced() === '');
+  }
+  {
+    const visit = createFormVisit();
+    const f = mountForm(visit, 'user_a');
+    f.balance(50);
+    f.choose('pro-fantasy');
+    // Generate, then Generate Another: the form is built again with 10 left.
+    const again = mountForm(visit, 'user_a');
+    const opened = again.style;
+    again.balance(10);
+    again.balance(10021);
+    // Create to Animate to Create: built again.
+    const back = mountForm(visit, 'user_a');
+    back.balance(3);
+    check('8: a second mount for the same account starts on the remembered style with the latch set, whatever the balance',
+      opened === 'pro-fantasy' && again.acted && again.style === 'pro-fantasy' && back.style === 'pro-fantasy' && back.acted,
+      { opened, again: again.style, back: back.style });
+    const other = mountForm(visit, 'user_b');
+    const returning = mountForm(visit, 'user_a');
+    check('8: another account starts empty, and what was held is dropped',
+      other.style === 'plus-classic' && other.acted === false && returning.style === 'plus-classic' && returning.acted === false);
+    const before = createFormVisit();
+    mountForm(before, 'user_a').choose('pro-fantasy');
+    const held = mountForm(before, 'user_a').style;
+    const reload = mountForm(createFormVisit(), 'user_a');
+    check('8: a reload (a new page load) starts over on the default', held === 'pro-fantasy' && reload.style === 'plus-classic' && reload.acted === false, { held, reload: reload.style });
+  }
+  {
+    const visit = createFormVisit();
+    const f = mountForm(visit, 'user_a');
+    f.balance(8);
+    const again = mountForm(visit, 'user_a');
+    const opened = again.style;
+    again.balance(508);
+    check('8: a style the balance chose is remembered too, still unlatched, so it keeps following',
+      opened === 'fast-retro' && again.acted === false && again.style === 'plus-classic', { opened, after: again.style });
+    const visit2 = createFormVisit();
+    visit2.rememberStyle('user_a', 'pro-fantasy');
+    visit2.rememberStyle(null, 'fast-retro');
+    visit2.rememberActed(undefined);
+    const empty = JSON.stringify(visit2.read(null)) === '{"styleId":null,"acted":false}' && JSON.stringify(visit2.read(undefined)) === '{"styleId":null,"acted":false}';
+    const kept = JSON.stringify(visit2.read('user_a')) === '{"styleId":"pro-fantasy","acted":false}';
+    const visit3 = createFormVisit();
+    visit3.rememberStyle('user_a', 'not-a-style');
+    const unknown = mountForm(visit3, 'user_a');
+    check('8: no userId reads empty and writes nothing (what is held stays); an unknown remembered id opens on the default',
+      empty && kept && unknown.style === 'plus-classic' && unknown.acted === false, { empty, kept, unknown: unknown.style });
+  }
+}
+
+{
+  // middleEllipsis (audit L6): never longer than its input.
+  check('8: a one-letter name before a long domain comes back whole',
+    middleEllipsis('j@company-mail.example.org', 20) === 'j@company-mail.example.org', middleEllipsis('j@company-mail.example.org', 20));
+  const names = ['', 'j', 'jo', 'joe', 'georgealbanese', 'a.b'];
+  const domains = ['@b.co', '@example.com', '@company-mail.example.org', '@averyveryverylongdomain.example.com'];
+  const inputs = [...names.flatMap((n) => domains.map((d) => n + d)), 'abcdefghijklmnop', 'a', 'ab', '', 'x@', '@', 'a@b@example.com'];
+  const longer = [];
+  for (const text of inputs) for (let max = -1; max <= 45; max++) {
+    const out = middleEllipsis(text, max);
+    if (out.length > text.length || (text.length <= max && out !== text)) longer.push([text, max, out]);
+  }
+  check(`8: no result is longer than its input (${inputs.length} inputs, maxChars -1 to 45)`, longer.length === 0, longer.slice(0, 3));
+}
+
+{
+  // The border read (the audit's uncaught mutation), run from the result
+  // card's own source on real pixel data: four one-edge sheets, a clear one,
+  // one with only its center opaque, and a fully opaque one.
+  const card = read('src/components/sprites/GenerationResult.tsx');
+  const from = card.indexOf('        const strips = [');
+  const toLine = 'if (!cancelled) setSheetAlpha({ src, transparent: borderMostlyTransparent(ring, ring.length / 4, 1) });';
+  const to = from < 0 ? -1 : card.indexOf(toLine, from);
+  const readSrc = from < 0 || to < 0 ? '' : card.slice(from, to + toLine.length);
+  let runRead = null;
+  try {
+    const { code: c } = await transform(`function run(ctx, W, H, borderMostlyTransparent, setSheetAlpha, src, cancelled) {\n${readSrc}\n}`, { loader: 'ts' });
+    runRead = new Function(`${c}\nreturn run;`)();
+  } catch { runRead = null; }
+  const sheetOf = (W, H, opaque) => {
+    const px = new Uint8ClampedArray(W * H * 4);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (opaque(x, y)) px[(y * W + x) * 4 + 3] = 255;
+    const ctx = {
+      getImageData: (x0, y0, w, h) => {
+        const data = new Uint8ClampedArray(w * h * 4);
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) for (let k = 0; k < 4; k++) data[(y * w + x) * 4 + k] = px[((y0 + y) * W + (x0 + x)) * 4 + k];
+        return { data };
+      },
+    };
+    return { ctx, W, H };
+  };
+  const answer = ({ ctx, W, H }) => {
+    if (!runRead) return 'no read';
+    let got = 'none';
+    runRead(ctx, W, H, borderMostlyTransparent, (v) => { got = v.transparent; }, 's', false);
+    return got;
+  };
+  check('8: the border read is found in GenerationResult.tsx and runs', readSrc.length > 0 && runRead !== null);
+  check('8: border read: only the top edge opaque (8 by 3) reads transparent', answer(sheetOf(8, 3, (x, y) => y === 0)) === true);
+  check('8: border read: only the bottom edge opaque (8 by 3) reads transparent', answer(sheetOf(8, 3, (x, y) => y === 2)) === true);
+  check('8: border read: only the left edge opaque (3 by 8) reads transparent', answer(sheetOf(3, 8, (x) => x === 0)) === true);
+  check('8: border read: only the right edge opaque (3 by 8) reads transparent', answer(sheetOf(3, 8, (x) => x === 2)) === true);
+  check('8: border read: a fully transparent sheet reads transparent', answer(sheetOf(6, 6, () => false)) === true);
+  check('8: border read: only the center opaque (10 by 10, 8 by 8 inside) reads transparent', answer(sheetOf(10, 10, (x, y) => x > 0 && x < 9 && y > 0 && y < 9)) === true);
+  check('8: border read: a fully opaque sheet reads not transparent', answer(sheetOf(5, 5, () => true)) === false);
+}
+
+{
+  // L (audit L12 and L5) and M (DESIGN 010 item 1).
+  const result = stripComments(read('src/components/sprites/GenerationResult.tsx'));
+  check('8: the GIF error is text-xs, like the sheet error beside it',
+    result.includes('<p className="text-xs font-mono text-red-400" role="alert">{gifError.message}</p>')
+    && !/text-\[10px\][^\n]*\{gifError\.message\}/.test(result));
+  const landing = stripComments(read('src/app/page.tsx'));
+  check('8: the landing line takes its daily tokens from DAILY_LOGIN_TOKENS',
+    landing.includes('Start free. Earn +{DAILY_LOGIN_TOKENS} tokens every day you log in. No credit card required.') && !landing.includes('Earn +3'));
+  const badgeAreas = [stripComments(read('src/components/sprites/StylePicker.tsx')), stripComments(read('src/components/sprites/StyleField.tsx'))];
+  check('8: the Play badge stays bottom-right (DESIGN 010 item 1: the top-right corner had still pixels under it at 56 px)',
+    badgeAreas.every((src) => src.includes('"absolute bottom-1 right-1 flex items-center justify-center w-4 h-4 rounded bg-black/60 text-white"')
+      && !src.includes('"absolute top-1 right-1 flex items-center justify-center w-4 h-4')));
 }
 
 if (failed > 0) {

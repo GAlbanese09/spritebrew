@@ -204,7 +204,7 @@ export default function LandingPage() {
           </a>
         </div>
         <p className="mt-4 text-[10px] font-mono text-[#5c5550]">
-          Start free. Earn +3 tokens every day you log in. No credit card required.
+          Start free. Earn +{DAILY_LOGIN_TOKENS} tokens every day you log in. No credit card required.
         </p>
       </section>
 

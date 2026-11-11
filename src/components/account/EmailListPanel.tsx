@@ -88,7 +88,8 @@ export default function EmailListPanel({ variant = 'full' }: EmailListPanelProps
   const email = user?.primaryEmailAddress?.emailAddress ?? '';
 
   // The field's font is monospace, so its width in characters is its inner
-  // width over one character's width. Measured again when the field resizes.
+  // width over one character's width. Measured again when the field resizes
+  // and once the web font has loaded.
   const showEmailField = !!userId && !emailListClaimed && !!email;
   useEffect(() => {
     const el = emailRef.current;
@@ -104,7 +105,16 @@ export default function EmailListPanel({ variant = 'full' }: EmailListPanelProps
     };
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    return () => ro.disconnect();
+    let mounted = true;
+    if ('fonts' in document) {
+      void document.fonts.ready.then(() => {
+        if (mounted) measure();
+      });
+    }
+    return () => {
+      mounted = false;
+      ro.disconnect();
+    };
   }, [showEmailField]);
 
   if (!userId || emailListClaimed) return null;

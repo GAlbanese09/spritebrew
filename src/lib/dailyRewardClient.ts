@@ -13,7 +13,10 @@ const claimer = createDailyRewardClaimer({
     const s = useSpriteStore.getState();
     if (data.streak) s.setStreak(data.streak.count, data.streak.lifetimeMax);
     if (typeof data.balance === 'number') s.setTokenBalance(data.balance);
-    if (typeof data.emailListClaimed === 'boolean') s.setEmailListClaimed(data.emailListClaimed);
+    if (typeof data.emailListClaimed === 'boolean') {
+      s.setEmailListClaimed(data.emailListClaimed);
+      s.setEmailListClaimKnown(true);
+    }
     if (Array.isArray(data.rewards) && data.rewards.length > 0) {
       s.enqueueRewards(data.rewards as Omit<PendingReward, 'id'>[]);
     }
@@ -31,7 +34,9 @@ export function claimDailyRewardOnce(
 
 /** Call on sign-out, before signOut() settles: this account's claim that has
  *  not been sent is never sent, and its late answer is not applied. Another
- *  account still gets its own attempt; this one waits for a full page load. */
+ *  account still gets its own attempt; this one waits for a full page load.
+ *  The newsletter's claim is unknown again until the next answer. */
 export function resetDailyRewardClaim(): void {
   claimer.reset();
+  useSpriteStore.getState().setEmailListClaimKnown(false);
 }

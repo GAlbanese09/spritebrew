@@ -22,38 +22,40 @@ function style(id: string): GenerationStyle {
 const plural = (n: number) => `${n.toLocaleString('en-US')} token${n === 1 ? '' : 's'}`;
 
 /**
- * The style the form should show once the server's balance is known. The
- * person's own pick, or any style other than the default, is kept; so is the
- * default when the balance covers it. Otherwise the first candidate the
- * balance covers, or the default when none is covered.
+ * The style the form should show for this balance (HQ room 2026-11-11-034).
+ * Once the person has acted (picked a style, typed a prompt or tapped an
+ * example), whatever is in the field. Until then the default when the
+ * balance covers it, else the first candidate the balance covers, else the
+ * default.
  */
-export function openingStyle({ balance, currentId, picked }: {
+export function openingStyle({ balance, currentId, acted }: {
   balance: number;
   currentId: string;
-  picked: boolean;
+  acted: boolean;
 }): string {
-  if (picked || currentId !== DEFAULT_STYLE_ID) return currentId;
-  if (balance >= style(DEFAULT_STYLE_ID).tokenCost) return currentId;
+  if (acted) return currentId;
   const covered = OPENING_CANDIDATES.find((id) => balance >= style(id).tokenCost);
   return covered ?? DEFAULT_STYLE_ID;
 }
 
 /**
  * The note under the style field, or null when the balance covers the
- * default style. Says what the person has, what is ready and how to get
- * more; the newsletter is left out once it has been claimed.
+ * default style. Says what the person has, which style is ready and how to
+ * get more. The newsletter is offered only once the daily reward's answer is
+ * known and says it is not claimed.
  */
-export function affordableNote({ balance, emailListClaimed }: {
+export function affordableNote({ balance, emailListClaimed, emailListClaimKnown }: {
   balance: number;
   emailListClaimed: boolean;
+  emailListClaimKnown: boolean;
 }): string | null {
   const classic = style(DEFAULT_STYLE_ID);
   if (balance >= classic.tokenCost) return null;
   const fast = style(OPENING_CANDIDATES[1]);
-  const more = `+${DAILY_LOGIN_TOKENS} a day${emailListClaimed ? '' : `, +${EMAIL_LIST_BONUS_TOKENS} for the newsletter`}`;
+  const newsletter = emailListClaimKnown && !emailListClaimed;
+  const more = `+${DAILY_LOGIN_TOKENS} a day${newsletter ? `, +${EMAIL_LIST_BONUS_TOKENS} for the newsletter` : ''}`;
   if (balance >= fast.tokenCost) {
-    const tier = fast.tier.charAt(0).toUpperCase() + fast.tier.slice(1);
-    return `You have ${plural(balance)}: ${tier} styles are ready. ${classic.label} needs ${classic.tokenCost} (${more}).`;
+    return `You have ${plural(balance)}: ${fast.label} is ready at ${fast.tokenCost}. ${classic.label} needs ${classic.tokenCost} (${more}).`;
   }
   return `You have ${plural(balance)}. ${fast.label} needs ${fast.tokenCost} (${more}).`;
 }

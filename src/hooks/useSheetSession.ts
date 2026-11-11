@@ -12,6 +12,7 @@ import {
   sheetLeaveLosesWork,
   type SheetSessionState,
 } from '@/lib/sheetSession';
+import { onSheetSessionChangedElsewhere, signalSheetSessionChanged } from '@/lib/sheetSessionSignal';
 import type { SpriteSheet } from '@/lib/types';
 
 /** Same cadence as the editor's recovery controller (useEditorRecovery). */
@@ -34,6 +35,21 @@ let lastSaved: SheetSessionState | null = null;
 /** A sheet the user threw away; never saved again, even by a save that was
  *  already scheduled when they did. */
 let forgottenSheet: SpriteSheet | null = null;
+let listeningElsewhere = false;
+
+/**
+ * From the first Sheet Tools mount to the end of the page: when another tab
+ * saves or clears the session, the record this tab saved is gone, so nothing
+ * here counts as saved and the leave guard asks while a sheet is held.
+ * Hearing it never saves, loads or clears anything.
+ */
+function listenElsewhere() {
+  if (listeningElsewhere) return;
+  listeningElsewhere = true;
+  onSheetSessionChangedElsewhere(() => {
+    lastSaved = null;
+  });
+}
 
 function snapshot(): SheetSessionState | null {
   const s = useSpriteStore.getState();
@@ -52,6 +68,7 @@ function snapshot(): SheetSessionState | null {
  * device, or saving has turned itself off. lastSaved moves only once a save
  * has landed (doSave) or a Restore put the saved session back (restore), so
  * a Restore with nothing changed, or a reload after the save, is not at risk.
+ * Another tab's save or clear sets it back to null (listenElsewhere).
  */
 export function sheetLeaveLosesWorkNow(): boolean {
   return sheetLeaveLosesWork({ current: snapshot(), lastSaved, savingOn: isSheetSessionSaving() });
@@ -71,6 +88,7 @@ async function doSave() {
     // Never throws; a failure turns saving off for the page session.
     await saveSheetSession(snap);
     lastSaved = snap;
+    if (isSheetSessionSaving()) signalSheetSessionChanged();
   } finally {
     saving = false;
     if (resaveQueued) { resaveQueued = false; scheduleSave(); }
@@ -130,7 +148,7 @@ export function forgetSheetSession(): void {
   forgottenSheet = sheet;
   lastSaved = null;
   clearTimers();
-  void clearSheetSession();
+  void clearSheetSession().then(signalSheetSessionChanged);
 }
 
 /**
@@ -144,6 +162,7 @@ export function useSheetSession() {
   const [restoring, setRestoring] = useState(false);
 
   useEffect(() => {
+    listenElsewhere();
     if (mounts++ === 0) stopAutosave = startAutosave();
     return () => {
       if (--mounts === 0 && stopAutosave) {
@@ -179,6 +198,8 @@ export function useSheetSession() {
     setRestoring(true);
     try {
       const session = await loadSheetSession();
+      // loadSheetSession deletes a record it cannot read: tell the other tabs.
+      if (!session) signalSheetSessionChanged();
       if (!session || useSpriteStore.getState().spriteSheet) {
         if (session) URL.revokeObjectURL(session.spriteSheet.sourceImage);
         setSaved(false);
@@ -200,7 +221,7 @@ export function useSheetSession() {
 
   const discard = useCallback(() => {
     setSaved(false);
-    void clearSheetSession();
+    void clearSheetSession().then(signalSheetSessionChanged);
   }, []);
 
   return { offerRestore: saved && !hasSheet, restoring, restore, discard };

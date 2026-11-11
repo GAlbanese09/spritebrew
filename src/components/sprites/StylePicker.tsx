@@ -109,8 +109,10 @@ function PickerDialog({ currentStyleId, onChoose, onClose }: StylePickerProps) {
   /** True in the dialog layout (from 768 px), where the sheet's handle is not shown. */
   const isDialogLayout = () => !handleRef.current || handleRef.current.offsetParent === null;
 
+  // Confirming the current style is a choice too: the form counts it as the
+  // person's pick (and changes nothing else).
   const choose = (id: string) => {
-    if (id !== currentStyleId) onChoose(id);
+    onChoose(id);
     onClose();
   };
 
@@ -227,6 +229,7 @@ function PickerDialog({ currentStyleId, onChoose, onClose }: StylePickerProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        tabIndex={-1}
         onKeyDown={onDialogKeyDown}
         className={`relative flex flex-col w-full h-[min(620px,85vh)] max-h-[min(620px,85vh)] rounded-t-2xl
           border border-b-0 border-border-default bg-bg-surface shadow-2xl

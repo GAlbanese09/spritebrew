@@ -1,7 +1,8 @@
 /**
  * Recent styles on /generate's Create form: the last styles the field moved
  * away from, newest first. Pure: the storage is passed in, so node can test it
- * (scripts/generate-picker-test.mjs). Persists per browser.
+ * (scripts/generate-picker-test.mjs). Persists per account in this browser
+ * (accountRecentStorage).
  */
 
 export const RECENT_STYLES_KEY = 'spritebrew_recent_styles';
@@ -11,6 +12,29 @@ export const MAX_RECENT = 3;
 export interface RecentStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+}
+
+/** One account's key: RECENT_STYLES_KEY, then _ and the userId. */
+export function recentStylesKey(userId: string): string {
+  return `${RECENT_STYLES_KEY}_${userId}`;
+}
+
+/**
+ * `storage` seen through one account's key, for readRecent and writeRecent:
+ * every read and write goes to recentStylesKey(userId). Null without a
+ * userId or a storage, so nothing is read or written. The old key without a
+ * userId is never read, copied or deleted.
+ */
+export function accountRecentStorage(
+  storage: RecentStorage | null | undefined,
+  userId: string | null | undefined,
+): RecentStorage | null {
+  if (!storage || !userId) return null;
+  const key = recentStylesKey(userId);
+  return {
+    getItem: () => storage.getItem(key),
+    setItem: (_key, value) => storage.setItem(key, value),
+  };
 }
 
 /** Keeps known ids only, once each, at most MAX_RECENT. */

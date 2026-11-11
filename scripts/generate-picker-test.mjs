@@ -18,6 +18,13 @@
 // shape now pin the new one. GenerationForm imports nothing new from a money
 // path.
 //
+// Fix round 1 (audit r1 of PR #53; HQ room 2026-11-11-034, ENG -043): the
+// style follows the balance until the person acts (one latch, set in the
+// handlers that act), the form remembers the style for the visit
+// (createFormVisit.ts), Recent is kept per account, and the plural at one
+// token. Check 1e takes createFormVisit as the one more source (George, Nov
+// 11, 2026); the checks that pinned the old shape now pin the new one.
+//
 // Run from the repo root: `node scripts/generate-picker-test.mjs`. Bundles
 // with esbuild into local/.generate-picker-test/ (gitignored). Prints only
 // case names and pass or fail. Wiring checks read the source with comments
@@ -38,7 +45,7 @@ await build({
   alias: { '@': path.join(ROOT, 'src') },
 });
 const load = (name) => import(pathToFileURL(path.join(OUT_DIR, `${name}.mjs`)).href);
-const { RECENT_STYLES_KEY, MAX_RECENT, readRecent, pushRecent, writeRecent, visibleRecent } = await load('recentStyles');
+const { RECENT_STYLES_KEY, MAX_RECENT, readRecent, pushRecent, writeRecent, visibleRecent, recentStylesKey, accountRecentStorage } = await load('recentStyles');
 const { nextIndex } = await load('stylePickerNav');
 const { GENERATION_STYLES, getStyleById } = await load('styleRegistry');
 
@@ -235,6 +242,33 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   list = pushRecent(list, 'pro-fantasy', 'fast-retro');
   list = pushRecent(list, 'fast-retro', 'plus-classic');
   check('3: a walk of three changes reads newest first without the current', same(visibleRecent(list, 'plus-classic'), ['fast-retro', 'pro-fantasy']));
+
+  // Fix round 1 (ENG -043 condition 4): one list per account.
+  const OLD = JSON.stringify(['pro-fantasy', 'anim-vfx']);
+  const raw = new Map([[RECENT_STYLES_KEY, OLD]]);
+  const log = [];
+  const browser = {
+    getItem: (k) => { log.push(['get', k]); return raw.has(k) ? raw.get(k) : null; },
+    setItem: (k, v) => { log.push(['set', k]); raw.set(k, v); },
+  };
+  const a = accountRecentStorage(browser, 'user_a');
+  const b = accountRecentStorage(browser, 'user_b');
+  check('3: an account\'s key is spritebrew_recent_styles_<userId>', recentStylesKey('user_a') === 'spritebrew_recent_styles_user_a');
+  check('3: a new account starts empty even when the old unkeyed list exists', same(readRecent(a, ids), []) && same(readRecent(b, ids), []));
+  writeRecent(a, ['pro-fantasy', 'fast-retro']);
+  writeRecent(b, ['anim-vfx']);
+  check('3: two accounts keep separate lists under their own keys',
+    same(readRecent(a, ids), ['pro-fantasy', 'fast-retro']) && same(readRecent(b, ids), ['anim-vfx'])
+    && raw.get('spritebrew_recent_styles_user_a') === '["pro-fantasy","fast-retro"]' && raw.get('spritebrew_recent_styles_user_b') === '["anim-vfx"]');
+  check('3: the old unkeyed key is never read or written, copied or deleted',
+    log.length > 0 && log.every(([, k]) => k !== RECENT_STYLES_KEY) && raw.get(RECENT_STYLES_KEY) === OLD && raw.size === 3, log);
+  const before = log.length;
+  const none = [accountRecentStorage(browser, null), accountRecentStorage(browser, undefined), accountRecentStorage(browser, '')];
+  none.forEach((st) => writeRecent(st, ['pro-fantasy']));
+  check('3: no userId gives [] and no write', none.every((st) => st === null && same(readRecent(st, ids), [])) && log.length === before && raw.size === 3);
+  check('3: the form reads and writes Recent only through this account\'s storage',
+    /accountRecentStorage\(window\.localStorage, userId\)/.test(form) && /readRecent\(recentStorage\(userId\), STYLE_IDS\)/.test(form)
+    && (form.match(/recentStorage\(/g) ?? []).length === 3 && !/recentStorage\(\)/.test(form) && !/localStorage\.(get|set)Item\([^)]*recent/i.test(form));
 }
 
 // ── 4. stylePickerNav ──
@@ -261,11 +295,11 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
     && /import StyleField from '\.\/StyleField';/.test(form) && /import StylePicker from '\.\/StylePicker';/.test(form));
   check('5: the style card grid is gone (no GROUPED_STYLES, collapsedCategories, toggleCategory, TIER_COLORS, style count note)',
     !/GROUPED_STYLES|collapsedCategories|toggleCategory|TIER_COLORS|styles across/.test(form));
-  check('5: every style change goes through chooseStyle (picker, Recent, lightbox); the opening style is the one other, once',
+  check('5: every style change goes through chooseStyle (picker, Recent, lightbox); the one other follows the balance until the latch',
     /onChoose=\{chooseStyle\}/.test(form) && /onChooseRecent=\{chooseStyle\}/.test(form) && /chooseStyle\(lightboxStyle\.id\)/.test(form)
     && form.match(/setSelectedStyleId\(/g)?.length === 2
-    && /setSelectedStyleId\(id\);\s*setStyleAnnouncement\(/.test(form)
-    && /if \(!serverBalanceKnown \|\| openingAppliedRef\.current\) return;\s*openingAppliedRef\.current = true;\s*const id = openingStyle\(\{ balance: tokenBalance, currentId: selectedStyleId, picked: pickedRef\.current \}\);\s*if \(id !== selectedStyleId\) setSelectedStyleId\(id\);/.test(form));
+    && /formVisit\.rememberStyle\(userId, id\);\s*setSelectedStyleId\(id\);\s*setStyleAnnouncement\(/.test(form)
+    && /useLayoutEffect\(\(\) => \{\s*if \(!serverBalanceKnown \|\| actedRef\.current\) return;\s*const id = openingStyle\(\{ balance: tokenBalance, currentId: selectedStyleId, acted: actedRef\.current \}\);\s*if \(id === selectedStyleId\) return;\s*formVisit\.rememberStyle\(userId, id\);\s*setSelectedStyleId\(id\);\s*\}, \[serverBalanceKnown, tokenBalance, selectedStyleId, userId\]\);/.test(form));
   {
     // Session 1's import sources, plus affordableStyle (which imports only the
     // registry and constants). No money path: debit, balance, Stripe, packs,
@@ -276,13 +310,15 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
     const sources = (text) => [...text.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
     const added = sources(form).filter((src) => !S1.includes(src));
     const affordable = sources(stripComments(read('src/lib/affordableStyle.ts')));
+    const visitSrc = stripComments(read('src/lib/createFormVisit.ts'));
     const MONEY = /token(Debit|Balance|Packs|TxMeta)|stripe|priceQuote|moneyAdmission|moneyPause|purchase/i;
-    check('1e: GenerationForm imports nothing new but affordableStyle, and nothing new from a money path',
-      same(added, ['@/lib/affordableStyle']) && same(affordable.sort(), ['@/lib/constants', '@/lib/styleRegistry'])
+    check('1e: GenerationForm imports nothing new but affordableStyle and createFormVisit (which imports nothing), and nothing new from a money path',
+      same(added, ['@/lib/affordableStyle', '@/lib/createFormVisit']) && same(affordable.sort(), ['@/lib/constants', '@/lib/styleRegistry'])
+      && !/\bimport\b|\brequire\(/.test(visitSrc)
       && [...added, ...affordable].every((src) => !MONEY.test(src)), { added, affordable });
   }
   check('5: chooseStyle updates Recent outside a state updater and announces the change',
-    /const list = pushRecent\(recentIds, selectedStyleId, id\);\s*setRecentIds\(list\);\s*writeRecent\(recentStorage\(\), list\);/.test(form)
+    /const list = pushRecent\(recentIds, selectedStyleId, id\);\s*setRecentIds\(list\);\s*writeRecent\(recentStorage\(userId\), list\);/.test(form)
     && /setStyleAnnouncement\(`Style: \$\{next\.label\}, \$\{next\.tokenCost\} tokens`\)/.test(form) && /aria-live="polite"/.test(form));
   const noCoinEmoji = [form, field, picker].every((s) => !s.includes('\u{1FA99}')) && [formSrc, fieldSrc, pickerSrc].every((s) => !s.includes('\u{1FA99}'));
   check('5: no coin emoji in GenerationForm, StyleField or StylePicker', noCoinEmoji);
@@ -299,7 +335,7 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   check('5: the button\'s aria-describedby names the reason line',
     /aria-describedby=\{disabledReason \? reasonId : undefined\}/.test(form) && /<p id=\{reasonId\}/.test(form)
     && /const reasonId = GENERATION_PAUSED \? 'generate-paused-reason' : 'generate-reason';/.test(form));
-  check('5: the not-enough reason links to Get tokens', /You need \{formatCount\(tokensNeeded\)\} more tokens for this style\./.test(form) && /href="\/buy-tokens"[\s\S]{0,200}Get tokens/.test(form));
+  check('5: the not-enough reason links to Get tokens', /You need \{formatCount\(tokensNeeded\)\} more \{tokensWord\(tokensNeeded\)\} for this style\./.test(form) && /href="\/buy-tokens"[\s\S]{0,200}Get tokens/.test(form));
   check('5: generate/page.tsx has no EarlyAccessBanner', !/EarlyAccessBanner|EARLY_ACCESS_DISMISS_KEY/.test(page));
   check('5: LimitNoticeBanner writes its key when it shows',
     /if \(!dismissed\) \{\s*localStorage\.setItem\(LIMIT_NOTICE_DISMISS_KEY, '1'\);\s*setVisible\(true\);\s*\}/.test(page) && /<LimitNoticeBanner \/>/.test(page) && /<LowBalanceBanner \/>/.test(page));
@@ -342,6 +378,160 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   check('5: the size hint drops "Tokens scale with canvas size."', !/Tokens scale with canvas size/.test(form) && /Larger canvas = more room for detail and extended poses\./.test(form));
   check('5: Generate keeps its pulse but not under reduced motion', /'animate-pulse motion-reduce:animate-none'/.test(form));
   check('5: no em dashes in the files this change made', [fieldSrc, pickerSrc, read('src/components/ui/PixelCoin.tsx'), read('src/lib/recentStyles.ts'), read('src/lib/stylePickerNav.ts')].every((s) => !s.includes('\u2014')));
+}
+
+// ── 6. Fix round 1 ──
+
+{
+  const panel = stripComments(panelSrc);
+  const emailPanel = stripComments(read('src/components/account/EmailListPanel.tsx'));
+
+  // The latch (HQ -034, ENG -043 condition 1): set in the handler that acts.
+  check('6: the latch is set in the prompt box\'s onChange, for a non-empty value only, before the prompt changes',
+    /onChange=\{\(e\) => \{\s*if \(e\.target\.value\) markActed\(\);\s*setPrompt\(e\.target\.value\);\s*\}\}/.test(form));
+  check('6: the latch is set in the example chips\' handler, before the prompt changes',
+    /<ExampleChips\s+onPick=\{\(example\) => \{\s*markActed\(\);\s*setPrompt\(example\);\s*\}\}\s*\/>/.test(form));
+  check('6: chooseStyle sets the latch first, before its return for the current style (the audit\'s uncaught mutation)',
+    /const chooseStyle = useCallback\(\(id: string\) => \{\s*markActed\(\);\s*if \(id === selectedStyleId\) return;/.test(form));
+  // Every effect at the component's top level, by its two-space indent.
+  const effects = [...form.matchAll(/^ {2}use(?:Layout)?Effect\([\s\S]*?^ {2}\}?[^\n]*\);$/gm)].map((m) => m[0]);
+  check('6: the latch is set by those three calls only, through markActed, and in no effect',
+    (form.match(/markActed\(\)/g) ?? []).length === 3 && (form.match(/actedRef\.current = /g) ?? []).length === 1
+    && /const markActed = useCallback\(\(\) => \{\s*actedRef\.current = true;\s*formVisit\.rememberActed\(userId\);\s*\}, \[userId\]\);/.test(form)
+    && effects.length >= 6 && effects.every((e) => !/markActed|actedRef\.current = |rememberActed/.test(e)), effects.length);
+  check('6: the prompt changes in those two handlers only, so no render has a typed prompt without the latch',
+    (form.match(/setPrompt\(/g) ?? []).length === 2);
+  check('6: openingAppliedRef and pickedRef are gone', !/openingAppliedRef|pickedRef|picked:/.test(form));
+  check('6: the form starts from the visit: the remembered style when known, else the default; the latch from the visit',
+    /const \[visitAtMount\] = useState\(\(\) => formVisit\.read\(userId\)\);/.test(form)
+    && /useState\(\(\) => \{\s*const id = visitAtMount\.styleId;\s*return id !== null && getStyleById\(id\) \? id : DEFAULT_STYLE_ID;\s*\}\)/.test(form)
+    && /const actedRef = useRef\(visitAtMount\.acted\);/.test(form) && !/useState\('plus-classic'\)/.test(form));
+
+  // H (audit L2): confirming the current style is a pick.
+  check('6: StylePicker\'s choose calls onChoose for every id, the current one too, then closes (the audit\'s uncaught mutation)',
+    /const choose = \(id: string\) => \{\s*onChoose\(id\);\s*onClose\(\);\s*\};/.test(picker) && !/id !== currentStyleId/.test(picker));
+
+  // K (audit L9): a click on the dialog's text keeps focus inside it.
+  check('6: the picker dialog has tabIndex -1, and the Tab loop still skips the dialog itself',
+    /role="dialog"\s*aria-modal="true"\s*aria-labelledby=\{titleId\}\s*tabIndex=\{-1\}\s*onKeyDown=\{onDialogKeyDown\}/.test(picker)
+    && /dialogRef\.current\.querySelectorAll<HTMLElement>\('button, a\[href\], \[tabindex\]'\),?\s*\)\.filter\(\(el\) => el\.tabIndex >= 0 &&/.test(picker));
+
+  // D (audit L4c): the plural, run from the form's own helper.
+  const helper = formSrc.match(/^const tokensWord = .*;$/m)?.[0] ?? '';
+  let tokensWord = () => 'missing';
+  try {
+    const { code } = await transform(`${helper}\nreturn tokensWord;`, { loader: 'ts' });
+    tokensWord = new Function(code)();
+  } catch { /* stays 'missing' */ }
+  const reason = (n) => `You need ${n} more ${tokensWord(n)} for this style.`;
+  const title = (n) => `Need ${n} more ${tokensWord(n)}`;
+  check('6: the plural: "1 more token" and "Need 1 more token" at exactly 1, "tokens" at 2',
+    reason(1) === 'You need 1 more token for this style.' && reason(2) === 'You need 2 more tokens for this style.'
+    && title(1) === 'Need 1 more token' && title(2) === 'Need 2 more tokens'
+    && form.includes('You need {formatCount(tokensNeeded)} more {tokensWord(tokensNeeded)} for this style.')
+    && form.includes('`Need ${tokensNeeded} more ${tokensWord(tokensNeeded)}`') && !/more tokens for this style|more tokens`/.test(form));
+
+  // F (DESIGN 010 item 3): the bar, rendered from the form's own JSX at both widths.
+  const costStart = formSrc.indexOf('  const summaryCostText = ');
+  const costEnd = formSrc.indexOf('  }`;\n', costStart);
+  const titleSrc = costStart < 0 || costEnd < 0 ? '' : formSrc.slice(costStart, costEnd + 6);
+  const jsxStart = formSrc.indexOf('  const summaryCost = (');
+  const jsxEnd = formSrc.indexOf('\n  );\n', jsxStart);
+  const costJsx = jsxStart < 0 || jsxEnd < 0 ? '' : formSrc.slice(jsxStart, jsxEnd + 5);
+  const pStart = formSrc.indexOf('          <p\n            className="min-w-0 sm:flex-1 truncate');
+  const pEnd = formSrc.indexOf('          </p>\n', pStart);
+  const barJsx = pStart < 0 || pEnd < 0 ? 'null' : formSrc.slice(pStart, pEnd + 14);
+  let renderBar = null;
+  try {
+    const { code } = await transform(
+      `export function bar({ userId, insufficientTokens, tokenCost, tokenBalance, selectedStyle, sizeLabel, isAdmin, formatCount, PixelCoin }) {\n${titleSrc}\n${costJsx}\nreturn (${barJsx});\n}`,
+      { loader: 'tsx', jsx: 'automatic', format: 'esm' },
+    );
+    const file = path.join(OUT_DIR, 'bar.mjs');
+    fs.writeFileSync(file, code);
+    const { bar } = await import(pathToFileURL(file).href);
+    const { renderToStaticMarkup } = await import('react-dom/server');
+    const { createElement } = await import('react');
+    const PixelCoin = () => createElement('i', null, '{coin}');
+    renderBar = (balance, userId = 'user_a') => {
+      const html = renderToStaticMarkup(bar({
+        userId, insufficientTokens: balance < 16, tokenCost: 16, tokenBalance: balance,
+        selectedStyle: { label: 'Classic Pixel Art', costPerGeneration: 0.06 }, sizeLabel: '192', isAdmin: false,
+        formatCount: (n) => n.toLocaleString('en-US'), PixelCoin,
+      }));
+      const text = (h) => h.replace(/<[^>]+>/g, '').replace(/&middot;|·/g, '·').replace(/&amp;/g, '&');
+      // The span with this class, through its own closing tag.
+      const span = (cls) => {
+        const at = html.indexOf(`<span class="${cls}">`);
+        if (at < 0) return '';
+        const tags = /<(\/?)span\b[^>]*>/g;
+        tags.lastIndex = at;
+        let depth = 0;
+        for (let m = tags.exec(html); m; m = tags.exec(html)) {
+          depth += m[1] ? -1 : 1;
+          if (depth === 0) return text(html.slice(at, m.index));
+        }
+        return '';
+      };
+      return { html, narrow: span('sm:hidden'), wide: span('max-sm:hidden inline-flex max-w-full items-center gap-[1ch] align-bottom'), title: (html.match(/title="([^"]*)"/)?.[1] ?? '').replace(/&#x27;/g, "'") };
+    };
+  } catch (e) { renderBar = null; console.log(String(e)); }
+  const short = renderBar?.(8);
+  const covered = renderBar?.(10021);
+  const out = renderBar?.(8, null);
+  check('6: the bar, short balance, under 640 px: "{coin} 16 tokens · you have 8 · Classic Pixel Art · 192 px"',
+    short?.narrow === '{coin}16 tokens · you have 8 · Classic Pixel Art · 192 px', short?.narrow);
+  check('6: the bar, short balance, from 640 px: "Classic Pixel Art · 192 px · {coin} 16 tokens · you have 8"',
+    short?.wide === 'Classic Pixel Art · 192 px · {coin}16 tokens · you have 8', short?.wide);
+  check('6: the bar, short balance: "you have 8" is the red part, and only it',
+    (short?.html.match(/text-red-400/g) ?? []).length === 2 && (short?.html.match(/<span class="text-red-400">you have 8<\/span>/g) ?? []).length === 2);
+  check('6: the bar, short balance: the title reads "Classic Pixel Art · 192 px · 16 tokens · you have 8"',
+    short?.title === 'Classic Pixel Art · 192 px · 16 tokens · you have 8', short?.title);
+  check('6: the bar, covered: "{coin} 16 of 10,021 tokens" at both widths and in the title, nothing red',
+    covered?.narrow === '{coin}16 of 10,021 tokens · Classic Pixel Art · 192 px' && covered?.wide === 'Classic Pixel Art · 192 px · {coin}16 of 10,021 tokens'
+    && covered?.title === 'Classic Pixel Art · 192 px · 16 of 10,021 tokens' && !covered?.html.includes('text-red-400'), covered && [covered.narrow, covered.wide, covered.title]);
+  check('6: the bar, signed out: "{coin} 16 tokens", unchanged',
+    out?.narrow === '{coin}16 tokens · Classic Pixel Art · 192 px' && out?.title === 'Classic Pixel Art · 192 px · 16 tokens' && !out?.html.includes('text-red-400'), out && [out.narrow, out.title]);
+
+  // E (audit L13): both measures run once more when the web font is ready.
+  const fontsReady = /let mounted = true;\s*if \('fonts' in document\) \{\s*void document\.fonts\.ready\.then\(\(\) => \{\s*if \(mounted\) measure\(\);\s*\}\);\s*\}\s*return \(\) => \{\s*mounted = false;/;
+  const chipsAt = form.indexOf('function ExampleChips(');
+  check('6: the chip row and the newsletter field measure again on document.fonts.ready, guarded for no document.fonts and an unmounted component',
+    chipsAt > 0 && fontsReady.test(form.slice(chipsAt)) && fontsReady.test(emailPanel)
+    && /const ro = new ResizeObserver\(measure\);\s*ro\.observe\(row\);/.test(form) && /const ro = new ResizeObserver\(measure\);\s*ro\.observe\(el\);/.test(emailPanel));
+
+  // J (audit L8): Add and the drop zone by keyboard, run from the panel's own source.
+  const fnSrc = (name) => {
+    const at = panelSrc.indexOf(`  const ${name} = `);
+    const end = at < 0 ? -1 : panelSrc.indexOf('\n  };\n', at);
+    return at < 0 || end < 0 ? '' : panelSrc.slice(at, end + 5);
+  };
+  let zone = null;
+  try {
+    const { code } = await transform(`function make(enabled, fileInputRef) {\n${fnSrc('triggerFilePicker')}\n${fnSrc('onDropZoneKeyDown')}\nreturn { triggerFilePicker, onDropZoneKeyDown };\n}`, { loader: 'ts' });
+    const make = new Function(`${code}\nreturn make;`)();
+    zone = (enabled, key) => {
+      let clicks = 0, prevented = 0;
+      const z = make(enabled, { current: { click: () => { clicks++; } } });
+      z.onDropZoneKeyDown({ key, preventDefault: () => { prevented++; } });
+      return { clicks, prevented };
+    };
+  } catch { zone = null; }
+  const enter = zone?.(true, 'Enter');
+  const space = zone?.(true, ' ');
+  const other = zone?.(true, 'a');
+  const disabledEnter = zone?.(false, 'Enter');
+  check('6: the drop zone: Enter and Space open the file picker, other keys do nothing, nothing while disabled',
+    enter?.clicks === 1 && enter?.prevented === 1 && space?.clicks === 1 && space?.prevented === 1
+    && other?.clicks === 0 && other?.prevented === 0 && disabledEnter?.clicks === 0, { enter, space, other, disabledEnter });
+  check('6: the drop zone is a button with a tab stop while enabled, a focus ring and its visible text as its name',
+    /<div\s+role="button"\s+tabIndex=\{enabled \? 0 : -1\}\s+onClick=\{triggerFilePicker\}\s+onKeyDown=\{onDropZoneKeyDown\}\s+onDragOver=\{onDragOver\}\s+onDragLeave=\{onDragLeave\}\s+onDrop=\{onDrop\}\s+aria-disabled=\{!enabled\}/.test(panel)
+    && /focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber \$\{\s*!enabled/.test(panel)
+    && !/role="button"[^>]*aria-label/.test(panel) && panel.includes('Add Images') && panel.includes('Drop images or click to browse'));
+  const inputAt = panel.indexOf('<input\n');
+  check('6: Add, collapsed and empty, opens the panel and the file picker in one press; the file input sits outside the panel',
+    /onClick=\{\(\) => \{\s*if \(!expanded\) triggerFilePicker\(\);\s*setOpen\(\(v\) => !v\);\s*\}\}/.test(panel)
+    && inputAt > 0 && inputAt < panel.indexOf('{expanded && (') && (panel.match(/type="file"/g) ?? []).length === 1);
 }
 
 if (failed > 0) {

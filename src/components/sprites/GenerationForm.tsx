@@ -12,8 +12,9 @@ import {
   getStyleById,
   type GenerationStyle,
 } from '@/lib/styleRegistry';
-import { pushRecent, readRecent, visibleRecent, writeRecent, type RecentStorage } from '@/lib/recentStyles';
-import { affordableNote, openingStyle } from '@/lib/affordableStyle';
+import { accountRecentStorage, pushRecent, readRecent, visibleRecent, writeRecent, type RecentStorage } from '@/lib/recentStyles';
+import { affordableNote, DEFAULT_STYLE_ID, openingStyle } from '@/lib/affordableStyle';
+import { formVisit } from '@/lib/createFormVisit';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
@@ -39,10 +40,11 @@ const EXAMPLE_PROMPTS = [
 
 const STYLE_IDS = GENERATION_STYLES.map((s) => s.id);
 
-/** This browser's localStorage, or null where it cannot be reached. */
-function recentStorage(): RecentStorage | null {
+/** This account's Recent in this browser's localStorage (recentStyles.ts),
+ *  or null where it cannot be reached or no one is signed in. */
+function recentStorage(userId: string | null | undefined): RecentStorage | null {
   try {
-    return typeof window === 'undefined' ? null : window.localStorage;
+    return typeof window === 'undefined' ? null : accountRecentStorage(window.localStorage, userId);
   } catch {
     return null;
   }
@@ -50,6 +52,8 @@ function recentStorage(): RecentStorage | null {
 
 /** Token numbers with thousands separators (10,021). */
 const formatCount = (n: number) => n.toLocaleString('en-US');
+/** "token" at exactly one, "tokens" otherwise. */
+const tokensWord = (n: number) => (n === 1 ? 'token' : 'tokens');
 
 interface GenerationFormProps {
   onGenerated: (imageUrl: string, prompt: string, style: string, animateContext?: FinishedJob['animate'], jobId?: string) => void;
@@ -72,6 +76,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
   const emailListClaimed = useSpriteStore((s) => s.emailListClaimed);
+  const emailListClaimKnown = useSpriteStore((s) => s.emailListClaimKnown);
 
   // Cost visibility for admins: the server's answer on the balance fetch below.
   const [isAdmin, setIsAdmin] = useState(false);
@@ -126,8 +131,15 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   // existing isGenerating boolean (which has a one-render race window).
   const lastGenerateAtRef = useRef<number>(0);
 
+  // What this visit remembers for this account (createFormVisit.ts): the
+  // page rebuilds the form after every result and on every Create or Animate
+  // switch, and it comes back on the same style and the same latch.
+  const [visitAtMount] = useState(() => formVisit.read(userId));
   const [prompt, setPrompt] = useState('');
-  const [selectedStyleId, setSelectedStyleId] = useState('plus-classic');
+  const [selectedStyleId, setSelectedStyleId] = useState(() => {
+    const id = visitAtMount.styleId;
+    return id !== null && getStyleById(id) ? id : DEFAULT_STYLE_ID;
+  });
   const [customWidth, setCustomWidth] = useState(256);
   const [customHeight, setCustomHeight] = useState(256);
   const [removeBg, setRemoveBg] = useState(true);
@@ -136,42 +148,51 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   // Style whose examples are open in the lightbox carousel. null = closed.
   const [lightboxStyle, setLightboxStyle] = useState<GenerationStyle | null>(null);
 
-  // The style picker, Recent styles (per browser) and the polite announcement
-  // of a style change. This form renders only inside the signed-in Show on
-  // /generate, which renders nothing on the server, so Recent can read
-  // localStorage on its first render.
+  // The style picker, Recent styles (per account, in this browser) and the
+  // polite announcement of a style change. This form renders only inside the
+  // signed-in Show on /generate, which renders nothing on the server, so
+  // Recent can read localStorage on its first render.
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [recentIds, setRecentIds] = useState<string[]>(() => readRecent(recentStorage(), STYLE_IDS));
+  const [recentIds, setRecentIds] = useState<string[]>(() => readRecent(recentStorage(userId), STYLE_IDS));
   const [styleAnnouncement, setStyleAnnouncement] = useState('');
   const changeStyleRef = useRef<HTMLButtonElement>(null);
-  // Set by the person's first style choice; the opening style never overrides it.
-  const pickedRef = useRef(false);
-  const openingAppliedRef = useRef(false);
+
+  // The latch: set by the person's first act this visit (a style chosen, the
+  // current one included; a prompt typed; an example tapped), in the handler
+  // that acts, never in an effect, and never cleared. Until it is set the
+  // style follows the balance.
+  const actedRef = useRef(visitAtMount.acted);
+  const markActed = useCallback(() => {
+    actedRef.current = true;
+    formVisit.rememberActed(userId);
+  }, [userId]);
 
   // Every style change goes through here: the picker, a Recent badge and the
   // lightbox's Use this style. Recent is computed from the current values, not
   // inside a state updater, so a double call in development cannot push twice.
   const chooseStyle = useCallback((id: string) => {
-    pickedRef.current = true;
+    markActed();
     if (id === selectedStyleId) return;
     const next = getStyleById(id);
     if (!next) return;
     const list = pushRecent(recentIds, selectedStyleId, id);
     setRecentIds(list);
-    writeRecent(recentStorage(), list);
+    writeRecent(recentStorage(userId), list);
+    formVisit.rememberStyle(userId, id);
     setSelectedStyleId(id);
     setStyleAnnouncement(`Style: ${next.label}, ${next.tokenCost} tokens`);
-  }, [selectedStyleId, recentIds]);
+  }, [selectedStyleId, recentIds, markActed, userId]);
 
-  // The first time this visit learns the server's balance, open on a style it
-  // covers (affordableStyle.ts), once, before paint. Not a choice: Recent and
-  // the announcement stay as they are, and a style the person picked is kept.
+  // Until the person acts, the style follows the server's balance
+  // (affordableStyle.ts) each time it changes, before paint. Not a choice:
+  // Recent and the announcement stay as they are. Never once the latch is set.
   useLayoutEffect(() => {
-    if (!serverBalanceKnown || openingAppliedRef.current) return;
-    openingAppliedRef.current = true;
-    const id = openingStyle({ balance: tokenBalance, currentId: selectedStyleId, picked: pickedRef.current });
-    if (id !== selectedStyleId) setSelectedStyleId(id);
-  }, [serverBalanceKnown, tokenBalance, selectedStyleId]);
+    if (!serverBalanceKnown || actedRef.current) return;
+    const id = openingStyle({ balance: tokenBalance, currentId: selectedStyleId, acted: actedRef.current });
+    if (id === selectedStyleId) return;
+    formVisit.rememberStyle(userId, id);
+    setSelectedStyleId(id);
+  }, [serverBalanceKnown, tokenBalance, selectedStyleId, userId]);
 
   const selectedStyle = useMemo(
     () => getStyleById(selectedStyleId) ?? GENERATION_STYLES[0],
@@ -389,11 +410,20 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     .filter((s): s is GenerationStyle => !!s);
   const sizeLabel = effectiveWidth === effectiveHeight ? `${effectiveWidth}` : `${effectiveWidth}×${effectiveHeight}`;
   // The bar's summary as one string, for its title (the line itself truncates).
-  const summaryText = `${selectedStyle.label} \u00b7 ${sizeLabel} px \u00b7 ${formatCount(tokenCost)}${
-    userId ? ` of ${formatCount(tokenBalance)} tokens` : ' tokens'
-  }${isAdmin ? ` \u00b7 ~$${selectedStyle.costPerGeneration.toFixed(2)}` : ''}`;
+  // A short balance reads "16 tokens · you have 8"; one that covers the
+  // cost, "16 of 10,021 tokens".
+  const summaryCostText = !userId
+    ? `${formatCount(tokenCost)} tokens`
+    : insufficientTokens
+      ? `${formatCount(tokenCost)} tokens \u00b7 you have ${formatCount(tokenBalance)}`
+      : `${formatCount(tokenCost)} of ${formatCount(tokenBalance)} tokens`;
+  const summaryText = `${selectedStyle.label} \u00b7 ${sizeLabel} px \u00b7 ${summaryCostText}${
+    isAdmin ? ` \u00b7 ~$${selectedStyle.costPerGeneration.toFixed(2)}` : ''
+  }`;
   // What the balance buys, once the server has said what it is.
-  const balanceNote = serverBalanceKnown ? affordableNote({ balance: tokenBalance, emailListClaimed }) : null;
+  const balanceNote = serverBalanceKnown
+    ? affordableNote({ balance: tokenBalance, emailListClaimed, emailListClaimKnown })
+    : null;
   const bgLabelId = useId();
   const bgValueId = useId();
 
@@ -406,7 +436,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     } else if (insufficientTokens) {
       disabledReason = (
         <>
-          You need {formatCount(tokensNeeded)} more tokens for this style.{' '}
+          You need {formatCount(tokensNeeded)} more {tokensWord(tokensNeeded)} for this style.{' '}
           <a
             href="/buy-tokens"
             className="inline-flex items-center pointer-coarse:min-h-11 text-accent-amber underline hover:text-accent-amber-strong"
@@ -420,18 +450,24 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     }
   }
 
-  // The bar's coin, cost and balance; the red marks a short balance.
+  // The bar's coin, cost and balance. A short balance reads "16 tokens ·
+  // you have 8", the balance in red.
   const summaryCost = (
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap align-middle">
       <PixelCoin />
       <span>
         {formatCount(tokenCost)}
-        {userId ? (
-          <span className={insufficientTokens ? 'text-red-400' : undefined}>
+        {!userId ? (
+          ' tokens'
+        ) : insufficientTokens ? (
+          <>
+            {' '}tokens &middot;{' '}
+            <span className="text-red-400">you have {formatCount(tokenBalance)}</span>
+          </>
+        ) : (
+          <span>
             {' '}of {formatCount(tokenBalance)} tokens
           </span>
-        ) : (
-          ' tokens'
         )}
       </span>
     </span>
@@ -451,7 +487,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         <textarea
           id="create-prompt"
           value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
+          onChange={(e) => {
+            if (e.target.value) markActed();
+            setPrompt(e.target.value);
+          }}
           placeholder={
             asksForCharacter
               ? 'e.g. a small knight in a blue cape, full body, facing down'
@@ -462,7 +501,12 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
             text-sm font-mono text-text-primary placeholder:text-text-muted resize-none
             focus:outline-none focus:border-accent-amber"
         />
-        <ExampleChips onPick={setPrompt} />
+        <ExampleChips
+          onPick={(example) => {
+            markActed();
+            setPrompt(example);
+          }}
+        />
       </div>
 
       {/* Style: the chosen style, Change style and Recent */}
@@ -607,9 +651,9 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     >
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
-          {/* One line; the full text is in the title. Under 640 px the cost
-              and the balance lead, so the ellipsis only eats the style and
-              the size. */}
+          {/* One line; the full text is in the title. The ellipsis only eats
+              the style and the size: under 640 px the cost and the balance
+              lead; from 640 px they come last and never shrink. */}
           <p
             className="min-w-0 sm:flex-1 truncate text-[13px] font-mono text-text-secondary tabular-nums"
             title={summaryText}
@@ -617,9 +661,9 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
             <span className="sm:hidden">
               {summaryCost} &middot; {selectedStyle.label} &middot; {sizeLabel} px
             </span>
-            <span className="hidden sm:inline">
-              {selectedStyle.label} &middot; {sizeLabel} px &middot;{' '}
-              {summaryCost}
+            <span className="max-sm:hidden inline-flex max-w-full items-center gap-[1ch] align-bottom">
+              <span className="min-w-0 truncate">{selectedStyle.label} &middot; {sizeLabel} px &middot;</span>{' '}
+              <span className="flex-shrink-0">{summaryCost}</span>
             </span>
             {isAdmin && (
               <span> &middot; ~${selectedStyle.costPerGeneration.toFixed(2)}</span>
@@ -638,7 +682,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
               onClick={handleGenerate}
               disabled={GENERATION_PAUSED || !prompt.trim() || isGenerating || insufficientTokens}
               className={`w-full sm:w-auto whitespace-nowrap pointer-coarse:min-h-11 ${!GENERATION_PAUSED && !isGenerating && prompt.trim() && !insufficientTokens ? 'animate-pulse motion-reduce:animate-none' : ''}`}
-              title={GENERATION_PAUSED ? GENERATION_PAUSED_MESSAGE : insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
+              title={GENERATION_PAUSED ? GENERATION_PAUSED_MESSAGE : insufficientTokens ? `Need ${tokensNeeded} more ${tokensWord(tokensNeeded)}` : undefined}
               aria-describedby={disabledReason ? reasonId : undefined}
             >
               {isGenerating ? (
@@ -701,7 +745,15 @@ function ExampleChips({ onPick }: { onPick: (prompt: string) => void }) {
     const ro = new ResizeObserver(measure);
     ro.observe(row);
     row.addEventListener('scroll', measure, { passive: true });
+    // Once more when the web font has loaded: the chips' width changes with it.
+    let mounted = true;
+    if ('fonts' in document) {
+      void document.fonts.ready.then(() => {
+        if (mounted) measure();
+      });
+    }
     return () => {
+      mounted = false;
       ro.disconnect();
       row.removeEventListener('scroll', measure);
     };

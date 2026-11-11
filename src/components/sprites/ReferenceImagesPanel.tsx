@@ -7,6 +7,7 @@ import {
   useCallback,
   useEffect,
   type DragEvent,
+  type KeyboardEvent,
 } from 'react';
 import { X, ImagePlus, AlertCircle } from 'lucide-react';
 
@@ -131,6 +132,13 @@ export default function ReferenceImagesPanel({
     fileInputRef.current?.click();
   };
 
+  // The empty drop zone answers Enter and Space like a button.
+  const onDropZoneKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    triggerFilePicker();
+  };
+
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
     if (!enabled) return;
     e.preventDefault();
@@ -178,7 +186,11 @@ export default function ReferenceImagesPanel({
         {count === 0 && (
           <button
             type="button"
-            onClick={() => setOpen((v) => !v)}
+            onClick={() => {
+              // Collapsed: one press opens the panel and the file picker.
+              if (!expanded) triggerFilePicker();
+              setOpen((v) => !v);
+            }}
             aria-expanded={expanded}
             aria-controls={expanded ? panelId : undefined}
             className="flex-shrink-0 inline-flex items-center gap-1.5 min-h-8 pointer-coarse:min-h-11 px-3 rounded-md
@@ -191,6 +203,17 @@ export default function ReferenceImagesPanel({
         )}
       </div>
 
+      {/* Outside the panel, so Add can open the file picker in the same
+          press that opens the panel. */}
+      <input
+        type="file"
+        accept="image/png,image/jpeg,image/jpg,image/webp,image/gif"
+        multiple
+        ref={fileInputRef}
+        onChange={(e) => void handleFiles(e.target.files)}
+        style={{ display: 'none' }}
+      />
+
       {expanded && (
         <div id={panelId} className="mt-3">
           <p className="text-xs font-mono text-text-secondary leading-relaxed mb-3">
@@ -198,23 +221,18 @@ export default function ReferenceImagesPanel({
             References do NOT preserve a specific character&apos;s identity across new poses.
           </p>
 
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/jpg,image/webp,image/gif"
-            multiple
-            ref={fileInputRef}
-            onChange={(e) => void handleFiles(e.target.files)}
-            style={{ display: 'none' }}
-          />
-
           {count === 0 ? (
             <div
+              role="button"
+              tabIndex={enabled ? 0 : -1}
               onClick={triggerFilePicker}
+              onKeyDown={onDropZoneKeyDown}
               onDragOver={onDragOver}
               onDragLeave={onDragLeave}
               onDrop={onDrop}
               aria-disabled={!enabled}
-              className={`rounded-lg border-2 border-dashed px-4 py-6 flex flex-col items-center justify-center gap-1.5 transition-colors ${
+              className={`rounded-lg border-2 border-dashed px-4 py-6 flex flex-col items-center justify-center gap-1.5 transition-colors
+                focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber ${
                 !enabled
                   ? 'border-border-subtle bg-bg-surface/30 opacity-60 cursor-not-allowed'
                   : isDragging

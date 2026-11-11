@@ -986,7 +986,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         </div>
       )}
       {gifError && gifError.src === generatedImageDataUrl && (
-        <p className="text-[10px] font-mono text-red-400" role="alert">{gifError.message}</p>
+        <p className="text-xs font-mono text-red-400" role="alert">{gifError.message}</p>
       )}
       {sheetFailedSrc !== null && sheetFailedSrc === generatedImageDataUrl && (
         <p className="text-xs font-mono text-red-400" role="alert">Could not make the sheet. Try Download unedited sheet.</p>

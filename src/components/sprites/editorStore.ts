@@ -755,6 +755,14 @@ export const useEditorStore = create<PixelEditorState>()(
 // unsaved-changes confirm from being silently bypassed on dismiss.
 export const selectIsDirty = (s: PixelEditorState) =>
   s.historyIndex > 0 || s.hasAttemptedEdit;
+/** True when the editor's pixels differ from the image it loaded: whether a
+ *  Save has anything to write. The history index cannot answer that: after
+ *  more than MAX_HISTORY steps, Undo back to the oldest kept step leaves the
+ *  index at 0 with the edits still on the canvas, and a Save that trusted
+ *  the index wrote nothing (BUILD-2, Nov 11). An unknown baseline counts as
+ *  changed, so a Save never drops work. */
+export const selectHasPixelChanges = (s: PixelEditorState) =>
+  s.pixels !== null && !pixelsMatchOriginal(s.pixels, s.originalPixels);
 export const selectCanUndo = (s: PixelEditorState) => s.historyIndex > 0;
 export const selectCanRedo = (s: PixelEditorState) =>
   s.historyIndex >= 0 && s.historyIndex < s.historyStack.length - 1;

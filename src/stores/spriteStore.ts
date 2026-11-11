@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { SpriteSheet, SpriteAnimation, SpriteFrame } from '@/lib/types';
 import type { SlicerHints } from '@/lib/generationHistory';
 import type { SheetSessionState } from '@/lib/sheetSession';
+import { EMPTY_CARD, newResult, replaceShown, saveEdit, showVersion, type CardImage, type CardVersion } from '@/lib/cardImage';
 
 /**
  * Rescue metadata for the current generation. Set by AnimateForm's poll-
@@ -45,6 +46,16 @@ interface SpriteStore {
   // Generation state
   generatedImageUrl: string | null;
   generatedImageDataUrl: string | null;
+  /** The versions kept beside the card's image (src/lib/cardImage.ts): the
+   *  sheet as delivered, kept from the first change to the image, for
+   *  "Download original"; the latest editor save and the sheet from before
+   *  the first one, for the card's "Edited" and "Before edit"; and which of
+   *  those two is shown. All null for a result shown as delivered; cleared
+   *  by a new result (setGeneratedImage) and by clearGeneratedImage. */
+  originalGeneratedImageDataUrl: string | null;
+  editedImageDataUrl: string | null;
+  beforeEditImageDataUrl: string | null;
+  cardVersion: CardVersion | null;
   isGenerating: boolean;
   generationError: string | null;
   generationStyle: string | null;
@@ -139,7 +150,17 @@ interface SpriteStore {
   updateFrameData: (frameId: string, newDataUrl: string) => void;
 
   // Generation actions
+  /** A new result on the card (a finished job, a Gallery sheet, an image the
+   *  editor page sends on): nothing of the previous result is kept. */
   setGeneratedImage: (url: string, dataUrl: string) => void;
+  /** An editor save from the card: the edit is shown, and the sheet from
+   *  before it and the delivered sheet are kept. */
+  saveEditedImage: (dataUrl: string) => void;
+  /** Show the card's "Edited" or "Before edit" version. */
+  showCardVersion: (version: CardVersion) => void;
+  /** The shown image is replaced by one made from it for a handoff (the
+   *  card's background removal); the delivered sheet is kept. */
+  setWorkingImage: (dataUrl: string) => void;
   clearGeneratedImage: () => void;
   setGenerating: (loading: boolean) => void;
   setGenerationError: (error: string | null) => void;
@@ -184,6 +205,34 @@ interface SpriteStore {
   clearPendingAnimatorSkipBgRemoval: () => void;
 }
 
+/** The card's image fields as a CardImage, and back. */
+function cardOf(state: SpriteStore): CardImage {
+  return {
+    shown: state.generatedImageDataUrl,
+    original: state.originalGeneratedImageDataUrl,
+    edited: state.editedImageDataUrl,
+    beforeEdit: state.beforeEditImageDataUrl,
+    version: state.cardVersion,
+  };
+}
+function cardFields(card: CardImage) {
+  return {
+    generatedImageUrl: card.shown,
+    generatedImageDataUrl: card.shown,
+    originalGeneratedImageDataUrl: card.original,
+    editedImageDataUrl: card.edited,
+    beforeEditImageDataUrl: card.beforeEdit,
+    cardVersion: card.version,
+  };
+}
+/** Applies a change to the card's image; the state object is kept when the
+ *  change did nothing, so no subscriber runs. */
+function changeCard(state: SpriteStore, change: (card: CardImage) => CardImage): SpriteStore | Partial<SpriteStore> {
+  const card = cardOf(state);
+  const next = change(card);
+  return next === card ? state : { ...cardFields(next), generationError: null };
+}
+
 export const useSpriteStore = create<SpriteStore>((set, get) => ({
   spriteSheet: null,
   selectedFrames: [],
@@ -194,6 +243,10 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
 
   generatedImageUrl: null,
   generatedImageDataUrl: null,
+  originalGeneratedImageDataUrl: null,
+  editedImageDataUrl: null,
+  beforeEditImageDataUrl: null,
+  cardVersion: null,
   isGenerating: false,
   generationError: null,
   generationStyle: null,
@@ -326,12 +379,17 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
     }),
 
   setGeneratedImage: (url, dataUrl) =>
-    set({ generatedImageUrl: url, generatedImageDataUrl: dataUrl, generationError: null }),
+    set({ ...cardFields(newResult(dataUrl)), generatedImageUrl: url, generationError: null }),
+
+  saveEditedImage: (dataUrl) => set((state) => changeCard(state, (card) => saveEdit(card, dataUrl))),
+
+  showCardVersion: (version) => set((state) => changeCard(state, (card) => showVersion(card, version))),
+
+  setWorkingImage: (dataUrl) => set((state) => changeCard(state, (card) => replaceShown(card, dataUrl))),
 
   clearGeneratedImage: () =>
     set({
-      generatedImageUrl: null,
-      generatedImageDataUrl: null,
+      ...cardFields(EMPTY_CARD),
       originalCharacterDataUrl: null,
       rescueInfo: null,
       // Clear any pending handoffs alongside the image — they have nothing

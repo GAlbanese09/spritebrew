@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { SpriteSheet, SpriteAnimation, SpriteFrame } from '@/lib/types';
 import type { SlicerHints } from '@/lib/generationHistory';
 import type { SheetSessionState } from '@/lib/sheetSession';
-import { EMPTY_CARD, newResult, replaceShown, saveEdit, showVersion, type CardImage, type CardVersion } from '@/lib/cardImage';
+import { EMPTY_CARD, handOff, newResult, saveEdit, showVersion, type CardImage, type CardVersion } from '@/lib/cardImage';
 
 /**
  * Rescue metadata for the current generation. Set by AnimateForm's poll-
@@ -46,12 +46,15 @@ interface SpriteStore {
   // Generation state
   generatedImageUrl: string | null;
   generatedImageDataUrl: string | null;
-  /** The versions kept beside the card's image (src/lib/cardImage.ts): the
-   *  sheet as delivered, kept from the first change to the image, for
+  /** The versions kept beside the working image above (src/lib/cardImage.ts):
+   *  the sheet as delivered, kept from the first change to the image, for
    *  "Download original"; the latest editor save and the sheet from before
    *  the first one, for the card's "Edited" and "Before edit"; and which of
-   *  those two is shown. All null for a result shown as delivered; cleared
-   *  by a new result (setGeneratedImage) and by clearGeneratedImage. */
+   *  those two the card shows. The card's switch changes cardVersion only:
+   *  generatedImageDataUrl, which the Slicer, the Animator and the forms
+   *  read, changes with a new result, an editor save and a handoff, never
+   *  with a switch. All null for a result shown as delivered; cleared by a
+   *  new result (setGeneratedImage) and by clearGeneratedImage. */
   originalGeneratedImageDataUrl: string | null;
   editedImageDataUrl: string | null;
   beforeEditImageDataUrl: string | null;
@@ -153,13 +156,15 @@ interface SpriteStore {
   /** A new result on the card (a finished job, a Gallery sheet, an image the
    *  editor page sends on): nothing of the previous result is kept. */
   setGeneratedImage: (url: string, dataUrl: string) => void;
-  /** An editor save from the card: the edit is shown, and the sheet from
-   *  before it and the delivered sheet are kept. */
+  /** An editor save from the card: the edit is shown and becomes the working
+   *  image; the sheet from before it and the delivered sheet are kept. */
   saveEditedImage: (dataUrl: string) => void;
-  /** Show the card's "Edited" or "Before edit" version. */
+  /** Show the card's "Edited" or "Before edit" version: a view change only
+   *  (the working image and any error notice stay as they are). */
   showCardVersion: (version: CardVersion) => void;
-  /** The shown image is replaced by one made from it for a handoff (the
-   *  card's background removal); the delivered sheet is kept. */
+  /** A handoff from the card to the Slicer or the Animator: the image shown,
+   *  or one made from it (the card's background removal), becomes the
+   *  working image; the delivered sheet is kept. */
   setWorkingImage: (dataUrl: string) => void;
   clearGeneratedImage: () => void;
   setGenerating: (loading: boolean) => void;
@@ -208,7 +213,7 @@ interface SpriteStore {
 /** The card's image fields as a CardImage, and back. */
 function cardOf(state: SpriteStore): CardImage {
   return {
-    shown: state.generatedImageDataUrl,
+    working: state.generatedImageDataUrl,
     original: state.originalGeneratedImageDataUrl,
     edited: state.editedImageDataUrl,
     beforeEdit: state.beforeEditImageDataUrl,
@@ -217,8 +222,8 @@ function cardOf(state: SpriteStore): CardImage {
 }
 function cardFields(card: CardImage) {
   return {
-    generatedImageUrl: card.shown,
-    generatedImageDataUrl: card.shown,
+    generatedImageUrl: card.working,
+    generatedImageDataUrl: card.working,
     originalGeneratedImageDataUrl: card.original,
     editedImageDataUrl: card.edited,
     beforeEditImageDataUrl: card.beforeEdit,
@@ -226,11 +231,18 @@ function cardFields(card: CardImage) {
   };
 }
 /** Applies a change to the card's image; the state object is kept when the
- *  change did nothing, so no subscriber runs. */
-function changeCard(state: SpriteStore, change: (card: CardImage) => CardImage): SpriteStore | Partial<SpriteStore> {
+ *  change did nothing, so no subscriber runs. A change that puts a new
+ *  working image on the card (a save, a handoff) clears the error notice,
+ *  as a new result does; a switch between versions leaves it. */
+function changeCard(
+  state: SpriteStore,
+  change: (card: CardImage) => CardImage,
+  clearsError: boolean
+): SpriteStore | Partial<SpriteStore> {
   const card = cardOf(state);
   const next = change(card);
-  return next === card ? state : { ...cardFields(next), generationError: null };
+  if (next === card) return state;
+  return clearsError ? { ...cardFields(next), generationError: null } : cardFields(next);
 }
 
 export const useSpriteStore = create<SpriteStore>((set, get) => ({
@@ -381,11 +393,11 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   setGeneratedImage: (url, dataUrl) =>
     set({ ...cardFields(newResult(dataUrl)), generatedImageUrl: url, generationError: null }),
 
-  saveEditedImage: (dataUrl) => set((state) => changeCard(state, (card) => saveEdit(card, dataUrl))),
+  saveEditedImage: (dataUrl) => set((state) => changeCard(state, (card) => saveEdit(card, dataUrl), true)),
 
-  showCardVersion: (version) => set((state) => changeCard(state, (card) => showVersion(card, version))),
+  showCardVersion: (version) => set((state) => changeCard(state, (card) => showVersion(card, version), false)),
 
-  setWorkingImage: (dataUrl) => set((state) => changeCard(state, (card) => replaceShown(card, dataUrl))),
+  setWorkingImage: (dataUrl) => set((state) => changeCard(state, (card) => handOff(card, dataUrl), true)),
 
   clearGeneratedImage: () =>
     set({

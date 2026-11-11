@@ -1893,7 +1893,9 @@ export default function PixelEditorBody({
                 file with the same doSaveAsDownload that page mode uses and
                 leaves the caller's image alone; the sentence saying so is
                 its tooltip and its description, and its name stays the
-                visible label. */}
+                visible label. The description's span is hidden, so it is
+                read as the button's description only, not a second time as
+                text beside it. */}
             <Button
               variant="ghost"
               size="sm"
@@ -1907,7 +1909,7 @@ export default function PixelEditorBody({
               <span className="md:hidden">{DOWNLOAD_PNG_SHORT}</span>
               <span className="hidden md:inline">{DOWNLOAD_PNG_LABEL}</span>
             </Button>
-            <span id={downloadHintId} className="sr-only">{downloadHint}</span>
+            <span id={downloadHintId} hidden>{downloadHint}</span>
             {/* Primary Save in the always-visible header — replaces the
                 sidepanel footer Save, which lived under `hidden md:flex`
                 and was inaccessible on mobile. Routes through the same

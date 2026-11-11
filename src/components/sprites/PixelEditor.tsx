@@ -165,9 +165,11 @@ export default function PixelEditor({
                 640 px they sit in one row, right-aligned, the primary last;
                 under 640 px they are full width and stacked the other way
                 up, Save and close first. The panel is wide enough (max-w-md)
-                for the row, and no label wraps. Discard is the quiet one. Escape
-                and the backdrop mean Keep editing (onClose above); focus
-                starts on Save and close. */}
+                for the row, and no label wraps. Each is 44 px tall on touch at
+                every width. Discard is the quiet one. Escape and the backdrop
+                mean Keep editing (onClose above). Focus starts on Save and
+                close with a mouse or keyboard; on touch Headless UI gives the
+                dialog itself the focus, so no control is focused. */}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
               <button
                 onClick={() => {
@@ -175,14 +177,14 @@ export default function PixelEditor({
                   void discardEditorDraft(draftKey);
                   onClose();
                 }}
-                className="px-3 py-1.5 min-h-11 sm:min-h-0 rounded text-xs font-mono whitespace-nowrap cursor-pointer
+                className="px-3 py-1.5 min-h-11 sm:min-h-0 sm:pointer-coarse:min-h-11 rounded text-xs font-mono whitespace-nowrap cursor-pointer
                   border border-transparent text-red-400 hover:text-red-300 hover:bg-red-500/10"
               >
                 Discard changes
               </button>
               <button
                 onClick={keepEditing}
-                className="px-3 py-1.5 min-h-11 sm:min-h-0 rounded text-xs font-mono whitespace-nowrap cursor-pointer
+                className="px-3 py-1.5 min-h-11 sm:min-h-0 sm:pointer-coarse:min-h-11 rounded text-xs font-mono whitespace-nowrap cursor-pointer
                   bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle"
               >
                 Keep editing
@@ -193,7 +195,7 @@ export default function PixelEditor({
                   setConfirmOpen(false);
                   saveAndCloseFromConfirm();
                 }}
-                className="px-3 py-1.5 min-h-11 sm:min-h-0 rounded text-xs font-mono whitespace-nowrap cursor-pointer
+                className="px-3 py-1.5 min-h-11 sm:min-h-0 sm:pointer-coarse:min-h-11 rounded text-xs font-mono whitespace-nowrap cursor-pointer
                   border border-transparent bg-accent-amber text-bg-primary hover:bg-accent-amber-strong"
               >
                 Save and close

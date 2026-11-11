@@ -303,9 +303,39 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   check('5: generate/page.tsx has no EarlyAccessBanner', !/EarlyAccessBanner|EARLY_ACCESS_DISMISS_KEY/.test(page));
   check('5: LimitNoticeBanner writes its key when it shows',
     /if \(!dismissed\) \{\s*localStorage\.setItem\(LIMIT_NOTICE_DISMISS_KEY, '1'\);\s*setVisible\(true\);\s*\}/.test(page) && /<LimitNoticeBanner \/>/.test(page) && /<LowBalanceBanner \/>/.test(page));
-  check('5: Character (Pro) shows the cat first', getStyleById('pro-default')?.examplePaths?.[0] === '/style-examples/pro-default-5.png'
-    && same(getStyleById('pro-default')?.examplePaths, [5, 1, 2, 3, 4].map((n) => `/style-examples/pro-default-${n}.png`))
-    && registrySrc.includes("examplePaths: ['/style-examples/pro-default-5.png', '/style-examples/pro-default-1.png',"));
+  {
+    // Session 3 (DESIGN room 2026-11-11-001): one example per style, made
+    // with SpriteBrew, pinned by sha256. Animated styles have none.
+    const EXAMPLE_SHA = {
+      'plus-classic': 'eb03d259c69c9998b54f3944075998f563875d8c1a60c4228ec3ed71c80bb3f5',
+      'pro-default': '735964ff00d371abbfcf33098494a0c59891a4ee95fad126819972fb0e9ebcff',
+      'pro-fantasy': '75bd292534a7aa3dad648a2eb63b26f93f6fed6de6a2f33c54a0d829b4a11bd2',
+      'pro-platformer': 'e1b713051a63cdfeca6bb20604b13bce4a4b5bc5403fd36db980e7ac54dead10',
+      'pro-spritesheet': '9f11b813370a0d142dae52709abf843a9080d63ea02e834d093b0cf4e52adc9a',
+      'pro-inventory': '78f8d76df8403c75f471396134fec45c14ab44fafc8c8daf60d99bbb494e2da6',
+      'pro-fps-weapon': '87badc2ab00899a2cc14847a1193114e7864ccd94abbf0d5c6f24d0ae08d0150',
+      'pro-hex-tiles': '5d0215fd24cb3adea3b72242a1af19225a68f5f750bb5ad9791a2b66c3a1cea3',
+      'pro-typography': '334d70afbd139fbc35f5e74fc182fae7186b90c3e7cdd631106808e2107ca06b',
+      'plus-low-res': 'dcd101d9c6981b01d2afc27810a6874d75cc73614fbf4b173476eefb86b79968',
+      'plus-skill-icon': 'c2c2cb8a7bb45548358651dd65b0f80af15b599a6dd59eac1ad53fd9fd75e387',
+      'plus-topdown-item': '5abcd2f9e102b90fc79002ba99609666ec01936772b6b892f58b3ff7f65c5857',
+      'plus-mc-item': '920dbb69c9fb47f9a6c41f366ac3c276765989a778179563685c0996b6ab8365',
+      'fast-retro': '5a9977d26a5aaf76a21b1af0455d43e8f4bfec96c6eed013e20edea35a8780f0',
+      'fast-no-style': 'bdf7c1dbc0f0f647921b790fe2174f2de092d268b0e335eed8fdf7b042fe0e83',
+    };
+    const fileSha = (p) => {
+      try { return createHash('sha256').update(fs.readFileSync(path.join(ROOT, 'public', p))).digest('hex'); } catch { return null; }
+    };
+    const bad = Object.entries(EXAMPLE_SHA).filter(([id, sha]) => {
+      const paths = getStyleById(id)?.examplePaths;
+      return !same(paths, [`/style-examples/${id}-1.png`]) || fileSha(paths[0]) !== sha
+        || !registrySrc.includes(`examplePaths: ['/style-examples/${id}-1.png'],`);
+    }).map(([id]) => id);
+    const animWithExamples = GENERATION_STYLES.filter((s) => s.isAnimation && s.examplePaths !== undefined).map((s) => s.id);
+    const withExamples = GENERATION_STYLES.filter((s) => s.examplePaths !== undefined).map((s) => s.id).sort();
+    check('5: every style\'s one example is ours (15 ids, <id>-1.png, sha256 pinned); no animated style has examplePaths',
+      bad.length === 0 && animWithExamples.length === 0 && same(withExamples, Object.keys(EXAMPLE_SHA).sort()), { bad, animWithExamples });
+  }
   const tiny = /text-\[(8|9|10|11)px\]/;
   const tinyIn = [['GenerationForm', formSrc], ['StyleField', fieldSrc], ['StylePicker', pickerSrc], ['ReferenceImagesPanel', panelSrc]].filter(([, s]) => tiny.test(s)).map(([n]) => n);
   check('5: no text-[8px], text-[9px], text-[10px] or text-[11px] in the form, field, picker or reference panel', tinyIn.length === 0, tinyIn);

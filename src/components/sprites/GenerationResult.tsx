@@ -696,13 +696,13 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         ref={containerRef}
         className="rounded-lg border border-border-default bg-bg-elevated p-4 overflow-auto"
       >
-        {/* An animate result keeps the loop and the sheet in one grid cell,
-            the one not shown invisible, so the box keeps its height when the
-            view switches. */}
+        {/* An animate result keeps the loop and the sheet in one grid cell.
+            The one not shown is invisible and takes no height, so the box is
+            as tall as the view shown. */}
         <div className={loopGeometry ? 'grid grid-cols-[minmax(0,1fr)]' : undefined}>
           {loopGeometry && (
             <div
-              className={`[grid-area:1/1] self-center mx-auto ${showLoop ? '' : 'invisible'}`}
+              className={`[grid-area:1/1] self-center mx-auto ${showLoop ? '' : 'invisible h-0 overflow-hidden'}`}
               inert={!showLoop}
               aria-hidden={!showLoop || undefined}
               style={{
@@ -724,11 +724,12 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
               />
             </div>
           )}
-          {/* The sheet image stays mounted while the loop shows (invisible) so
-              its onLoad keeps feeding naturalDims and the fit zoom. */}
+          {/* The sheet image stays mounted while the loop shows (invisible,
+              no size) so its onLoad keeps feeding naturalDims and the fit
+              zoom, and its zoom holds for Sheet view. */}
           <div
             className={loopGeometry
-              ? `[grid-area:1/1] self-center [justify-self:safe_center] inline-block ${showLoop ? 'invisible' : ''}`
+              ? `[grid-area:1/1] self-center [justify-self:safe_center] inline-block ${showLoop ? 'invisible w-0 h-0 overflow-hidden' : ''}`
               : 'inline-block mx-auto'}
             inert={showLoop}
             style={{

@@ -27,13 +27,14 @@ import StylePicker from './StylePicker';
 /** The browser steps for finishing a job's result (see jobResult.ts). */
 const JOB_RESULT_IO: JobResultIO = { despill: despillIfTransparent, decodedSize };
 
+/** Each chip shows one word and fills its full prompt. */
 const EXAMPLE_PROMPTS = [
-  'pixel art knight with sword',
-  'small goblin with wooden club',
-  'wizard with blue robe and staff',
-  'skeleton warrior with shield',
-  'cute slime monster',
-  'robot with laser gun',
+  { label: 'Knight', prompt: 'pixel art knight with sword' },
+  { label: 'Goblin', prompt: 'small goblin with wooden club' },
+  { label: 'Wizard', prompt: 'wizard with blue robe and staff' },
+  { label: 'Skeleton', prompt: 'skeleton warrior with shield' },
+  { label: 'Slime', prompt: 'cute slime monster' },
+  { label: 'Robot', prompt: 'robot with laser gun' },
 ];
 
 const STYLE_IDS = GENERATION_STYLES.map((s) => s.id);
@@ -419,6 +420,23 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     }
   }
 
+  // The bar's coin, cost and balance; the red marks a short balance.
+  const summaryCost = (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap align-middle">
+      <PixelCoin />
+      <span>
+        {formatCount(tokenCost)}
+        {userId ? (
+          <span className={insufficientTokens ? 'text-red-400' : undefined}>
+            {' '}of {formatCount(tokenBalance)} tokens
+          </span>
+        ) : (
+          ' tokens'
+        )}
+      </span>
+    </span>
+  );
+
   return (
     <>
     <div className="space-y-6">
@@ -444,22 +462,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
             text-sm font-mono text-text-primary placeholder:text-text-muted resize-none
             focus:outline-none focus:border-accent-amber"
         />
-        {/* One row that never wraps; the chips past the row's width scroll
-            sideways inside it. */}
-        <div className="flex flex-nowrap gap-1.5 mt-3 overflow-x-auto overscroll-x-contain pb-1">
-          {EXAMPLE_PROMPTS.map((ex) => (
-            <button
-              key={ex}
-              type="button"
-              onClick={() => setPrompt(ex)}
-              className="flex-shrink-0 whitespace-nowrap inline-flex items-center min-h-8 pointer-coarse:min-h-11 px-3 rounded-2xl text-[13px] font-mono
-                bg-bg-secondary text-text-secondary border border-border-default
-                hover:bg-bg-hover hover:text-text-secondary cursor-pointer transition-colors"
-            >
-              {ex}
-            </button>
-          ))}
-        </div>
+        <ExampleChips onPick={setPrompt} />
       </div>
 
       {/* Style: the chosen style, Change style and Recent */}
@@ -604,24 +607,19 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     >
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
-          {/* One line; the full text is in the title. */}
+          {/* One line; the full text is in the title. Under 640 px the cost
+              and the balance lead, so the ellipsis only eats the style and
+              the size. */}
           <p
             className="min-w-0 sm:flex-1 truncate text-[13px] font-mono text-text-secondary tabular-nums"
             title={summaryText}
           >
-            {selectedStyle.label} &middot; {sizeLabel} px &middot;{' '}
-            <span className="inline-flex items-center gap-1.5 whitespace-nowrap align-middle">
-              <PixelCoin />
-              <span>
-                {formatCount(tokenCost)}
-                {userId ? (
-                  <span className={insufficientTokens ? 'text-red-400' : undefined}>
-                    {' '}of {formatCount(tokenBalance)} tokens
-                  </span>
-                ) : (
-                  ' tokens'
-                )}
-              </span>
+            <span className="sm:hidden">
+              {summaryCost} &middot; {selectedStyle.label} &middot; {sizeLabel} px
+            </span>
+            <span className="hidden sm:inline">
+              {selectedStyle.label} &middot; {sizeLabel} px &middot;{' '}
+              {summaryCost}
             </span>
             {isAdmin && (
               <span> &middot; ~${selectedStyle.costPerGeneration.toFixed(2)}</span>
@@ -652,7 +650,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
                 <>
                   <Sparkles size={16} />
                   Generate
-                  <span className="hidden sm:inline-flex items-center gap-1.5 tabular-nums">
+                  <span className="inline-flex items-center gap-1.5 tabular-nums">
                     &middot; <PixelCoin /> {formatCount(tokenCost)}
                   </span>
                 </>
@@ -683,5 +681,56 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       onClose={() => setPickerOpen(false)}
     />
     </>
+  );
+}
+
+/**
+ * The example chips: one row that never wraps; the chips past the row's width
+ * scroll sideways inside it. A fade at the right edge shows while more chips
+ * sit past it.
+ */
+function ExampleChips({ onPick }: { onPick: (prompt: string) => void }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [moreRight, setMoreRight] = useState(false);
+
+  useEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    const measure = () => setMoreRight(row.scrollLeft + row.clientWidth < row.scrollWidth - 1);
+    // A ResizeObserver reports once on observe, so this also takes the first measure.
+    const ro = new ResizeObserver(measure);
+    ro.observe(row);
+    row.addEventListener('scroll', measure, { passive: true });
+    return () => {
+      ro.disconnect();
+      row.removeEventListener('scroll', measure);
+    };
+  }, []);
+
+  return (
+    <div className="relative mt-3">
+      <div ref={rowRef} className="flex flex-nowrap gap-1.5 overflow-x-auto overscroll-x-contain pb-1">
+        {EXAMPLE_PROMPTS.map((ex) => (
+          <button
+            key={ex.label}
+            type="button"
+            onClick={() => onPick(ex.prompt)}
+            aria-label={`Use example: ${ex.prompt}`}
+            title={`Use example: ${ex.prompt}`}
+            className="flex-shrink-0 whitespace-nowrap inline-flex items-center min-h-8 pointer-coarse:min-h-11 px-3 rounded-2xl text-[13px] font-mono
+              bg-bg-secondary text-text-secondary border border-border-default
+              hover:bg-bg-hover hover:text-text-secondary cursor-pointer transition-colors"
+          >
+            {ex.label}
+          </button>
+        ))}
+      </div>
+      {moreRight && (
+        <div
+          className="pointer-events-none absolute top-0 right-0 bottom-1 w-6 bg-linear-to-r from-transparent to-bg-surface"
+          aria-hidden="true"
+        />
+      )}
+    </div>
   );
 }

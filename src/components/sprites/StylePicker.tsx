@@ -9,7 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, Film, X } from 'lucide-react';
+import { Check, Film, Play, X } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import PixelCoin from '@/components/ui/PixelCoin';
 import {
@@ -19,6 +19,7 @@ import {
   type StyleCategory,
 } from '@/lib/styleRegistry';
 import { nextIndex } from '@/lib/stylePickerNav';
+import { ANIMATED_STILLS, stillFrameStyle } from './animatedStills';
 
 const CATEGORY_NAMES: Record<StyleCategory, string> = {
   characters: 'Characters',
@@ -314,6 +315,7 @@ function PickerDialog({ currentStyleId, onChoose, onClose }: StylePickerProps) {
               {styles.map((s, i) => {
                 const isPending = s.id === pending;
                 const example = s.examplePaths?.[0];
+                const still = ANIMATED_STILLS[s.id];
                 return (
                   <button
                     key={s.id}
@@ -345,6 +347,16 @@ function PickerDialog({ currentStyleId, onChoose, onClose }: StylePickerProps) {
                           className="absolute inset-0 w-full h-full object-contain"
                           style={{ imageRendering: 'pixelated' }}
                         />
+                      ) : still ? (
+                        <>
+                          <span className="absolute inset-0" style={stillFrameStyle(still)} aria-hidden="true" />
+                          <span
+                            className="absolute bottom-1 right-1 flex items-center justify-center w-4 h-4 rounded bg-black/60 text-white"
+                            aria-hidden="true"
+                          >
+                            <Play size={10} fill="currentColor" />
+                          </span>
+                        </>
                       ) : (
                         <Film size={32} className="text-text-secondary" aria-hidden="true" />
                       )}

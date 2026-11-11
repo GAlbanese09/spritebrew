@@ -1,10 +1,11 @@
 'use client';
 
 import { forwardRef, useEffect, useId, useRef, useState } from 'react';
-import { Film } from 'lucide-react';
+import { Film, Play } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import PixelCoin from '@/components/ui/PixelCoin';
 import type { GenerationStyle } from '@/lib/styleRegistry';
+import { ANIMATED_STILLS, stillFrameStyle } from './animatedStills';
 
 interface StyleFieldProps {
   style: GenerationStyle;
@@ -17,10 +18,11 @@ interface StyleFieldProps {
 }
 
 /**
- * The Create form's style field: the chosen style's first example, its name,
- * description and cost, and Change style (opens StylePicker). Recent sits
- * under it. The field's height is the same for every style. The forwarded ref
- * is the Change style button, so the picker can hand focus back to it.
+ * The Create form's style field: the chosen style's first example (a still
+ * frame for three animated styles), its name, description and cost, and
+ * Change style (opens StylePicker). Recent sits under it. The field's height
+ * is the same for every style. The forwarded ref is the Change style button,
+ * so the picker can hand focus back to it.
  */
 const StyleField = forwardRef<HTMLButtonElement, StyleFieldProps>(function StyleField(
   { style, recent, pickerOpen, onOpenPicker, onViewExamples, onChooseRecent },
@@ -28,6 +30,7 @@ const StyleField = forwardRef<HTMLButtonElement, StyleFieldProps>(function Style
 ) {
   const labelId = useId();
   const hasExamples = !!style.examplePaths && style.examplePaths.length > 0;
+  const still = ANIMATED_STILLS[style.id];
   const unit = style.isAnimation ? 'per animation' : 'per sprite';
 
   return (
@@ -55,6 +58,16 @@ const StyleField = forwardRef<HTMLButtonElement, StyleFieldProps>(function Style
                   style={{ imageRendering: 'pixelated' }}
                 />
               </button>
+            ) : still ? (
+              <div className="relative flex-shrink-0 w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-[#151311] overflow-hidden">
+                <div className="absolute inset-0" style={stillFrameStyle(still)} aria-hidden="true" />
+                <span
+                  className="absolute bottom-1 right-1 flex items-center justify-center w-4 h-4 rounded bg-black/60 text-white"
+                  aria-hidden="true"
+                >
+                  <Play size={10} fill="currentColor" />
+                </span>
+              </div>
             ) : (
               <div className="flex-shrink-0 w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-[#151311] flex items-center justify-center">
                 <Film size={32} className="text-text-secondary" aria-hidden="true" />

@@ -10,6 +10,13 @@
 // 4. Source pins: the landing page, layout.tsx, the result card, the
 //    Gallery, /upload, buy-tokens/page.tsx and the registry.
 //
+// Session 3 (DESIGN room 2026-11-11-001, -008; BUILD 2026-11-11-002):
+// 5. animatedStills.ts: the three stills and the CSS for one frame.
+// 6. public/style-examples/ holds exactly the 18 files, sha256 pinned.
+// 7. Source pins: the chips, the bar under 640 px, the held reference
+//    images, the stills in the picker and the field, the lightbox, and the
+//    result card's Playing view.
+//
 // Run from the repo root: `node scripts/polish-pr2-test.mjs`. Bundles with
 // esbuild into local/.polish-pr2-test/ (gitignored). Prints only case names
 // and pass or fail. Source pins read the source with comments stripped.
@@ -24,9 +31,10 @@ const ROOT = process.cwd();
 const OUT_DIR = path.join(ROOT, 'local', '.polish-pr2-test');
 
 await build({
-  entryPoints: ['src/lib/affordableStyle.ts', 'src/lib/middleEllipsis.ts', 'src/lib/sheetSession.ts', 'src/lib/styleRegistry.ts', 'src/lib/constants.ts']
+  entryPoints: ['src/lib/affordableStyle.ts', 'src/lib/middleEllipsis.ts', 'src/lib/sheetSession.ts', 'src/lib/styleRegistry.ts', 'src/lib/constants.ts',
+    'src/components/sprites/animatedStills.ts']
     .map((p) => path.join(ROOT, p)),
-  bundle: true, format: 'esm', platform: 'node', outdir: OUT_DIR, outExtension: { '.js': '.mjs' }, logLevel: 'silent',
+  bundle: true, format: 'esm', platform: 'node', outdir: OUT_DIR, outExtension: { '.js': '.mjs' }, entryNames: '[name]', logLevel: 'silent',
   alias: { '@': path.join(ROOT, 'src') },
 });
 const load = (name) => import(pathToFileURL(path.join(OUT_DIR, `${name}.mjs`)).href);
@@ -35,6 +43,7 @@ const { middleEllipsis } = await load('middleEllipsis');
 const { sheetLeaveLosesWork } = await load('sheetSession');
 const { getStyleById, GENERATION_STYLES } = await load('styleRegistry');
 const { DAILY_LOGIN_TOKENS, EMAIL_LIST_BONUS_TOKENS } = await load('constants');
+const { ANIMATED_STILLS, stillFrameStyle } = await load('animatedStills');
 
 let failed = 0;
 let cases = 0;
@@ -198,6 +207,120 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
 
   const anyAnim = getStyleById('anim-any');
   check('4: anim-any\'s description has no em dash', anyAnim.description === 'Open-ended animation: AI decides the layout' && !anyAnim.description.includes('\u2014'));
+}
+
+// ── 5. animatedStills ──
+
+{
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  check('5: the three stills: file, cols, rows, frame', same(ANIMATED_STILLS, {
+    'anim-4angle-walking': { file: '/style-examples/anim-4angle-walking-1.png', cols: 4, rows: 4, frame: 8 },
+    'anim-small-sprites': { file: '/style-examples/anim-small-sprites-1.png', cols: 5, rows: 4, frame: 0 },
+    'anim-any': { file: '/style-examples/anim-any-1.png', cols: 4, rows: 4, frame: 0 },
+  }), ANIMATED_STILLS);
+  const css = (file, size, position) => ({
+    backgroundImage: `url(${file})`, backgroundSize: size, backgroundPosition: position, backgroundRepeat: 'no-repeat', imageRendering: 'pixelated',
+  });
+  const walking = stillFrameStyle(ANIMATED_STILLS['anim-4angle-walking'] ?? {});
+  check('5: 4-Angle Walking: frame 8 of a 4 by 4 sheet is column 0, row 2',
+    same(walking, css('/style-examples/anim-4angle-walking-1.png', '400% 400%', '0% 66.6667%')), walking);
+  const small = stillFrameStyle(ANIMATED_STILLS['anim-small-sprites'] ?? {});
+  const any = stillFrameStyle(ANIMATED_STILLS['anim-any'] ?? {});
+  check('5: Small Sprites (5 by 4) and Custom Animation (4 by 4) show frame 0',
+    same(small, css('/style-examples/anim-small-sprites-1.png', '500% 400%', '0% 0%'))
+    && same(any, css('/style-examples/anim-any-1.png', '400% 400%', '0% 0%')), { small, any });
+  const last = stillFrameStyle({ file: '/x.png', cols: 5, rows: 4, frame: 19 });
+  check('5: the last column and last row land at 100% 100%', last.backgroundPosition === '100% 100%', last.backgroundPosition);
+  const oneCol = stillFrameStyle({ file: '/x.png', cols: 1, rows: 4, frame: 2 });
+  const oneRow = stillFrameStyle({ file: '/x.png', cols: 4, rows: 1, frame: 3 });
+  check('5: a one-column and a one-row sheet: no division by zero',
+    oneCol.backgroundSize === '100% 400%' && oneCol.backgroundPosition === '0% 66.6667%'
+    && oneRow.backgroundSize === '400% 100%' && oneRow.backgroundPosition === '100% 0%', { oneCol, oneRow });
+}
+
+// ── 6. public/style-examples/ ──
+
+{
+  const FILES = {
+    'plus-classic-1.png': 'eb03d259c69c9998b54f3944075998f563875d8c1a60c4228ec3ed71c80bb3f5',
+    'pro-default-1.png': '735964ff00d371abbfcf33098494a0c59891a4ee95fad126819972fb0e9ebcff',
+    'pro-fantasy-1.png': '75bd292534a7aa3dad648a2eb63b26f93f6fed6de6a2f33c54a0d829b4a11bd2',
+    'pro-platformer-1.png': 'e1b713051a63cdfeca6bb20604b13bce4a4b5bc5403fd36db980e7ac54dead10',
+    'pro-spritesheet-1.png': '9f11b813370a0d142dae52709abf843a9080d63ea02e834d093b0cf4e52adc9a',
+    'pro-inventory-1.png': '78f8d76df8403c75f471396134fec45c14ab44fafc8c8daf60d99bbb494e2da6',
+    'pro-fps-weapon-1.png': '87badc2ab00899a2cc14847a1193114e7864ccd94abbf0d5c6f24d0ae08d0150',
+    'pro-hex-tiles-1.png': '5d0215fd24cb3adea3b72242a1af19225a68f5f750bb5ad9791a2b66c3a1cea3',
+    'pro-typography-1.png': '334d70afbd139fbc35f5e74fc182fae7186b90c3e7cdd631106808e2107ca06b',
+    'plus-low-res-1.png': 'dcd101d9c6981b01d2afc27810a6874d75cc73614fbf4b173476eefb86b79968',
+    'plus-skill-icon-1.png': 'c2c2cb8a7bb45548358651dd65b0f80af15b599a6dd59eac1ad53fd9fd75e387',
+    'plus-topdown-item-1.png': '5abcd2f9e102b90fc79002ba99609666ec01936772b6b892f58b3ff7f65c5857',
+    'plus-mc-item-1.png': '920dbb69c9fb47f9a6c41f366ac3c276765989a778179563685c0996b6ab8365',
+    'fast-retro-1.png': '5a9977d26a5aaf76a21b1af0455d43e8f4bfec96c6eed013e20edea35a8780f0',
+    'fast-no-style-1.png': 'bdf7c1dbc0f0f647921b790fe2174f2de092d268b0e335eed8fdf7b042fe0e83',
+    'anim-4angle-walking-1.png': '0fc188f607a9ab132b6dd08ed92b810b5f4fab2ac714324b8498acd1e7d8400a',
+    'anim-small-sprites-1.png': '82ea5584c8e938b50d93cda83b1ddd6502fe236174b94421a6b0b3622aa75bf9',
+    'anim-any-1.png': '26e73a5514b959324caab0be204ab0de247dbb8de6e9985b7a4775ff0a07e46c',
+  };
+  const dir = path.join(ROOT, 'public', 'style-examples');
+  const names = fs.readdirSync(dir).sort();
+  const bad = names.filter((n) => FILES[n] !== createHash('sha256').update(fs.readFileSync(path.join(dir, n))).digest('hex'));
+  check('6: public/style-examples/ holds exactly the 18 files, each with its sha256',
+    names.length === 18 && JSON.stringify(names) === JSON.stringify(Object.keys(FILES).sort()) && bad.length === 0, { count: names.length, bad });
+}
+
+// ── 7. Source pins, session 3 ──
+
+{
+  const form = stripComments(read('src/components/sprites/GenerationForm.tsx'));
+  const CHIPS = [['Knight', 'pixel art knight with sword'], ['Goblin', 'small goblin with wooden club'], ['Wizard', 'wizard with blue robe and staff'],
+    ['Skeleton', 'skeleton warrior with shield'], ['Slime', 'cute slime monster'], ['Robot', 'robot with laser gun']];
+  check('7: the six chips: one word each, paired with its full prompt',
+    CHIPS.every(([label, prompt]) => form.includes(`{ label: '${label}', prompt: '${prompt}' }`))
+    && (form.match(/\{ label: '[^']*', prompt: '[^']*' \}/g) ?? []).length === 6
+    && /onClick=\{\(\) => onPick\(ex\.prompt\)\}/.test(form) && /\{ex\.label\}\s*<\/button>/.test(form));
+  check('7: each chip carries "Use example:" in aria-label and title',
+    form.includes('aria-label={`Use example: ${ex.prompt}`}') && form.includes('title={`Use example: ${ex.prompt}`}'));
+  check('7: the chip row fades at its right edge only while more chips sit past it',
+    /\{moreRight && \(\s*<div\s+className="pointer-events-none absolute top-0 right-0 bottom-1 w-6 bg-linear-to-r from-transparent to-bg-surface"/.test(form)
+    && /setMoreRight\(row\.scrollLeft \+ row\.clientWidth < row\.scrollWidth - 1\)/.test(form)
+    && /className="flex flex-nowrap gap-1\.5 overflow-x-auto/.test(form));
+  check('7: under 640 px the bar leads with the cost and the balance; from 640 px it reads as before',
+    /<span className="sm:hidden">\s*\{summaryCost\} &middot; \{selectedStyle\.label\} &middot; \{sizeLabel\} px\s*<\/span>/.test(form)
+    && /<span className="hidden sm:inline">\s*\{selectedStyle\.label\} &middot; \{sizeLabel\} px &middot;\{' '\}\s*\{summaryCost\}\s*<\/span>/.test(form)
+    && /<span className=\{insufficientTokens \? 'text-red-400' : undefined\}>\s*\{' '\}of \{formatCount\(tokenBalance\)\} tokens/.test(form)
+    && /className="min-w-0 sm:flex-1 truncate /.test(form));
+  check('7: the Generate button carries the cost at every width (no hidden sm:inline-flex)',
+    !form.includes('hidden sm:inline-flex') && /<span className="inline-flex items-center gap-1\.5 tabular-nums">\s*&middot; <PixelCoin \/> \{formatCount\(tokenCost\)\}/.test(form));
+
+  const panel = stripComments(read('src/components/sprites/ReferenceImagesPanel.tsx'));
+  check('7: held reference images on a non-Pro style: the one and the many sentences, no "will be sent"',
+    !panel.includes('will be sent')
+    && /\{count === 1 && \(\s*<> Your image is kept and will be used if you switch to a Pro style\.<\/>/.test(panel)
+    && /\{count > 1 && \(\s*<> Your \{count\} images are kept and will be used if you switch to a Pro style\.<\/>/.test(panel)
+    && panel.includes('Reference images: Pro styles only.'));
+  check('7: the Add button names its panel only while the panel is rendered',
+    panel.includes('aria-controls={expanded ? panelId : undefined}') && !panel.includes('aria-controls={panelId}'));
+
+  const picker = stripComments(read('src/components/sprites/StylePicker.tsx'));
+  const field = stripComments(read('src/components/sprites/StyleField.tsx'));
+  const BADGE = '"absolute bottom-1 right-1 flex items-center justify-center w-4 h-4 rounded bg-black/60 text-white"';
+  check('7: StylePicker and StyleField read the stills map, show the badge and still hold the Film icon',
+    [picker, field].every((src) => /import \{ ANIMATED_STILLS, stillFrameStyle \} from '\.\/animatedStills';/.test(src)
+      && /style=\{stillFrameStyle\(still\)\} aria-hidden="true"/.test(src)
+      && src.includes(`className=${BADGE}`) && /<Play size=\{10\} fill="currentColor" \/>/.test(src)
+      && /<Film size=\{32\}/.test(src))
+    && /const still = ANIMATED_STILLS\[s\.id\];/.test(picker) && /const still = ANIMATED_STILLS\[style\.id\];/.test(field));
+
+  const lightbox = fs.readFileSync(path.join(ROOT, 'src/components/sprites/StyleExamplesLightbox.tsx'));
+  const blob = createHash('sha1').update(Buffer.concat([Buffer.from(`blob ${lightbox.length}\0`), lightbox])).digest('hex');
+  check('7: StyleExamplesLightbox.tsx is unchanged (blob 58a7a957, as at 886df520)', blob === '58a7a95753becd13d98ff75f2827e6bda9e81d8f', blob);
+
+  const result = stripComments(read('src/components/sprites/GenerationResult.tsx'));
+  check('7: the result card: the sheet takes no height while Playing, the loop none in Sheet view, and the frame strip keeps its space',
+    result.includes("[grid-area:1/1] self-center [justify-self:safe_center] inline-block ${showLoop ? 'invisible w-0 h-0 overflow-hidden' : ''}")
+    && result.includes("[grid-area:1/1] self-center mx-auto ${showLoop ? '' : 'invisible h-0 overflow-hidden'}")
+    && /<div className=\{showLoop \? undefined : 'invisible'\} inert=\{!showLoop\} aria-hidden=\{!showLoop \|\| undefined\}>\s*<LoopFrameStrip/.test(result)
+    && /onLoad=\{\(e\) => \{\s*const nw = e\.currentTarget\.naturalWidth;/.test(result));
 }
 
 if (failed > 0) {

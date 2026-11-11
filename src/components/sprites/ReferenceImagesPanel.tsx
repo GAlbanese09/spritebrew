@@ -158,8 +158,11 @@ export default function ReferenceImagesPanel({
     return (
       <p className="text-[13px] font-mono text-text-secondary">
         Reference images: Pro styles only.
-        {count > 0 && (
-          <> Your {count} will be sent if you switch back to a Pro style.</>
+        {count === 1 && (
+          <> Your image is kept and will be used if you switch to a Pro style.</>
+        )}
+        {count > 1 && (
+          <> Your {count} images are kept and will be used if you switch to a Pro style.</>
         )}
       </p>
     );
@@ -177,7 +180,7 @@ export default function ReferenceImagesPanel({
             type="button"
             onClick={() => setOpen((v) => !v)}
             aria-expanded={expanded}
-            aria-controls={panelId}
+            aria-controls={expanded ? panelId : undefined}
             className="flex-shrink-0 inline-flex items-center gap-1.5 min-h-8 pointer-coarse:min-h-11 px-3 rounded-md
               border border-border-default bg-bg-elevated text-xs font-mono text-text-secondary
               hover:text-text-primary hover:border-border-strong cursor-pointer transition-colors

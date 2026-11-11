@@ -8,6 +8,8 @@ import {
   isSheetSessionSaving,
   loadSheetSession,
   saveSheetSession,
+  sameSheetSession,
+  sheetLeaveLosesWork,
   type SheetSessionState,
 } from '@/lib/sheetSession';
 import type { SpriteSheet } from '@/lib/types';
@@ -45,13 +47,14 @@ function snapshot(): SheetSessionState | null {
   };
 }
 
-function sameSession(a: SheetSessionState | null, b: SheetSessionState | null): boolean {
-  return !!a && !!b &&
-    a.spriteSheet === b.spriteSheet &&
-    a.animations === b.animations &&
-    a.frameDataUrls === b.frameDataUrls &&
-    a.currentSheetMetadata === b.currentSheetMetadata &&
-    a.generationStyle === b.generationStyle;
+/**
+ * For the leave guard: true while the latest change is not yet saved on this
+ * device, or saving has turned itself off. lastSaved moves only once a save
+ * has landed (doSave) or a Restore put the saved session back (restore), so
+ * a Restore with nothing changed, or a reload after the save, is not at risk.
+ */
+export function sheetLeaveLosesWorkNow(): boolean {
+  return sheetLeaveLosesWork({ current: snapshot(), lastSaved, savingOn: isSheetSessionSaving() });
 }
 
 function clearTimers() {
@@ -62,7 +65,7 @@ function clearTimers() {
 async function doSave() {
   if (saving) { resaveQueued = true; return; }
   const snap = snapshot();
-  if (!snap || sameSession(snap, lastSaved)) return;
+  if (!snap || sameSheetSession(snap, lastSaved)) return;
   saving = true;
   try {
     // Never throws; a failure turns saving off for the page session.
@@ -77,7 +80,7 @@ async function doSave() {
 function scheduleSave() {
   if (!isSheetSessionSaving()) return;
   const snap = snapshot();
-  if (!snap || sameSession(snap, lastSaved)) return;
+  if (!snap || sameSheetSession(snap, lastSaved)) return;
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => { clearTimers(); void doSave(); }, DEBOUNCE_MS);
   if (!maxWaitTimer) {

@@ -77,6 +77,10 @@ export default function UploadPage() {
   const [uploaded, setUploaded] = useState<UploadedImage | null>(null);
   const [slicing, setSlicing] = useState(false);
   const [fromGenerated, setFromGenerated] = useState(false);
+  // True only while the image is the one Send to Slicer brought here; a file
+  // the user picks or drops clears it. (fromGenerated above also
+  // marks images held as data URLs, such as a resize or a background removal.)
+  const [fromSlicerHandoff, setFromSlicerHandoff] = useState(false);
   // True once the user has either resized or chosen to keep the original size
   const [sizeAcknowledged, setSizeAcknowledged] = useState(false);
   // Pre-populated frame size after a FrameSizeResizer accept
@@ -172,6 +176,7 @@ export default function UploadPage() {
             height: img.naturalHeight,
           });
           setFromGenerated(true);
+          setFromSlicerHandoff(true);
           setSizeAcknowledged(true);
           const { generationStyle, currentSheetMetadata, setGenerationStyle, setCurrentSheetMetadata } =
             useSpriteStore.getState();
@@ -225,6 +230,7 @@ export default function UploadPage() {
         const isGif = file.type === 'image/gif';
         setUploaded({ file, blobUrl, width, height, isGif });
         setFromGenerated(false);
+        setFromSlicerHandoff(false);
         setPreferredFrameW(undefined);
         setPreferredFrameH(undefined);
         setBgBannerDismissed(false);
@@ -247,6 +253,7 @@ export default function UploadPage() {
       }
       setUploaded(null);
       setFromGenerated(false);
+      setFromSlicerHandoff(false);
       setSizeAcknowledged(false);
       setPreferredFrameW(undefined);
       setPreferredFrameH(undefined);
@@ -277,6 +284,7 @@ export default function UploadPage() {
     if (local && localIsBlob) URL.revokeObjectURL(local.blobUrl);
     setUploaded(null);
     setFromGenerated(false);
+    setFromSlicerHandoff(false);
     setSizeAcknowledged(false);
     setPreferredFrameW(undefined);
     setPreferredFrameH(undefined);
@@ -623,11 +631,11 @@ export default function UploadPage() {
       )}
 
       {/* Generated image banner */}
-      {fromGenerated && uploaded && (
+      {fromSlicerHandoff && uploaded && (
         <div className="flex items-center gap-2 rounded-lg bg-accent-amber-glow border border-accent-amber/20 px-4 py-3">
           <Sparkles size={14} className="text-accent-amber flex-shrink-0" />
           <p className="text-xs font-mono text-accent-amber">
-            Generated image loaded — configure frame size and slice.
+            Generated image loaded. Set the frame size, then slice.
           </p>
         </div>
       )}

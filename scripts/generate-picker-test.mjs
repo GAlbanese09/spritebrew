@@ -12,6 +12,12 @@
 // 3. recentStyles.ts and 4. stylePickerNav.ts, as units.
 // 5. Wiring the browser look also covers: names, roles, the coin, text sizes.
 //
+// Session 2 (polish PR 2, HQ room 2026-11-09-020): fetchBalance gains exactly
+// one line, setServerBalanceKnown(true), and the opening style is the one
+// style change that skips chooseStyle; the two checks that pinned the old
+// shape now pin the new one. GenerationForm imports nothing new from a money
+// path.
+//
 // Run from the repo root: `node scripts/generate-picker-test.mjs`. Bundles
 // with esbuild into local/.generate-picker-test/ (gitignored). Prints only
 // case names and pass or fail. Wiring checks read the source with comments
@@ -164,7 +170,15 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   // handleGenerate, the poll effects and the progress cleanup: byte-identical.
   const fetchPart = block(formSrc, '  // Fetch token balance from server', '  }, [userId, restoreTokenBalance, fetchBalance]);');
   const logicPart = block(formSrc, '  const selectedStyle = useMemo(', '  useEffect(() => () => setGenerationProgress(null, null, null, null), [setGenerationProgress]);');
-  check('1d: the balance fetch is byte-identical to main', sha256(fetchPart ?? '') === '031e99d7234fa746b5d8fad330a4dfcea2b8e42b7600c466cdde3a82e631006a');
+  // Main's balance fetch plus exactly one line, right after setTokenBalance.
+  const ADDED = '        setServerBalanceKnown(true);';
+  const fetchLines = (fetchPart ?? '').split('\n');
+  const addedAt = fetchLines.flatMap((l, i) => (l === ADDED ? [i] : []));
+  const withoutAdded = fetchLines.filter((_, i) => i !== addedAt[0]).join('\n');
+  check('1d: the balance fetch is main\'s plus exactly one line, setServerBalanceKnown(true) after setTokenBalance(data.balance)',
+    addedAt.length === 1 && fetchLines[addedAt[0] - 1] === '        setTokenBalance(data.balance);'
+    && sha256(withoutAdded) === '031e99d7234fa746b5d8fad330a4dfcea2b8e42b7600c466cdde3a82e631006a'
+    && (formSrc.match(/setServerBalanceKnown\(/g) ?? []).length === 1);
   check('1d: handleGenerate, the poll effects and the size effect are byte-identical to main', sha256(logicPart ?? '') === 'ddca238a98c415fd88049639672eba2854bbc8a07897d2a0a4ecac6d97be5f8e');
 }
 
@@ -247,9 +261,26 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
     && /import StyleField from '\.\/StyleField';/.test(form) && /import StylePicker from '\.\/StylePicker';/.test(form));
   check('5: the style card grid is gone (no GROUPED_STYLES, collapsedCategories, toggleCategory, TIER_COLORS, style count note)',
     !/GROUPED_STYLES|collapsedCategories|toggleCategory|TIER_COLORS|styles across/.test(form));
-  check('5: every style change goes through chooseStyle (picker, Recent, lightbox)',
+  check('5: every style change goes through chooseStyle (picker, Recent, lightbox); the opening style is the one other, once',
     /onChoose=\{chooseStyle\}/.test(form) && /onChooseRecent=\{chooseStyle\}/.test(form) && /chooseStyle\(lightboxStyle\.id\)/.test(form)
-    && form.match(/setSelectedStyleId\(/g)?.length === 1);
+    && form.match(/setSelectedStyleId\(/g)?.length === 2
+    && /setSelectedStyleId\(id\);\s*setStyleAnnouncement\(/.test(form)
+    && /if \(!serverBalanceKnown \|\| openingAppliedRef\.current\) return;\s*openingAppliedRef\.current = true;\s*const id = openingStyle\(\{ balance: tokenBalance, currentId: selectedStyleId, picked: pickedRef\.current \}\);\s*if \(id !== selectedStyleId\) setSelectedStyleId\(id\);/.test(form));
+  {
+    // Session 1's import sources, plus affordableStyle (which imports only the
+    // registry and constants). No money path: debit, balance, Stripe, packs,
+    // prices, admission or pause.
+    const S1 = ['react', 'lucide-react', '@clerk/react', '@/stores/spriteStore', '@/components/ui/Button', '@/components/ui/PixelCoin',
+      '@/components/sprites/ReferenceImagesPanel', '@/lib/styleRegistry', '@/lib/recentStyles', '@/lib/sseClient', '@/lib/generationPause',
+      '@/hooks/useGenerationPoll', '@/lib/pollResume', '@/lib/jobResult', '@/lib/spriteUtils', './StyleExamplesLightbox', './StyleField', './StylePicker'];
+    const sources = (text) => [...text.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
+    const added = sources(form).filter((src) => !S1.includes(src));
+    const affordable = sources(stripComments(read('src/lib/affordableStyle.ts')));
+    const MONEY = /token(Debit|Balance|Packs|TxMeta)|stripe|priceQuote|moneyAdmission|moneyPause|purchase/i;
+    check('1e: GenerationForm imports nothing new but affordableStyle, and nothing new from a money path',
+      same(added, ['@/lib/affordableStyle']) && same(affordable.sort(), ['@/lib/constants', '@/lib/styleRegistry'])
+      && [...added, ...affordable].every((src) => !MONEY.test(src)), { added, affordable });
+  }
   check('5: chooseStyle updates Recent outside a state updater and announces the change',
     /const list = pushRecent\(recentIds, selectedStyleId, id\);\s*setRecentIds\(list\);\s*writeRecent\(recentStorage\(\), list\);/.test(form)
     && /setStyleAnnouncement\(`Style: \$\{next\.label\}, \$\{next\.tokenCost\} tokens`\)/.test(form) && /aria-live="polite"/.test(form));

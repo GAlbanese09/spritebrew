@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useState, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
 import { Sparkles, X, Loader2, AlertCircle } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
@@ -13,6 +13,7 @@ import {
   type GenerationStyle,
 } from '@/lib/styleRegistry';
 import { pushRecent, readRecent, visibleRecent, writeRecent, type RecentStorage } from '@/lib/recentStyles';
+import { affordableNote, openingStyle } from '@/lib/affordableStyle';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
@@ -69,9 +70,13 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const tokenBalance = useSpriteStore((s) => s.tokenBalance);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
+  const emailListClaimed = useSpriteStore((s) => s.emailListClaimed);
 
   // Cost visibility for admins: the server's answer on the balance fetch below.
   const [isAdmin, setIsAdmin] = useState(false);
+  // True once the server has answered with this visit's balance (the cached
+  // localStorage value does not count): the opening style and the note wait for it.
+  const [serverBalanceKnown, setServerBalanceKnown] = useState(false);
 
   // Fetch token balance from server
   const fetchBalance = useCallback(async () => {
@@ -85,6 +90,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       const data = await res.json();
       if (data.success) {
         setTokenBalance(data.balance);
+        setServerBalanceKnown(true);
         setIsAdmin(data.isAdmin === true);
         try {
           localStorage.setItem(`spritebrew_tokens_${userId}`, String(data.balance));
@@ -137,11 +143,15 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const [recentIds, setRecentIds] = useState<string[]>(() => readRecent(recentStorage(), STYLE_IDS));
   const [styleAnnouncement, setStyleAnnouncement] = useState('');
   const changeStyleRef = useRef<HTMLButtonElement>(null);
+  // Set by the person's first style choice; the opening style never overrides it.
+  const pickedRef = useRef(false);
+  const openingAppliedRef = useRef(false);
 
   // Every style change goes through here: the picker, a Recent badge and the
   // lightbox's Use this style. Recent is computed from the current values, not
   // inside a state updater, so a double call in development cannot push twice.
   const chooseStyle = useCallback((id: string) => {
+    pickedRef.current = true;
     if (id === selectedStyleId) return;
     const next = getStyleById(id);
     if (!next) return;
@@ -151,6 +161,16 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     setSelectedStyleId(id);
     setStyleAnnouncement(`Style: ${next.label}, ${next.tokenCost} tokens`);
   }, [selectedStyleId, recentIds]);
+
+  // The first time this visit learns the server's balance, open on a style it
+  // covers (affordableStyle.ts), once, before paint. Not a choice: Recent and
+  // the announcement stay as they are, and a style the person picked is kept.
+  useLayoutEffect(() => {
+    if (!serverBalanceKnown || openingAppliedRef.current) return;
+    openingAppliedRef.current = true;
+    const id = openingStyle({ balance: tokenBalance, currentId: selectedStyleId, picked: pickedRef.current });
+    if (id !== selectedStyleId) setSelectedStyleId(id);
+  }, [serverBalanceKnown, tokenBalance, selectedStyleId]);
 
   const selectedStyle = useMemo(
     () => getStyleById(selectedStyleId) ?? GENERATION_STYLES[0],
@@ -367,6 +387,14 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     .map((id) => getStyleById(id))
     .filter((s): s is GenerationStyle => !!s);
   const sizeLabel = effectiveWidth === effectiveHeight ? `${effectiveWidth}` : `${effectiveWidth}×${effectiveHeight}`;
+  // The bar's summary as one string, for its title (the line itself truncates).
+  const summaryText = `${selectedStyle.label} \u00b7 ${sizeLabel} px \u00b7 ${formatCount(tokenCost)}${
+    userId ? ` of ${formatCount(tokenBalance)} tokens` : ' tokens'
+  }${isAdmin ? ` \u00b7 ~$${selectedStyle.costPerGeneration.toFixed(2)}` : ''}`;
+  // What the balance buys, once the server has said what it is.
+  const balanceNote = serverBalanceKnown ? affordableNote({ balance: tokenBalance, emailListClaimed }) : null;
+  const bgLabelId = useId();
+  const bgValueId = useId();
 
   // Why Generate is disabled, when the person can act on it (none while brewing).
   const reasonId = GENERATION_PAUSED ? 'generate-paused-reason' : 'generate-reason';
@@ -416,13 +444,15 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
             text-sm font-mono text-text-primary placeholder:text-text-muted resize-none
             focus:outline-none focus:border-accent-amber"
         />
-        <div className="flex flex-wrap gap-1.5 mt-3">
+        {/* One row that never wraps; the chips past the row's width scroll
+            sideways inside it. */}
+        <div className="flex flex-nowrap gap-1.5 mt-3 overflow-x-auto overscroll-x-contain pb-1">
           {EXAMPLE_PROMPTS.map((ex) => (
             <button
               key={ex}
               type="button"
               onClick={() => setPrompt(ex)}
-              className="inline-flex items-center min-h-8 pointer-coarse:min-h-11 px-3 rounded-2xl text-[13px] font-mono
+              className="flex-shrink-0 whitespace-nowrap inline-flex items-center min-h-8 pointer-coarse:min-h-11 px-3 rounded-2xl text-[13px] font-mono
                 bg-bg-secondary text-text-secondary border border-border-default
                 hover:bg-bg-hover hover:text-text-secondary cursor-pointer transition-colors"
             >
@@ -443,9 +473,9 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
           onViewExamples={setLightboxStyle}
           onChooseRecent={chooseStyle}
         />
-        <p className="text-[13px] font-mono text-text-secondary mt-3">
-          For animating an existing character, use the Animate My Character tab.
-        </p>
+        {balanceNote && (
+          <p className="text-[13px] font-mono text-text-secondary mt-2">{balanceNote}</p>
+        )}
         <p className="sr-only" role="status" aria-live="polite">
           {styleAnnouncement}
         </p>
@@ -458,48 +488,70 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
         enabled={referencesEnabled}
       />
 
-      {/* Size controls — only if not fixed */}
+      {/* Size, on one line: the fields (or the fixed size), then Background. */}
       <div>
-        <label className="block text-xs font-mono text-text-secondary mb-1">
-          Size: {effectiveWidth}x{effectiveHeight}
-          {selectedStyle.fixedSize && (
-            <span className="ml-2 text-text-secondary">(fixed for this style)</span>
-          )}
-        </label>
-        {!selectedStyle.fixedSize ? (
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="block text-xs font-mono text-text-secondary mb-1">Width</label>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {selectedStyle.fixedSize ? (
+            <p className="text-[13px] font-mono text-text-secondary">
+              Size {effectiveWidth}×{effectiveHeight} (fixed for this style)
+            </p>
+          ) : (
+            <div className="flex items-center gap-1.5" role="group" aria-label="Size in pixels">
+              <span className="text-xs font-mono text-text-secondary mr-1" aria-hidden="true">Size</span>
               <input
                 type="number"
+                aria-label="Width in pixels"
                 min={selectedStyle.minSize}
                 max={selectedStyle.maxSize}
                 value={customWidth}
                 onChange={(e) => setCustomWidth(Math.max(selectedStyle.minSize, Math.min(selectedStyle.maxSize, Number(e.target.value))))}
-                className="w-full rounded bg-bg-elevated border border-border-default px-3 py-1.5 pointer-coarse:min-h-11
+                className="w-[88px] rounded bg-bg-elevated border border-border-default px-3 py-1.5 pointer-coarse:min-h-11
                   text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
               />
-            </div>
-            <div className="flex-1">
-              <label className="block text-xs font-mono text-text-secondary mb-1">Height</label>
+              <span className="text-xs font-mono text-text-secondary" aria-hidden="true">×</span>
               <input
                 type="number"
+                aria-label="Height in pixels"
                 min={selectedStyle.minSize}
                 max={selectedStyle.maxSize}
                 value={customHeight}
                 onChange={(e) => setCustomHeight(Math.max(selectedStyle.minSize, Math.min(selectedStyle.maxSize, Number(e.target.value))))}
-                className="w-full rounded bg-bg-elevated border border-border-default px-3 py-1.5 pointer-coarse:min-h-11
+                className="w-[88px] rounded bg-bg-elevated border border-border-default px-3 py-1.5 pointer-coarse:min-h-11
                   text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
               />
             </div>
-          </div>
-        ) : (
-          <p className="text-[13px] font-mono text-text-secondary">
-            This style uses fixed {effectiveWidth}x{effectiveHeight} dimensions.
-          </p>
-        )}
+          )}
+          {selectedStyle.supportsRemoveBg && (
+            <div className="flex items-center gap-2">
+              <span id={bgLabelId} className="text-xs font-mono text-text-secondary">Background</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={removeBg}
+                aria-labelledby={`${bgLabelId} ${bgValueId}`}
+                onClick={() => setRemoveBg((v) => !v)}
+                className="inline-flex items-center gap-2 min-h-8 pointer-coarse:min-h-11 px-1 rounded cursor-pointer
+                  focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber"
+              >
+                <span
+                  aria-hidden="true"
+                  className={`relative inline-block w-8 h-[18px] rounded-full border ${
+                    removeBg ? 'bg-accent-amber border-accent-amber' : 'bg-bg-elevated border-border-strong'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-[2px] w-3 h-3 rounded-full ${
+                      removeBg ? 'left-[16px] bg-bg-primary' : 'left-[2px] bg-text-secondary'
+                    }`}
+                  />
+                </span>
+                <span id={bgValueId} className="text-xs font-mono text-text-primary">Transparent</span>
+              </button>
+            </div>
+          )}
+        </div>
         {!selectedStyle.fixedSize && (
-          <p className="text-[13px] font-mono text-text-secondary mt-1">
+          <p className="text-[13px] font-mono text-text-secondary mt-2">
             Larger canvas = more room for detail and extended poses.
           </p>
         )}
@@ -552,9 +604,13 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     >
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
-          <p className="text-[13px] font-mono text-text-secondary tabular-nums">
+          {/* One line; the full text is in the title. */}
+          <p
+            className="min-w-0 sm:flex-1 truncate text-[13px] font-mono text-text-secondary tabular-nums"
+            title={summaryText}
+          >
             {selectedStyle.label} &middot; {sizeLabel} px &middot;{' '}
-            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+            <span className="inline-flex items-center gap-1.5 whitespace-nowrap align-middle">
               <PixelCoin />
               <span>
                 {formatCount(tokenCost)}
@@ -571,27 +627,11 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
               <span> &middot; ~${selectedStyle.costPerGeneration.toFixed(2)}</span>
             )}
           </p>
-          {/* Toggles group — column wrapper so the conditional warning sits
-              under the toggles, and the whole group flows as one sticky-bar item. */}
-          <div className="flex flex-col items-start gap-1">
-            <div className="flex items-center gap-3 flex-wrap">
-              {selectedStyle.supportsRemoveBg && (
-                <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer select-none whitespace-nowrap">
-                  <input
-                    type="checkbox"
-                    checked={removeBg}
-                    onChange={(e) => setRemoveBg(e.target.checked)}
-                    className="accent-[var(--accent-amber)] cursor-pointer"
-                  />
-                  <span>Remove background</span>
-                </label>
-              )}
-            </div>
-          </div>
-          {/* The reason sits left of the button from 640 px, under it below. */}
-          <div className="flex flex-col-reverse items-stretch gap-1 sm:flex-row sm:items-center sm:gap-3">
+          {/* The reason sits under the button, centered, below 1024 px; from
+              1024 px it sits beside it on one line. */}
+          <div className="flex flex-col-reverse items-stretch gap-1 flex-shrink-0 lg:flex-row lg:items-center lg:gap-3">
             {disabledReason && (
-              <p id={reasonId} className="text-[13px] font-mono text-text-secondary text-center sm:text-right">
+              <p id={reasonId} className="text-[13px] font-mono text-text-secondary text-center lg:text-right lg:whitespace-nowrap">
                 {disabledReason}
               </p>
             )}

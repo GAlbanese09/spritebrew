@@ -116,7 +116,7 @@ export default function BuyTokensPage() {
         {/* Refund policy info */}
         <p className="text-[11px] font-mono text-text-muted">
           14-day refund on unused token packs. See{' '}
-          <a href="/refund-policy" className="text-accent-amber hover:underline">/refund-policy</a>{' '}
+          <a href="/refund-policy" className="text-accent-amber hover:underline">Refund policy</a>{' '}
           for full details.
         </p>
 

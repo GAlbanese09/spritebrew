@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  useId,
   useRef,
   useState,
   useCallback,
@@ -74,6 +75,9 @@ export default function ReferenceImagesPanel({
   enabled,
 }: ReferenceImagesPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const panelId = useId();
+  // Collapsed until Add; a panel that holds an image stays open.
+  const [open, setOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -147,138 +151,152 @@ export default function ReferenceImagesPanel({
   };
 
   const count = referenceImages.length;
+  const expanded = open || count > 0;
+
+  // A non-Pro style: one line, and the images kept for a Pro style, if any.
+  if (!enabled) {
+    return (
+      <p className="text-[13px] font-mono text-text-secondary">
+        Reference images: Pro styles only.
+        {count > 0 && (
+          <> Your {count} will be sent if you switch back to a Pro style.</>
+        )}
+      </p>
+    );
+  }
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
-        <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider">
-          Reference Images
-          <span className="text-text-secondary font-normal normal-case ml-2">(optional)</span>
-        </label>
-        <span className={`text-xs font-mono ${count > 0 ? 'text-accent-amber' : 'text-text-secondary'}`}>
-          {count} / {MAX_REFS}
-        </span>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[13px] font-mono text-text-secondary tabular-nums">
+          Reference images (optional) &middot;{' '}
+          <span className={count > 0 ? 'text-accent-amber' : undefined}>{count} / {MAX_REFS}</span>
+        </p>
+        {count === 0 && (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={expanded}
+            aria-controls={panelId}
+            className="flex-shrink-0 inline-flex items-center gap-1.5 min-h-8 pointer-coarse:min-h-11 px-3 rounded-md
+              border border-border-default bg-bg-elevated text-xs font-mono text-text-secondary
+              hover:text-text-primary hover:border-border-strong cursor-pointer transition-colors
+              focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber"
+          >
+            {expanded ? 'Hide' : (<><ImagePlus size={14} aria-hidden="true" /> Add</>)}
+          </button>
+        )}
       </div>
 
-      <p className="text-xs font-mono text-text-secondary leading-relaxed mb-3">
-        Up to 9 images that guide the style, palette, and design feel of your sprite.
-        References do NOT preserve a specific character&apos;s identity across new poses.
-      </p>
-
-      {!enabled && (
-        <div className="rounded-lg bg-bg-elevated border border-border-subtle px-3 py-2 mb-3">
-          <p className="text-xs font-mono text-text-secondary leading-relaxed">
-            Reference images only work with Pro styles. Switch to a Pro style to enable uploads.
+      {expanded && (
+        <div id={panelId} className="mt-3">
+          <p className="text-xs font-mono text-text-secondary leading-relaxed mb-3">
+            Up to 9 images that guide the style, palette, and design feel of your sprite.
+            References do NOT preserve a specific character&apos;s identity across new poses.
           </p>
-          {count > 0 && (
-            <p className="text-xs font-mono text-amber-300/80 leading-relaxed mt-1">
-              Your {count} reference image{count === 1 ? '' : 's'} won&apos;t be used with the
-              current style. They&apos;ll be sent if you switch back to a Pro style.
-            </p>
-          )}
-        </div>
-      )}
 
-      <input
-        type="file"
-        accept="image/png,image/jpeg,image/jpg,image/webp,image/gif"
-        multiple
-        ref={fileInputRef}
-        onChange={(e) => void handleFiles(e.target.files)}
-        style={{ display: 'none' }}
-      />
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/jpg,image/webp,image/gif"
+            multiple
+            ref={fileInputRef}
+            onChange={(e) => void handleFiles(e.target.files)}
+            style={{ display: 'none' }}
+          />
 
-      {count === 0 ? (
-        <div
-          onClick={triggerFilePicker}
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onDrop={onDrop}
-          aria-disabled={!enabled}
-          className={`rounded-lg border-2 border-dashed px-4 py-6 flex flex-col items-center justify-center gap-1.5 transition-colors ${
-            !enabled
-              ? 'border-border-subtle bg-bg-surface/30 opacity-60 cursor-not-allowed'
-              : isDragging
-                ? 'border-accent-amber bg-accent-amber-glow cursor-pointer'
-                : 'border-border-default bg-bg-surface hover:border-border-strong hover:bg-bg-elevated cursor-pointer'
-          }`}
-        >
-          <ImagePlus size={20} className={enabled ? 'text-text-secondary' : 'text-text-muted'} />
-          <p className="text-xs font-mono text-text-secondary">
-            Add Images
-          </p>
-          <p className="text-xs font-mono text-text-secondary">
-            Drop images or click to browse · {MAX_REFS} max · PNG/JPG/WEBP
-          </p>
-        </div>
-      ) : (
-        <div
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onDrop={onDrop}
-          className={`rounded-lg p-1 transition-all ${
-            isDragging && enabled ? 'ring-2 ring-accent-amber/50' : ''
-          }`}
-        >
-          <div className="grid grid-cols-3 gap-2">
-            {referenceImages.map((img, i) => (
-              <div
-                key={i}
-                className="relative w-24 h-24 rounded border border-border-default bg-bg-elevated overflow-hidden"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={`data:image/png;base64,${img}`}
-                  alt={`Reference ${i + 1}`}
-                  className="pixel-art-render w-full h-full object-contain"
-                />
-                {/* Two-layer hit-target split: the outer <button> is a
-                    44×44 tap area on mobile (min-h-11 min-w-11) with the
-                    visible circle-badge nested as an inner <span> anchored
-                    to the top-right of that hit area. On md+, min-h-0/min-w-0
-                    collapses the button to the badge's natural size and
-                    top-1/right-1 restores the desktop visual verbatim.
-                    Kept inside the card (top-0 right-0) so overflow-hidden
-                    on the parent doesn't clip the hit area. */}
-                <button
-                  type="button"
-                  onClick={() => onRemove(i)}
-                  className="absolute top-0 right-0 z-10 flex items-start justify-end cursor-pointer
-                    min-h-11 min-w-11 md:min-h-0 md:min-w-0
-                    md:top-1 md:right-1 md:items-center md:justify-center"
-                  aria-label={`Remove reference ${i + 1}`}
-                >
-                  <span className="flex items-center justify-center rounded-full bg-bg-primary/90 hover:bg-red-500/90 text-text-primary p-0.5 opacity-90 hover:opacity-100 transition-colors">
-                    <X size={10} />
-                  </span>
-                </button>
-              </div>
-            ))}
-            {count < MAX_REFS && (
-              <button
-                type="button"
-                onClick={triggerFilePicker}
-                disabled={!enabled}
-                className={`w-24 h-24 rounded border-2 border-dashed flex flex-col items-center justify-center gap-1 transition-colors ${
-                  !enabled
-                    ? 'border-border-subtle bg-bg-surface/30 opacity-60 cursor-not-allowed'
+          {count === 0 ? (
+            <div
+              onClick={triggerFilePicker}
+              onDragOver={onDragOver}
+              onDragLeave={onDragLeave}
+              onDrop={onDrop}
+              aria-disabled={!enabled}
+              className={`rounded-lg border-2 border-dashed px-4 py-6 flex flex-col items-center justify-center gap-1.5 transition-colors ${
+                !enabled
+                  ? 'border-border-subtle bg-bg-surface/30 opacity-60 cursor-not-allowed'
+                  : isDragging
+                    ? 'border-accent-amber bg-accent-amber-glow cursor-pointer'
                     : 'border-border-default bg-bg-surface hover:border-border-strong hover:bg-bg-elevated cursor-pointer'
-                }`}
-              >
-                <ImagePlus size={16} className={enabled ? 'text-text-secondary' : 'text-text-muted'} />
-                <span className="text-xs font-mono text-text-secondary">
-                  Add More
-                </span>
-              </button>
-            )}
-          </div>
-        </div>
-      )}
+              }`}
+            >
+              <ImagePlus size={20} className={enabled ? 'text-text-secondary' : 'text-text-muted'} />
+              <p className="text-xs font-mono text-text-secondary">
+                Add Images
+              </p>
+              <p className="text-xs font-mono text-text-secondary">
+                Drop images or click to browse · {MAX_REFS} max · PNG/JPG/WEBP
+              </p>
+            </div>
+          ) : (
+            <div
+              onDragOver={onDragOver}
+              onDragLeave={onDragLeave}
+              onDrop={onDrop}
+              className={`rounded-lg p-1 transition-all ${
+                isDragging && enabled ? 'ring-2 ring-accent-amber/50' : ''
+              }`}
+            >
+              <div className="grid grid-cols-3 gap-2">
+                {referenceImages.map((img, i) => (
+                  <div
+                    key={i}
+                    className="relative w-24 h-24 rounded border border-border-default bg-bg-elevated overflow-hidden"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={`data:image/png;base64,${img}`}
+                      alt={`Reference ${i + 1}`}
+                      className="pixel-art-render w-full h-full object-contain"
+                    />
+                    {/* Two-layer hit-target split: the outer <button> is a
+                        44×44 tap area on mobile (min-h-11 min-w-11) with the
+                        visible circle-badge nested as an inner <span> anchored
+                        to the top-right of that hit area. On md+, min-h-0/min-w-0
+                        collapses the button to the badge's natural size and
+                        top-1/right-1 restores the desktop visual verbatim.
+                        Kept inside the card (top-0 right-0) so overflow-hidden
+                        on the parent doesn't clip the hit area. */}
+                    <button
+                      type="button"
+                      onClick={() => onRemove(i)}
+                      className="absolute top-0 right-0 z-10 flex items-start justify-end cursor-pointer
+                        min-h-11 min-w-11 md:min-h-0 md:min-w-0
+                        md:top-1 md:right-1 md:items-center md:justify-center"
+                      aria-label={`Remove reference ${i + 1}`}
+                    >
+                      <span className="flex items-center justify-center rounded-full bg-bg-primary/90 hover:bg-red-500/90 text-text-primary p-0.5 opacity-90 hover:opacity-100 transition-colors">
+                        <X size={10} />
+                      </span>
+                    </button>
+                  </div>
+                ))}
+                {count < MAX_REFS && (
+                  <button
+                    type="button"
+                    onClick={triggerFilePicker}
+                    disabled={!enabled}
+                    className={`w-24 h-24 rounded border-2 border-dashed flex flex-col items-center justify-center gap-1 transition-colors ${
+                      !enabled
+                        ? 'border-border-subtle bg-bg-surface/30 opacity-60 cursor-not-allowed'
+                        : 'border-border-default bg-bg-surface hover:border-border-strong hover:bg-bg-elevated cursor-pointer'
+                    }`}
+                  >
+                    <ImagePlus size={16} className={enabled ? 'text-text-secondary' : 'text-text-muted'} />
+                    <span className="text-xs font-mono text-text-secondary">
+                      Add More
+                    </span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
-      {error && (
-        <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2 mt-2">
-          <AlertCircle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
-          <p className="text-xs font-mono text-red-400 leading-relaxed">{error}</p>
+          {error && (
+            <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2 mt-2">
+              <AlertCircle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
+              <p className="text-xs font-mono text-red-400 leading-relaxed">{error}</p>
+            </div>
+          )}
         </div>
       )}
     </div>

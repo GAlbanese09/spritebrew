@@ -182,16 +182,27 @@ check('0 columns stack the frames', same(framePosition(2, 0, 32, 32), { x: 0, y:
   const nativeDisabled = /(?<![-\w])disabled\b/;
 
   check('a transparent sheet turns background removal off', /const bgRemovalActive = bgRemovalWanted && sheetIsTransparent !== true;/.test(card));
-  check('transparency is read from the border and held with its source', /transparent: borderMostlyTransparent\(px, W, H\)/.test(borderRead) && /sheetAlpha\.src === generatedImageDataUrl/.test(card));
+  check('transparency is read from the border as four one-pixel strips, never the whole sheet, and held with its source', /\[ctx\.getImageData\(0, 0, W, 1\)\.data\]/.test(borderRead) && /strips\.push\(ctx\.getImageData\(0, H - 1, W, 1\)\.data\)/.test(borderRead) && /strips\.push\(ctx\.getImageData\(0, 1, 1, H - 2\)\.data\)/.test(borderRead) && /strips\.push\(ctx\.getImageData\(W - 1, 1, 1, H - 2\)\.data\)/.test(borderRead) && borderRead.match(/getImageData\(/g)?.length === 4 && !/getImageData\(0, 0, W, H\)/.test(card) && /transparent: borderMostlyTransparent\(ring, ring\.length \/ 4, 1\)/.test(borderRead) && /sheetAlpha\.src === generatedImageDataUrl/.test(card));
   check('the disabled toggle is announced with its reason', /aria-disabled=\{sheetIsTransparent === true \|\| undefined\}/.test(card) && /aria-describedby=\{sheetIsTransparent === true \? bgNoteId : undefined\}/.test(card) && /id=\{bgNoteId\}[^>]*>\s*Background already removed\./.test(card));
   check('the disabled toggle keeps a focus style and ignores a press', /focus-visible:outline-2/.test(card) && /if \(sheetIsTransparent === true\) return;/.test(card));
   check('Download goes to the played sheet only with loop geometry and a frame', /const playedSheetReady = !!loopGeometry && loopPlayback\.length > 0;/.test(card) && /onClick=\{playedSheetReady \? handleDownloadPlayed : handleDownload\}/.test(card));
-  check('Download original shows in that case only and saves the delivered sheet', /\{playedSheetReady && \(\s*<div className="flex">\s*<Button[^>]*onClick=\{handleDownloadOriginal\}/.test(card) && /saveDataUrl\(generatedImageDataUrl, `spritebrew_animation_\$\{Date\.now\(\)\}_original\.png`\)/.test(card));
+  check('Download unedited sheet shows in that case only and saves the delivered sheet', /\{playedSheetReady && \(\s*<div>\s*<Button[^>]*onClick=\{handleDownloadOriginal\}[^>]*>\s*<Download size=\{12\} \/>\s*Download unedited sheet\s*<\/Button>/.test(card) && card.match(/onClick=\{handleDownloadOriginal\}/g)?.length === 1 &&/saveDataUrl\(generatedImageDataUrl, `spritebrew_animation_\$\{Date\.now\(\)\}_original\.png`\)/.test(card));
   check('a second press while it works does nothing', /!loopGeometry \|\| sheetPreparing\) return;/.test(played) && /if \(!displayImageDataUrl \|\| sheetPreparing\) return;/.test(card) && /aria-disabled=\{sheetPreparing \|\| undefined\}/.test(pngButton) && /aria-busy=\{sheetPreparing \|\| undefined\}/.test(pngButton));
   check('the spinner stops under reduced motion and the label says Preparing', /animate-spin motion-reduce:animate-none/.test(card) && /'Preparing\.\.\.'/.test(card));
-  check('a failed sheet says what to do instead', /Could not make the sheet\. Try Download original\./.test(card));
-  check('the status is one always-rendered polite line, hidden from sight', /\/\* Always rendered[^*]*\*\/\}\s*<p className="sr-only" role="status">\{sheetStatus\}<\/p>/.test(card) && /sheetPreparing\s*\? 'Preparing the sheet\.'\s*: sheetReadySrc !== null && sheetReadySrc === generatedImageDataUrl\s*\? 'Sheet ready\.'\s*: ''/.test(card));
-  check('Sheet ready follows the hand-off to the browser, on both paths', /saveDataUrl\(src, [^\n]*\n\s*setSheetReadySrc\(generatedImageDataUrl\);/.test(played) && /downloadFile\([^\n]*\n\s*setSheetReadySrc\(generatedImageDataUrl\);/.test(played));
+  check('a failed sheet says what to do instead', />Could not make the sheet\. Try Download unedited sheet\.</.test(card));
+  check('the status is one always-rendered polite line, hidden from sight, and its text changes on every press', /\/\* Always rendered[^*]*\*\/\}\s*<p className="sr-only" role="status">\{sheetStatus\}<\/p>/.test(card) && /const sheetStatus = sheetPreparing\s*\? 'Preparing the sheet\.'\s*: sheetReady !== null && sheetReady\.src === generatedImageDataUrl\s*\? pressStatus\('Sheet ready', sheetReady\.n\)\s*: '';/.test(card) && (() => {
+    const say = card.match(/\nfunction pressStatus\(what: string, n: number\): string \{\n {2}return ([^\n]*);\n\}/);
+    const next = card.match(/\nfunction nextPress\(prev: \{ src: string; n: number \} \| null, src: string\): \{ src: string; n: number \} \{\n {2}return ([^\n]*);\n\}/);
+    if (!say || !next) return false;
+    const pressStatus = new Function('what', 'n', `return ${say[1]};`);
+    const nextPress = new Function('prev', 'src', `return ${next[1]};`);
+    const first = nextPress(null, 'a');
+    const second = nextPress(first, 'a');
+    const third = nextPress(second, 'a');
+    const texts = [first, second, third].map((p) => pressStatus('Sheet ready', p.n));
+    return texts[0] === 'Sheet ready.' && texts[1] === 'Sheet ready again (2).' && new Set(texts).size === 3 && nextPress(second, 'b').n === 1;
+  })());
+  check('Sheet ready follows the hand-off to the browser, on both paths', /saveDataUrl\(src, [^\n]*\n\s*setSheetReady\(\(prev\) => nextPress\(prev, generatedImageDataUrl\)\);/.test(played) && /downloadFile\([^\n]*\n\s*setSheetReady\(\(prev\) => nextPress\(prev, generatedImageDataUrl\)\);/.test(played) && played.match(/setSheetReady\(\(prev\) => nextPress\(/g)?.length === 2 && card.match(/setSheetReady\(\(prev\) => nextPress\(/g)?.length === 2);
   check('an unedited loop saves the displayed image with no canvas', /if \(playedIsIdentity\(loopPlayback, loopFrames\)\) \{\s*saveDataUrl\(src, `spritebrew_animation_\$\{Date\.now\(\)\}\.png`\);/.test(played) && played.indexOf('playedIsIdentity(') < played.indexOf('setSheetPreparing(true)'));
   check('the toggle is named by its title and its state', /<span id=\{bgTitleId\}[^>]*>\s*Remove background/.test(card) && /aria-labelledby=\{`\$\{bgTitleId\} \$\{bgToggleId\}`\}/.test(toggle));
   check('the cut loads only from the displayed image', /const src = displayImageDataUrl;/.test(played) && same(played.match(/loadImage\([^)]*\)/g), ['loadImage(src)']));
@@ -207,7 +218,7 @@ check('0 columns stack the frames', same(framePosition(2, 0, 32, 32), { x: 0, y:
   check('the GIF scale row shows under playedSheetReady, in either view', /\{\/\* GIF scale, for Download GIF \*\/\}\s*\{playedSheetReady && \(\s*<div className="flex items-center gap-2" role="group" aria-label="GIF scale">/.test(card));
   check('Download GIF shows under playedSheetReady, in either view', /\{playedSheetReady && \(\s*<Button variant="secondary" size="md" onClick=\{handleDownloadGif\}/.test(card));
   check('only the derived bgRemovalActive reads the raw background flag', card.match(/\bbgRemovalWanted\b/g)?.length === 2 && /const \[bgRemovalWanted, setBgRemovalWanted\] = useState\(false\);/.test(card) && /const bgRemovalActive = bgRemovalWanted && /.test(card));
-  check('the action grid holds no Download original; it sits right under the grid, under playedSheetReady', grid.includes('View Gallery') && !grid.includes('Download original') && /<\/Link>\s*<\/div>\s*\{playedSheetReady && \(\s*<div className="flex">\s*<Button variant="ghost" size="sm" onClick=\{handleDownloadOriginal\}>\s*<Download size=\{12\} \/>\s*Download original\s*<\/Button>\s*<\/div>\s*\)\}/.test(card));
+  check('the action grid holds no Download original or Download unedited sheet; it sits right under the grid, under playedSheetReady, with its hint right after it', grid.includes('View Gallery') && !grid.includes('Download original') && !grid.includes('Download unedited sheet') && /<\/Link>\s*<\/div>\s*\{playedSheetReady && \(\s*<div>\s*<Button variant="ghost" size="sm" onClick=\{handleDownloadOriginal\} aria-describedby=\{uneditedHintId\}>\s*<Download size=\{12\} \/>\s*Download unedited sheet\s*<\/Button>\s*<p id=\{uneditedHintId\} className="text-xs font-mono text-text-secondary mt-1">\s*The whole sheet as SpriteBrew delivered it, background removed, before any frame edits\.\s*<\/p>\s*<\/div>\s*\)\}/.test(card));
 }
 
 if (failed > 0) {

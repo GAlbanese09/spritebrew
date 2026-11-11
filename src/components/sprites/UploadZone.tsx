@@ -84,7 +84,9 @@ export default function UploadZone({ onImageLoaded, onLoadStart, currentImage, o
   if (currentImage) {
     return (
       <div className="relative rounded-lg border border-border-default bg-bg-surface p-4">
-        <div className="flex items-start gap-4">
+        {/* Below 640 px the note takes its own full-width row under the
+            image and the remove button. */}
+        <div className="flex flex-wrap sm:flex-nowrap items-start gap-4">
           <div
             className="relative flex-shrink-0 rounded border border-border-subtle overflow-hidden"
             style={{
@@ -101,15 +103,15 @@ export default function UploadZone({ onImageLoaded, onLoadStart, currentImage, o
               style={{ imageRendering: 'pixelated' }}
             />
           </div>
-          <div className="flex-1 min-w-0">
+          <div className="order-last basis-full sm:order-none sm:basis-auto sm:flex-1 min-w-0">
             <p className="text-xs font-mono text-text-secondary">Sprite sheet loaded</p>
-            <p className="text-[10px] font-mono text-text-muted mt-1">
+            <p className="text-xs font-mono text-text-muted mt-1">
               Configure frame size below, then slice.
             </p>
           </div>
           <button
             onClick={onRemove}
-            className="flex-shrink-0 p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"
+            className="ml-auto sm:ml-0 flex-shrink-0 p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"
             title="Remove image"
           >
             <X size={16} />

@@ -69,9 +69,11 @@ const StyleField = forwardRef<HTMLButtonElement, StyleFieldProps>(function Style
               >
                 {style.description}
               </p>
-              <p className="flex items-center gap-1.5 text-xs font-mono text-text-secondary tabular-nums whitespace-nowrap">
+              {/* The cost shows in full: it may wrap to a second line inside
+                  the field's fixed height, never truncate. */}
+              <p className="flex items-start gap-1.5 text-xs leading-tight font-mono text-text-secondary tabular-nums">
                 <PixelCoin />
-                <span className="min-w-0 truncate">{style.tokenCost} {unit}</span>
+                <span className="min-w-0">{style.tokenCost} {unit}</span>
               </p>
             </div>
 

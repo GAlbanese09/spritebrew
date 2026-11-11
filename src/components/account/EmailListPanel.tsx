@@ -1,11 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Mail, Loader2, Check, AlertCircle } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import { EMAIL_LIST_BONUS_TOKENS } from '@/lib/constants';
 import { claimDailyRewardOnce } from '@/lib/dailyRewardClient';
+import { middleEllipsis } from '@/lib/middleEllipsis';
 
 interface EmailListPanelProps {
   /** 'full' = card-style on /buy-tokens. 'compact' = inline pill for the sidebar. */
@@ -27,6 +28,11 @@ export default function EmailListPanel({ variant = 'full' }: EmailListPanelProps
   const setEmailListClaimed = useSpriteStore((s) => s.setEmailListClaimed);
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
   const enqueueRewards = useSpriteStore((s) => s.enqueueRewards);
+  // How many characters of the address fit the locked field (null until
+  // measured), and whether the field has focus (then it shows in full).
+  const emailRef = useRef<HTMLInputElement>(null);
+  const [emailFits, setEmailFits] = useState<number | null>(null);
+  const [emailFocused, setEmailFocused] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,9 +85,31 @@ export default function EmailListPanel({ variant = 'full' }: EmailListPanelProps
     }
   }, [userId, submitting, getToken, setEmailListClaimed, setTokenBalance, enqueueRewards]);
 
+  const email = user?.primaryEmailAddress?.emailAddress ?? '';
+
+  // The field's font is monospace, so its width in characters is its inner
+  // width over one character's width. Measured again when the field resizes.
+  const showEmailField = !!userId && !emailListClaimed && !!email;
+  useEffect(() => {
+    const el = emailRef.current;
+    if (!showEmailField || !el) return;
+    const ctx = document.createElement('canvas').getContext('2d');
+    const measure = () => {
+      const cs = getComputedStyle(el);
+      if (!ctx) return;
+      ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      const charW = ctx.measureText('0').width;
+      const inner = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      if (charW > 0) setEmailFits(Math.max(1, Math.floor(inner / charW)));
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [showEmailField]);
+
   if (!userId || emailListClaimed) return null;
 
-  const email = user?.primaryEmailAddress?.emailAddress ?? '';
+  const shownEmail = emailFocused || emailFits === null ? email : middleEllipsis(email, emailFits);
 
   if (variant === 'compact') {
     return (
@@ -121,8 +149,12 @@ export default function EmailListPanel({ variant = 'full' }: EmailListPanelProps
           {email && (
             <div className="mt-3">
               <input
+                ref={emailRef}
                 type="email"
-                value={email}
+                value={shownEmail}
+                title={email}
+                onFocus={() => setEmailFocused(true)}
+                onBlur={() => setEmailFocused(false)}
                 readOnly
                 aria-label="Your email address (locked to your account)"
                 className="w-full rounded bg-bg-elevated border border-border-subtle px-3 py-2

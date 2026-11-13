@@ -10,10 +10,11 @@ import ReferenceImagesPanel from '@/components/sprites/ReferenceImagesPanel';
 import {
   GENERATION_STYLES,
   getStyleById,
+  OFFERED_STYLES,
   type GenerationStyle,
 } from '@/lib/styleRegistry';
 import { accountRecentStorage, pushRecent, readRecent, visibleRecent, writeRecent, type RecentStorage } from '@/lib/recentStyles';
-import { affordableNote, DEFAULT_STYLE_ID, openingStyle } from '@/lib/affordableStyle';
+import { affordableNote, DEFAULT_STYLE_ID, OPENING_CANDIDATES, openingStyle } from '@/lib/affordableStyle';
 import { formVisit } from '@/lib/createFormVisit';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
@@ -38,7 +39,8 @@ const EXAMPLE_PROMPTS = [
   { label: 'Robot', prompt: 'robot with laser gun' },
 ];
 
-const STYLE_IDS = GENERATION_STYLES.map((s) => s.id);
+/** The styles Create offers: what Recent, the visit and chooseStyle accept. */
+const STYLE_IDS = OFFERED_STYLES.map((s) => s.id);
 
 /** This account's Recent in this browser's localStorage (recentStyles.ts),
  *  or null where it cannot be reached or no one is signed in. */
@@ -138,7 +140,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const [prompt, setPrompt] = useState('');
   const [selectedStyleId, setSelectedStyleId] = useState(() => {
     const id = visitAtMount.styleId;
-    return id !== null && getStyleById(id) ? id : DEFAULT_STYLE_ID;
+    return id !== null && STYLE_IDS.includes(id) ? id : DEFAULT_STYLE_ID;
   });
   const [customWidth, setCustomWidth] = useState(256);
   const [customHeight, setCustomHeight] = useState(256);
@@ -158,9 +160,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const changeStyleRef = useRef<HTMLButtonElement>(null);
 
   // The latch: set by the person's first act this visit (a style chosen, the
-  // current one included; a prompt typed; an example tapped), in the handler
-  // that acts, never in an effect, and never cleared. Until it is set the
-  // style follows the balance.
+  // current one included; a prompt typed; an example tapped; the size,
+  // Background or reference images changed), in the handler that acts, never
+  // in an effect, and never cleared. Until it is set the style follows the
+  // balance.
   const actedRef = useRef(visitAtMount.acted);
   const markActed = useCallback(() => {
     actedRef.current = true;
@@ -170,7 +173,9 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   // Every style change goes through here: the picker, a Recent badge and the
   // lightbox's Use this style. Recent is computed from the current values, not
   // inside a state updater, so a double call in development cannot push twice.
+  // A style Create does not offer changes nothing.
   const chooseStyle = useCallback((id: string) => {
+    if (!STYLE_IDS.includes(id)) return;
     markActed();
     if (id === selectedStyleId) return;
     const next = getStyleById(id);
@@ -420,8 +425,9 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const summaryText = `${selectedStyle.label} \u00b7 ${sizeLabel} px \u00b7 ${summaryCostText}${
     isAdmin ? ` \u00b7 ~$${selectedStyle.costPerGeneration.toFixed(2)}` : ''
   }`;
-  // What the balance buys, once the server has said what it is.
-  const balanceNote = serverBalanceKnown
+  // What the balance buys, once the server has said what it is. The note
+  // speaks of the opening styles only, so it shows only while one is chosen.
+  const balanceNote = serverBalanceKnown && (OPENING_CANDIDATES as readonly string[]).includes(selectedStyleId)
     ? affordableNote({ balance: tokenBalance, emailListClaimed, emailListClaimKnown })
     : null;
   const bgLabelId = useId();
@@ -531,7 +537,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       {/* Reference Images — Pro styles only */}
       <ReferenceImagesPanel
         referenceImages={referenceImages}
-        onChange={setReferenceImages}
+        onChange={(images) => {
+          markActed();
+          setReferenceImages(images);
+        }}
         enabled={referencesEnabled}
       />
 
@@ -551,7 +560,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
                 min={selectedStyle.minSize}
                 max={selectedStyle.maxSize}
                 value={customWidth}
-                onChange={(e) => setCustomWidth(Math.max(selectedStyle.minSize, Math.min(selectedStyle.maxSize, Number(e.target.value))))}
+                onChange={(e) => {
+                  markActed();
+                  setCustomWidth(Math.max(selectedStyle.minSize, Math.min(selectedStyle.maxSize, Number(e.target.value))));
+                }}
                 className="w-[88px] rounded bg-bg-elevated border border-border-default px-3 py-1.5 pointer-coarse:min-h-11
                   text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
               />
@@ -562,7 +574,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
                 min={selectedStyle.minSize}
                 max={selectedStyle.maxSize}
                 value={customHeight}
-                onChange={(e) => setCustomHeight(Math.max(selectedStyle.minSize, Math.min(selectedStyle.maxSize, Number(e.target.value))))}
+                onChange={(e) => {
+                  markActed();
+                  setCustomHeight(Math.max(selectedStyle.minSize, Math.min(selectedStyle.maxSize, Number(e.target.value))));
+                }}
                 className="w-[88px] rounded bg-bg-elevated border border-border-default px-3 py-1.5 pointer-coarse:min-h-11
                   text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
               />
@@ -576,7 +591,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
                 role="switch"
                 aria-checked={removeBg}
                 aria-labelledby={`${bgLabelId} ${bgValueId}`}
-                onClick={() => setRemoveBg((v) => !v)}
+                onClick={() => {
+                  markActed();
+                  setRemoveBg((v) => !v);
+                }}
                 className="inline-flex items-center gap-2 min-h-8 pointer-coarse:min-h-11 px-1 rounded cursor-pointer
                   focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber"
               >
@@ -651,9 +669,9 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     >
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
-          {/* One line; the full text is in the title. The ellipsis only eats
-              the style and the size: under 640 px the cost and the balance
-              lead; from 640 px they come last and never shrink. */}
+          {/* One line; the full text is in the title. Under 640 px the cost
+              and the balance lead; from 640 px only the style's name
+              shortens, and the size and the cost never shrink. */}
           <p
             className="min-w-0 sm:flex-1 truncate text-[13px] font-mono text-text-secondary tabular-nums"
             title={summaryText}
@@ -662,7 +680,8 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
               {summaryCost} &middot; {selectedStyle.label} &middot; {sizeLabel} px
             </span>
             <span className="max-sm:hidden inline-flex max-w-full items-center gap-[1ch] align-bottom">
-              <span className="min-w-0 truncate">{selectedStyle.label} &middot; {sizeLabel} px &middot;</span>{' '}
+              <span className="min-w-0 truncate">{selectedStyle.label}</span>{' '}
+              <span className="flex-shrink-0">&middot; {sizeLabel} px &middot;</span>{' '}
               <span className="flex-shrink-0">{summaryCost}</span>
             </span>
             {isAdmin && (

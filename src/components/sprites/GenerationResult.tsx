@@ -978,10 +978,10 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         <div>
           <Button variant="ghost" size="sm" onClick={handleDownloadOriginal} aria-describedby={uneditedHintId}>
             <Download size={12} />
-            Download unedited sheet
+            Download as delivered
           </Button>
           <p id={uneditedHintId} className="text-xs font-mono text-text-secondary mt-1">
-            The whole sheet as SpriteBrew delivered it, background removed, before any frame edits.
+            The whole sheet as SpriteBrew delivered it, background removed, before any frame or pixel edits.
           </p>
         </div>
       )}
@@ -989,7 +989,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         <p className="text-xs font-mono text-red-400" role="alert">{gifError.message}</p>
       )}
       {sheetFailedSrc !== null && sheetFailedSrc === generatedImageDataUrl && (
-        <p className="text-xs font-mono text-red-400" role="alert">Could not make the sheet. Try Download unedited sheet.</p>
+        <p className="text-xs font-mono text-red-400" role="alert">Could not make the sheet. Try Download as delivered.</p>
       )}
       {/* Always rendered, so a screen reader announces each change: the
           sheet, the GIF and the editor while it opens. */}

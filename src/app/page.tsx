@@ -43,7 +43,7 @@ function ordinal(n: number): string {
 }
 
 /** Animated styles offered on Create, counted from the registry. */
-const ANIMATED_STYLE_COUNT = GENERATION_STYLES.filter((s) => s.isAnimation).length;
+const ANIMATED_STYLE_COUNT = GENERATION_STYLES.filter((s) => s.isAnimation && !s.hidden).length;
 
 // ── Data ──
 

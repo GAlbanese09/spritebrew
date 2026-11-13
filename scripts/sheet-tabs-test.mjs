@@ -16,6 +16,14 @@
 // (one fake bus that, like a real one, delivers later, and that also
 // delivers to the tab that posted, so ignoring its own message is tested).
 // Each scripted order imports fresh module instances, as a page load would.
+//
+// Fix round 2 (audit r2 N2, N5): hearing another tab sets a flag the leave
+// guard reads and no longer touches lastSaved, so no save is scheduled
+// without an edit here. The test watches setTimeout for the autosave's
+// debounce and max-wait timers (their delays read from useSheetSession.ts)
+// and waits past the debounce where it says nothing is saved. Also: Restore
+// meeting an unreadable record, pageshow from the back-forward cache, and a
+// transport that cannot be opened.
 
 import { build } from 'esbuild';
 import fs from 'node:fs';
@@ -110,6 +118,28 @@ const check = (name, ok, detail) => {
   if (ok) { pass++; console.log(`pass  ${name}`); } else { fail++; console.log(`FAIL  ${name}${detail === undefined ? '' : `  ${JSON.stringify(detail)}`}`); }
 };
 
+// The autosave's two delays, read from the module's source.
+const hookSrc = fs.readFileSync(path.join(ROOT, 'src/hooks/useSheetSession.ts'), 'utf8');
+const DEBOUNCE_MS = Number(hookSrc.match(/^const DEBOUNCE_MS = (\d+);$/m)?.[1]);
+const MAX_WAIT_MS = Number(hookSrc.match(/^const MAX_WAIT_MS = (\d+);$/m)?.[1]);
+check('the autosave\'s debounce and max-wait delays are read from useSheetSession.ts', DEBOUNCE_MS > 0 && MAX_WAIT_MS > DEBOUNCE_MS, { DEBOUNCE_MS, MAX_WAIT_MS });
+
+// Every timer still pending, with its delay: a debounce or max-wait timer
+// pending means a save is scheduled.
+const pendingTimers = new Map();
+{
+  const realSet = globalThis.setTimeout;
+  const realClear = globalThis.clearTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    const handle = realSet(() => { pendingTimers.delete(handle); fn(...args); }, ms);
+    pendingTimers.set(handle, ms);
+    return handle;
+  };
+  globalThis.clearTimeout = (handle) => { pendingTimers.delete(handle); realClear(handle); };
+}
+const saveTimersPending = () => [...pendingTimers.values()].filter((ms) => ms === DEBOUNCE_MS || ms === MAX_WAIT_MS).length;
+const pastDebounce = () => new Promise((r) => setTimeout(r, DEBOUNCE_MS + 250));
+
 // ── The stand-ins' state ──
 
 globalThis.indexedDB = {}; // sheetSession.ts only asks whether it exists
@@ -138,16 +168,21 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
 const sheet = (id) => ({ id, name: id, sourceImage: PNG, frameWidth: 16, frameHeight: 16, columns: 1, rows: 1, totalFrames: 1, padding: 0, animations: [] });
 
 let runs = 0;
-/** A tab: fresh module instances (a page load), its own window and document. */
+/** A tab: fresh module instances (a page load), its own window and document.
+ *  With no bus, the tab keeps the browser's own transport. */
 async function openTab(name, bus) {
   globalThis[`__tabWindow_${name}`] = new EventTarget();
   globalThis[`__tabDocument_${name}`] = Object.assign(new EventTarget(), { visibilityState: 'visible' });
   const mod = await import(`${pathToFileURL(path.join(DIR, `tab-${name}.mjs`)).href}?run=${++runs}`);
-  mod.setSheetSessionTransport(bus.endpoint());
-  const view = mod.mount(() => mod.useSheetSession());
+  if (bus) mod.setSheetSessionTransport(bus.endpoint());
+  let view = mod.mount(() => mod.useSheetSession());
   const store = mod.useSpriteStore;
   return {
     get hook() { return view.value; },
+    /** To another Sheet Tools page, or to /generate and back: React unmounts
+     *  the old page before the new one's effects run. */
+    navigate: () => { view.unmount(); view = mod.mount(() => mod.useSheetSession()); },
+    pageshow: (persisted) => globalThis[`__tabWindow_${name}`].dispatchEvent(Object.assign(new Event('pageshow'), { persisted })),
     loses: () => mod.sheetLeaveLosesWorkNow(),
     slice: (id) => store.setState({ spriteSheet: sheet(id), animations: [], frameDataUrls: new Map(), currentSheetMetadata: null, generationStyle: null }),
     edit: () => store.setState({ animations: [{ id: `g${Math.random()}`, name: 'Walk', type: 'walk', fps: 8, loop: true, frames: [] }] }),
@@ -245,7 +280,16 @@ async function twoTabs() {
   await settle();
   return { A, B, bus, savedInA };
 }
-const quietAfterHearing = async (A, opsBefore) => { await settle(); return A.ops().length === opsBefore; };
+/** After hearing: no save pending, and still no read or write by A once the
+ *  debounce has passed (a save scheduled through it would have landed). */
+const quietAfterHearing = async (A, opsBefore) => {
+  await settle();
+  const pending = saveTimersPending();
+  const opsNow = A.ops().length;
+  await pastDebounce();
+  await settle();
+  return { ok: pending === 0 && opsNow === opsBefore && A.ops().length === opsBefore && saveTimersPending() === 0, pending, ops: A.ops() };
+};
 
 {
   const { A, B, savedInA } = await twoTabs();
@@ -254,14 +298,16 @@ const quietAfterHearing = async (A, opsBefore) => { await settle(); return A.ops
   B.hook.discard();
   await settle();
   check('(a) B presses Discard on the Restore offer: A asks again', savedInA && offered === true && A.loses() === true && globalThis.__sheetIdb.data.size === 0, { savedInA, offered });
-  check('(a) hearing it, A neither saves, loads nor clears', await quietAfterHearing(A, opsA), A.ops());
+  const q = await quietAfterHearing(A, opsA);
+  check('(a) hearing it, A neither saves, loads nor clears: no save pending, none past the debounce', q.ok, q);
 }
 {
   const { A, B, savedInA } = await twoTabs();
   const opsA = A.ops().length;
   B.slice('sheet-b'); await saved(B);
   check('(b) B slices another sheet and its save lands: A asks again', savedInA && A.loses() === true && globalThis.__sheetIdb.data.get('current')?.sheet?.id === 'sheet-b');
-  check('(b) hearing it, A neither saves, loads nor clears', await quietAfterHearing(A, opsA), A.ops());
+  const q = await quietAfterHearing(A, opsA);
+  check('(b) hearing it, A neither saves, loads nor clears: no save pending, none past the debounce', q.ok, q);
 }
 {
   const { A, B, savedInA } = await twoTabs();
@@ -272,7 +318,8 @@ const quietAfterHearing = async (A, opsBefore) => { await settle(); return A.ops
   B.replaceSheet();
   await settle();
   check('(c) B restores (A still saved), then presses Replace sheet: A asks again', savedInA && restored === true && quietAfterRestore && A.loses() === true, { restored, quietAfterRestore });
-  check('(c) hearing it, A neither saves, loads nor clears', await quietAfterHearing(A, opsA), A.ops());
+  const q = await quietAfterHearing(A, opsA);
+  check('(c) hearing it, A neither saves, loads nor clears: no save pending, none past the debounce', q.ok, q);
 }
 {
   freshIdb();
@@ -289,10 +336,115 @@ const quietAfterHearing = async (A, opsBefore) => { await settle(); return A.ops
   const opsA = A.ops().length;
   B.edit(); await saved(B);
   check('(d) both edit a restored session and B saves last: A asks again', both && savedInA && A.loses() === true && B.loses() === false, { both, savedInA });
-  check('(d) hearing it, A neither saves, loads nor clears', await quietAfterHearing(A, opsA), A.ops());
+  const q = await quietAfterHearing(A, opsA);
+  check('(d) hearing it, A neither saves, loads nor clears: no save pending, none past the debounce', q.ok, q);
   // A's next change saves again, and then it is B that asks.
   A.edit(); await saved(A);
   check('(d) A\'s next change is saved again, and then B asks', A.loses() === false && B.loses() === true);
+}
+
+// ── Fix round 2: the leave guard without the extra save (audit r2 N2, N5) ──
+
+{
+  // A slices S1 and saves; B slices S2 and saves; B closes; A changes page
+  // (another Sheet Tools page, or /generate and back) and makes no edit.
+  const idb = freshIdb();
+  const bus = makeBus();
+  const A = await openTab('a', bus);
+  A.slice('s1'); await saved(A);
+  const B = await openTab('b', bus);
+  await settle();
+  B.slice('s2'); await saved(B);
+  B.unmount();
+  await settle();
+  const opsA = A.ops().length;
+  A.navigate();
+  const pendingAfterPage = saveTimersPending();
+  await pastDebounce();
+  await settle();
+  const record = idb.data.get('current')?.sheet?.id;
+  check('(e) B saves S2 and closes; A changes page with no edit: no save pending, and past the debounce the record is still S2, A wrote nothing, and A asks',
+    pendingAfterPage === 0 && record === 's2' && A.ops().length === opsA && A.loses() === true, { pendingAfterPage, record, ops: A.ops().slice(opsA) });
+  A.edit(); await saved(A);
+  check('(e) then A edits one frame: its save lands, the record is A\'s, and A no longer asks',
+    idb.data.get('current')?.sheet?.id === 's1' && A.loses() === false && saveTimersPending() === 0);
+}
+{
+  // Restore meeting an unreadable record deletes it and signals: the other
+  // tab asks.
+  const idb = freshIdb();
+  const bus = makeBus();
+  const A = await openTab('a', bus);
+  A.slice('sheet-a'); await saved(A);
+  const savedInA = A.loses() === false;
+  const B = await openTab('b', bus);
+  await settle();
+  const offered = B.hook.offerRestore;
+  idb.data.set('current', { ...idb.data.get('current'), sheetBytes: 'not a blob' });
+  const restored = await B.hook.restore();
+  await settle();
+  check('Restore in B meets an unreadable record: nothing restored, the record deleted, and A asks',
+    savedInA && offered === true && restored === false && idb.data.size === 0 && A.loses() === true, { savedInA, offered, restored, size: idb.data.size });
+}
+{
+  // A tab that held nothing when it heard, then restores the saved record:
+  // it holds what is saved, so leaving loses nothing.
+  freshIdb();
+  const bus = makeBus();
+  const first = await openTab('a', bus);
+  first.slice('sheet-a'); await saved(first); first.unmount();
+  const A = await openTab('a', bus);
+  const B = await openTab('b', bus);
+  await settle();
+  const restoredB = await B.hook.restore();
+  B.edit(); await saved(B);
+  const nothingHeld = A.loses() === false;
+  const restoredA = await A.hook.restore();
+  await settle();
+  check('A holds nothing while B saves, then restores that record: A does not ask, and nothing is scheduled',
+    restoredB && nothingHeld && restoredA === true && A.loses() === false && saveTimersPending() === 0, { restoredB, nothingHeld, restoredA });
+}
+{
+  // pageshow: a page restored from the back-forward cache missed any message
+  // sent meanwhile.
+  freshIdb();
+  const A = await openTab('a', makeBus());
+  A.slice('s1'); await saved(A);
+  const before = A.loses();
+  const opsA = A.ops().length;
+  A.pageshow(false);
+  const notPersisted = A.loses();
+  check('pageshow with persisted false: A stays saved', before === false && notPersisted === false, { before, notPersisted });
+  A.pageshow(true);
+  const persisted = A.loses();
+  const pending = saveTimersPending();
+  await settle();
+  check('pageshow with persisted true (back-forward cache): A asks, and nothing is saved, loaded or cleared',
+    persisted === true && pending === 0 && A.ops().length === opsA, { persisted, pending });
+  A.edit(); await saved(A);
+  check('after pageshow, A\'s own next save clears it', A.loses() === false);
+}
+{
+  // The transport cannot be opened (BroadcastChannel throws): nothing
+  // throws, and the tab answers as one tab alone.
+  freshIdb();
+  const RealChannel = globalThis.BroadcastChannel;
+  let tried = 0;
+  globalThis.BroadcastChannel = class { constructor() { tried++; throw new Error('denied'); } };
+  let threw = null;
+  const answers = [];
+  try {
+    const t = await openTab('a', null);
+    t.slice('s1'); answers.push(t.loses());
+    await saved(t); answers.push(t.loses());
+    t.edit(); answers.push(t.loses());
+    await saved(t); answers.push(t.loses());
+    t.navigate(); answers.push(saveTimersPending());
+    t.replaceSheet(); await settle(); answers.push(t.loses(), globalThis.__sheetIdb.data.size);
+  } catch (e) { threw = String(e); }
+  if (RealChannel) globalThis.BroadcastChannel = RealChannel; else delete globalThis.BroadcastChannel;
+  check('the transport cannot be opened: nothing throws, and the tab answers as one tab alone',
+    threw === null && tried > 0 && JSON.stringify(answers) === JSON.stringify([true, false, true, false, 0, false, 0]), { threw, tried, answers });
 }
 
 // ── The browser transport: nothing opens at import or without a window ──
@@ -347,7 +499,21 @@ const quietAfterHearing = async (A, opsBefore) => { await settle(); return A.ops
   check('no BroadcastChannel: a counter in localStorage that changes on each post, its own ignored, another tab\'s heard',
     /^1 \S+$/.test(first ?? '') && /^2 \S+$/.test(second ?? '') && ownIgnored && heard === 1, { first, second, heard });
 
-  if (RealChannel) globalThis.BroadcastChannel = RealChannel;
+  // Opening BroadcastChannel throws: the listener gets a no-op stop function.
+  globalThis.BroadcastChannel = class { constructor() { throw new Error('denied'); } };
+  globalThis.window = new EventTarget();
+  const denied = await import(`${pathToFileURL(out).href}?run=denied`);
+  let deniedThrew = false;
+  let stopDenied = null;
+  try {
+    stopDenied = denied.onSheetSessionChangedElsewhere(() => {});
+    stopDenied();
+    denied.signalSheetSessionChanged();
+  } catch { deniedThrew = true; }
+  check('opening BroadcastChannel throws: onSheetSessionChangedElsewhere returns a stop function that does nothing, and neither call throws',
+    !deniedThrew && typeof stopDenied === 'function');
+
+  if (RealChannel) globalThis.BroadcastChannel = RealChannel; else delete globalThis.BroadcastChannel;
   if (savedWindow === undefined) delete globalThis.window; else globalThis.window = savedWindow;
 }
 

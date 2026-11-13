@@ -36,19 +36,29 @@ let lastSaved: SheetSessionState | null = null;
  *  already scheduled when they did. */
 let forgottenSheet: SpriteSheet | null = null;
 let listeningElsewhere = false;
+/** Another tab saved or cleared the session since this tab's own save, or
+ *  the page came back from the back-forward cache: the record this tab saved
+ *  may be gone. Only the leave guard reads it; the autosave still compares
+ *  with lastSaved, so hearing never makes this tab save. */
+let changedElsewhere = false;
 
 /**
  * From the first Sheet Tools mount to the end of the page: when another tab
- * saves or clears the session, the record this tab saved is gone, so nothing
- * here counts as saved and the leave guard asks while a sheet is held.
- * Hearing it never saves, loads or clears anything.
+ * saves or clears the session, or the page is restored by Back or Forward
+ * (it missed any message sent meanwhile), the leave guard asks while a sheet
+ * is held. Hearing it never saves, loads or clears anything.
  */
 function listenElsewhere() {
   if (listeningElsewhere) return;
   listeningElsewhere = true;
   onSheetSessionChangedElsewhere(() => {
-    lastSaved = null;
+    changedElsewhere = true;
   });
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pageshow', (e: PageTransitionEvent) => {
+      if (e.persisted) changedElsewhere = true;
+    });
+  }
 }
 
 function snapshot(): SheetSessionState | null {
@@ -68,10 +78,13 @@ function snapshot(): SheetSessionState | null {
  * device, or saving has turned itself off. lastSaved moves only once a save
  * has landed (doSave) or a Restore put the saved session back (restore), so
  * a Restore with nothing changed, or a reload after the save, is not at risk.
- * Another tab's save or clear sets it back to null (listenElsewhere).
+ * After another tab's save or clear (listenElsewhere) it is true while a
+ * sheet is held, until this tab's own save lands.
  */
 export function sheetLeaveLosesWorkNow(): boolean {
-  return sheetLeaveLosesWork({ current: snapshot(), lastSaved, savingOn: isSheetSessionSaving() });
+  const current = snapshot();
+  if (changedElsewhere && current) return true;
+  return sheetLeaveLosesWork({ current, lastSaved, savingOn: isSheetSessionSaving() });
 }
 
 function clearTimers() {
@@ -88,7 +101,10 @@ async function doSave() {
     // Never throws; a failure turns saving off for the page session.
     await saveSheetSession(snap);
     lastSaved = snap;
-    if (isSheetSessionSaving()) signalSheetSessionChanged();
+    if (isSheetSessionSaving()) {
+      changedElsewhere = false;
+      signalSheetSessionChanged();
+    }
   } finally {
     saving = false;
     if (resaveQueued) { resaveQueued = false; scheduleSave(); }
@@ -147,6 +163,7 @@ export function forgetSheetSession(): void {
   if (!sheet) return;
   forgottenSheet = sheet;
   lastSaved = null;
+  changedElsewhere = false;
   clearTimers();
   void clearSheetSession().then(signalSheetSessionChanged);
 }
@@ -196,6 +213,9 @@ export function useSheetSession() {
    *  something newer while it loaded. */
   const restore = useCallback(async (stillCurrent?: () => boolean): Promise<boolean> => {
     setRestoring(true);
+    // The store holds no sheet here, and the record about to be read is the
+    // saved one: a message heard while it loads sets the flag again.
+    changedElsewhere = false;
     try {
       const session = await loadSheetSession();
       // loadSheetSession deletes a record it cannot read: tell the other tabs.
@@ -221,6 +241,7 @@ export function useSheetSession() {
 
   const discard = useCallback(() => {
     setSaved(false);
+    changedElsewhere = false;
     void clearSheetSession().then(signalSheetSessionChanged);
   }, []);
 

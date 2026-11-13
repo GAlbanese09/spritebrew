@@ -15,6 +15,7 @@ import PixelCoin from '@/components/ui/PixelCoin';
 import {
   GENERATION_STYLES,
   getStyleById,
+  OFFERED_STYLES,
   type GenerationStyle,
   type StyleCategory,
 } from '@/lib/styleRegistry';
@@ -30,10 +31,10 @@ const CATEGORY_NAMES: Record<StyleCategory, string> = {
   environments: 'Environments',
 };
 
-// Categories in registry order, each with its styles.
+// Categories in registry order, each with the styles Create offers.
 const CATEGORIES: { id: StyleCategory; name: string; styles: GenerationStyle[] }[] = (() => {
   const out: { id: StyleCategory; name: string; styles: GenerationStyle[] }[] = [];
-  for (const style of GENERATION_STYLES) {
+  for (const style of OFFERED_STYLES) {
     let group = out.find((c) => c.id === style.category);
     if (!group) {
       group = { id: style.category, name: CATEGORY_NAMES[style.category], styles: [] };

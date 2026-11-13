@@ -25,6 +25,13 @@
 // token. Check 1e takes createFormVisit as the one more source (George, Nov
 // 11, 2026); the checks that pinned the old shape now pin the new one.
 //
+// Fix round 2 (audit r2 of PR #53; HQ room 2026-11-11-076, -083, -090; ENG
+// -091): the size fields, Background and the reference images set the latch
+// too; from 640 px only the style's name shortens in the bar; 8-Direction
+// Rotation is hidden from Create (OFFERED_STYLES) while every lookup and
+// price still reads all 21. The checks that pinned the old shape now pin the
+// new one.
+//
 // Run from the repo root: `node scripts/generate-picker-test.mjs`. Bundles
 // with esbuild into local/.generate-picker-test/ (gitignored). Prints only
 // case names and pass or fail. Wiring checks read the source with comments
@@ -40,14 +47,16 @@ const ROOT = process.cwd();
 const OUT_DIR = path.join(ROOT, 'local', '.generate-picker-test');
 
 await build({
-  entryPoints: ['src/lib/recentStyles.ts', 'src/lib/stylePickerNav.ts', 'src/lib/styleRegistry.ts'].map((p) => path.join(ROOT, p)),
+  entryPoints: ['src/lib/recentStyles.ts', 'src/lib/stylePickerNav.ts', 'src/lib/styleRegistry.ts', 'src/lib/affordableStyle.ts', 'src/lib/createValidation.ts'].map((p) => path.join(ROOT, p)),
   bundle: true, format: 'esm', platform: 'node', outdir: OUT_DIR, outExtension: { '.js': '.mjs' }, logLevel: 'silent',
   alias: { '@': path.join(ROOT, 'src') },
 });
 const load = (name) => import(pathToFileURL(path.join(OUT_DIR, `${name}.mjs`)).href);
 const { RECENT_STYLES_KEY, MAX_RECENT, readRecent, pushRecent, writeRecent, visibleRecent, recentStylesKey, accountRecentStorage } = await load('recentStyles');
 const { nextIndex } = await load('stylePickerNav');
-const { GENERATION_STYLES, getStyleById } = await load('styleRegistry');
+const { GENERATION_STYLES, getStyleById, OFFERED_STYLES, getTokenCost, getResolutionMode, getFreeTierBucket } = await load('styleRegistry');
+const { OPENING_CANDIDATES } = await load('affordableStyle');
+const { validateCreateBody } = await load('createValidation');
 
 let failed = 0;
 let cases = 0;
@@ -391,12 +400,23 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
     /onChange=\{\(e\) => \{\s*if \(e\.target\.value\) markActed\(\);\s*setPrompt\(e\.target\.value\);\s*\}\}/.test(form));
   check('6: the latch is set in the example chips\' handler, before the prompt changes',
     /<ExampleChips\s+onPick=\{\(example\) => \{\s*markActed\(\);\s*setPrompt\(example\);\s*\}\}\s*\/>/.test(form));
-  check('6: chooseStyle sets the latch first, before its return for the current style (the audit\'s uncaught mutation)',
-    /const chooseStyle = useCallback\(\(id: string\) => \{\s*markActed\(\);\s*if \(id === selectedStyleId\) return;/.test(form));
+  check('6: chooseStyle refuses a style Create does not offer, then sets the latch, before its return for the current style (the audit\'s uncaught mutation)',
+    /const chooseStyle = useCallback\(\(id: string\) => \{\s*if \(!STYLE_IDS\.includes\(id\)\) return;\s*markActed\(\);\s*if \(id === selectedStyleId\) return;/.test(form));
+  // Fix round 2 (audit N1, HQ -090 ruling 1): the size fields, the Background
+  // switch and the reference images act too, in their handler, before the
+  // state changes; nothing else in those handlers changed.
+  check('6: the width and height fields set the latch in their onChange, before the size changes',
+    /onChange=\{\(e\) => \{\s*markActed\(\);\s*setCustomWidth\(Math\.max\(selectedStyle\.minSize, Math\.min\(selectedStyle\.maxSize, Number\(e\.target\.value\)\)\)\);\s*\}\}/.test(form)
+    && /onChange=\{\(e\) => \{\s*markActed\(\);\s*setCustomHeight\(Math\.max\(selectedStyle\.minSize, Math\.min\(selectedStyle\.maxSize, Number\(e\.target\.value\)\)\)\);\s*\}\}/.test(form));
+  check('6: the Background switch sets the latch in its onClick, before it flips',
+    /aria-labelledby=\{`\$\{bgLabelId\} \$\{bgValueId\}`\}\s*onClick=\{\(\) => \{\s*markActed\(\);\s*setRemoveBg\(\(v\) => !v\);\s*\}\}/.test(form));
+  check('6: the reference images set the latch in their onChange, before the list changes',
+    /<ReferenceImagesPanel\s+referenceImages=\{referenceImages\}\s+onChange=\{\(images\) => \{\s*markActed\(\);\s*setReferenceImages\(images\);\s*\}\}\s+enabled=\{referencesEnabled\}\s*\/>/.test(form));
+  check('6: opening the picker is not an act', /onOpenPicker=\{\(\) => setPickerOpen\(true\)\}/.test(form));
   // Every effect at the component's top level, by its two-space indent.
   const effects = [...form.matchAll(/^ {2}use(?:Layout)?Effect\([\s\S]*?^ {2}\}?[^\n]*\);$/gm)].map((m) => m[0]);
-  check('6: the latch is set by those three calls only, through markActed, and in no effect',
-    (form.match(/markActed\(\)/g) ?? []).length === 3 && (form.match(/actedRef\.current = /g) ?? []).length === 1
+  check('6: the latch is set by those seven calls only, through markActed, and in no effect',
+    (form.match(/markActed\(\)/g) ?? []).length === 7 && (form.match(/actedRef\.current = /g) ?? []).length === 1
     && /const markActed = useCallback\(\(\) => \{\s*actedRef\.current = true;\s*formVisit\.rememberActed\(userId\);\s*\}, \[userId\]\);/.test(form)
     && effects.length >= 6 && effects.every((e) => !/markActed|actedRef\.current = |rememberActed/.test(e)), effects.length);
   check('6: the prompt changes in those two handlers only, so no render has a typed prompt without the latch',
@@ -404,7 +424,7 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   check('6: openingAppliedRef and pickedRef are gone', !/openingAppliedRef|pickedRef|picked:/.test(form));
   check('6: the form starts from the visit: the remembered style when known, else the default; the latch from the visit',
     /const \[visitAtMount\] = useState\(\(\) => formVisit\.read\(userId\)\);/.test(form)
-    && /useState\(\(\) => \{\s*const id = visitAtMount\.styleId;\s*return id !== null && getStyleById\(id\) \? id : DEFAULT_STYLE_ID;\s*\}\)/.test(form)
+    && /useState\(\(\) => \{\s*const id = visitAtMount\.styleId;\s*return id !== null && STYLE_IDS\.includes\(id\) \? id : DEFAULT_STYLE_ID;\s*\}\)/.test(form)
     && /const actedRef = useRef\(visitAtMount\.acted\);/.test(form) && !/useState\('plus-classic'\)/.test(form));
 
   // H (audit L2): confirming the current style is a pick.
@@ -493,6 +513,37 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   check('6: the bar, signed out: "{coin} 16 tokens", unchanged',
     out?.narrow === '{coin}16 tokens · Classic Pixel Art · 192 px' && out?.title === 'Classic Pixel Art · 192 px · 16 tokens' && !out?.html.includes('text-red-400'), out && [out.narrow, out.title]);
 
+  // Fix round 2, D (audit N4): from 640 px the wide span's own children, from
+  // the rendered bar: the label alone may shrink; the size and the cost do not.
+  const wideChildren = (html) => {
+    const cls = 'max-sm:hidden inline-flex max-w-full items-center gap-[1ch] align-bottom';
+    const at = (html ?? '').indexOf(`<span class="${cls}">`);
+    if (at < 0) return [];
+    const tags = /<(\/?)span\b([^>]*)>/g;
+    tags.lastIndex = at;
+    const kids = [];
+    let depth = 0;
+    let open = null;
+    for (let m = tags.exec(html); m; m = tags.exec(html)) {
+      if (m[1]) {
+        depth--;
+        if (depth === 1 && open) { kids.push({ cls: open.cls, text: html.slice(open.at, m.index).replace(/<[^>]+>/g, '').replace(/&middot;|·/g, '·') }); open = null; }
+        if (depth === 0) break;
+      } else {
+        if (depth === 1) open = { cls: m[2].match(/class="([^"]*)"/)?.[1] ?? '', at: tags.lastIndex };
+        depth++;
+      }
+    }
+    return kids;
+  };
+  const shortKids = wideChildren(short?.html);
+  const coveredKids = wideChildren(covered?.html);
+  const shrinks = (c) => /\b(min-w-0|truncate)\b/.test(c) || !/\bflex-shrink-0\b/.test(c);
+  check('6: D: from 640 px the truncating part holds the style\'s label alone; " · 192 px · " and the cost group sit in parts that do not shrink',
+    [shortKids, coveredKids].every((k) => k.length === 3 && k[0].cls === 'min-w-0 truncate' && k[0].text === 'Classic Pixel Art'
+      && k[1].cls === 'flex-shrink-0' && !shrinks(k[1].cls) && k[1].text === '· 192 px ·' && k[2].cls === 'flex-shrink-0' && !shrinks(k[2].cls))
+    && shortKids[2]?.text === '{coin}16 tokens · you have 8' && coveredKids[2]?.text === '{coin}16 of 10,021 tokens', { shortKids, coveredKids });
+
   // E (audit L13): both measures run once more when the web font is ready.
   const fontsReady = /let mounted = true;\s*if \('fonts' in document\) \{\s*void document\.fonts\.ready\.then\(\(\) => \{\s*if \(mounted\) measure\(\);\s*\}\);\s*\}\s*return \(\) => \{\s*mounted = false;/;
   const chipsAt = form.indexOf('function ExampleChips(');
@@ -532,6 +583,35 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   check('6: Add, collapsed and empty, opens the panel and the file picker in one press; the file input sits outside the panel',
     /onClick=\{\(\) => \{\s*if \(!expanded\) triggerFilePicker\(\);\s*setOpen\(\(v\) => !v\);\s*\}\}/.test(panel)
     && inputAt > 0 && inputAt < panel.indexOf('{expanded && (') && (panel.match(/type="file"/g) ?? []).length === 1);
+}
+
+// ── 7. Fix round 2, E: 8-Direction Rotation hidden from Create ──
+
+{
+  const allIds = GENERATION_STYLES.map((s) => s.id);
+  const offeredIds = (OFFERED_STYLES ?? []).map((s) => s.id);
+  check('7: the offered list has 20 styles and no anim-8dir; GENERATION_STYLES still has 21 in the same order',
+    offeredIds.length === 20 && !offeredIds.includes('anim-8dir') && allIds.length === 21 && allIds[20] === 'anim-8dir'
+    && same(offeredIds, allIds.filter((id) => id !== 'anim-8dir')), { offered: offeredIds.length, all: allIds.length });
+  check('7: anim-8dir is the one hidden style, with its reason, and OFFERED_STYLES is GENERATION_STYLES without the hidden ones',
+    same(GENERATION_STYLES.filter((s) => s.hidden).map((s) => s.id), ['anim-8dir']) && getStyleById('anim-8dir')?.hidden === true
+    && registrySrc.includes('    // The upstream model fails every call for this style (HQ room 2026-11-11-076).\n    hidden: true,\n  },\n];')
+    && (registrySrc.match(/hidden: true/g) ?? []).length === 1 && /\n {2}hidden\?: boolean;\n/.test(registrySrc)
+    && /export const OFFERED_STYLES: GenerationStyle\[\] = GENERATION_STYLES\.filter\(\(s\) => !s\.hidden\);/.test(registrySrc));
+  check('7: the picker groups offered styles only; the form\'s STYLE_IDS (Recent, the visit, chooseStyle) are the offered ids',
+    /for \(const style of OFFERED_STYLES\) \{/.test(picker) && !/for \(const style of GENERATION_STYLES\)/.test(picker)
+    && /^const STYLE_IDS = OFFERED_STYLES\.map\(\(s\) => s\.id\);$/m.test(form) && !/GENERATION_STYLES\.map\(/.test(form)
+    && (form.match(/STYLE_IDS/g) ?? []).length === 4);
+  check('7: every opening candidate (affordableStyle.ts) is an offered style',
+    OPENING_CANDIDATES.length === 2 && OPENING_CANDIDATES.every((id) => offeredIds.includes(id)), OPENING_CANDIDATES);
+  check('7: anim-8dir still answers every lookup and price as before: getStyleById, getTokenCost 50, getResolutionMode locked at 80, the pro free-tier bucket',
+    getStyleById('anim-8dir')?.label === '8-Direction Rotation' && getStyleById('anim-8dir')?.promptStyle === 'animation__8_dir_rotation'
+    && getTokenCost('animation__8_dir_rotation') === 50 && same(getResolutionMode('animation__8_dir_rotation'), { kind: 'locked', size: 80 })
+    && getFreeTierBucket('animation__8_dir_rotation') === 'pro');
+  const req = (width, height) => ({ prompt: 'a small knight', promptStyle: 'animation__8_dir_rotation', width, height, expectedTokenCost: 50 });
+  check('7: createValidation (the real validateCreateBody) still accepts its 80 x 80 request and refuses 64 x 64 as before',
+    validateCreateBody(req(80, 80)) === null && validateCreateBody(req(64, 64)) === 'This style is locked at 80x80. Got 64x64.',
+    [validateCreateBody(req(80, 80)), validateCreateBody(req(64, 64))]);
 }
 
 if (failed > 0) {

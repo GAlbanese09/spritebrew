@@ -45,6 +45,8 @@ export interface GenerationStyle {
    *  Only the rd_pro__* family supports references per RD docs. */
   supportsReferenceImages?: boolean;
   resolutionMode?: ResolutionMode;
+  /** Not offered on Create (OFFERED_STYLES). Every lookup and price still reads it. */
+  hidden?: boolean;
 }
 
 export const GENERATION_STYLES: GenerationStyle[] = [
@@ -210,8 +212,13 @@ export const GENERATION_STYLES: GenerationStyle[] = [
     defaultWidth: 80, defaultHeight: 80, minSize: 80, maxSize: 80,
     fixedSize: true, costPerGeneration: 0.25, tokenCost: 50, isAnimation: true, supportsRemoveBg: true,
     resolutionMode: { kind: 'locked', size: 80 },
+    // The upstream model fails every call for this style (HQ room 2026-11-11-076).
+    hidden: true,
   },
 ];
+
+/** The styles Create offers: GENERATION_STYLES without the hidden ones. */
+export const OFFERED_STYLES: GenerationStyle[] = GENERATION_STYLES.filter((s) => !s.hidden);
 
 export function getStyleById(id: string): GenerationStyle | undefined {
   return GENERATION_STYLES.find((s) => s.id === id);

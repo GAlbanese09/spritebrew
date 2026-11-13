@@ -26,6 +26,14 @@
 //    and store, the border read run on real pixel data from the result
 //    card's own source, and the pins for L and M.
 //
+// Fix round 2 (audit r2 of PR #53; HQ room 2026-11-11-076, -083, -090;
+// DESIGN -012): any edit of the form (the size, Background, reference
+// images) is an act; the note shows only on the two styles it speaks of;
+// 8-Direction Rotation is hidden from Create and cannot come back through the
+// visit, Recent or chooseStyle; the landing page counts 5 offered animated
+// styles; "Download as delivered"; the lightbox's toolbar button and
+// backdrop close pinned.
+//
 // Run from the repo root: `node scripts/polish-pr2-test.mjs`. Bundles with
 // esbuild into local/.polish-pr2-test/ (gitignored). Prints only case names
 // and pass or fail. Source pins read the source with comments stripped.
@@ -41,7 +49,7 @@ const OUT_DIR = path.join(ROOT, 'local', '.polish-pr2-test');
 
 await build({
   entryPoints: ['src/lib/affordableStyle.ts', 'src/lib/middleEllipsis.ts', 'src/lib/sheetSession.ts', 'src/lib/styleRegistry.ts', 'src/lib/constants.ts',
-    'src/components/sprites/animatedStills.ts', 'src/lib/createFormVisit.ts', 'src/lib/sheetAlpha.ts']
+    'src/components/sprites/animatedStills.ts', 'src/lib/createFormVisit.ts', 'src/lib/sheetAlpha.ts', 'src/lib/recentStyles.ts']
     .map((p) => path.join(ROOT, p)),
   bundle: true, format: 'esm', platform: 'node', outdir: OUT_DIR, outExtension: { '.js': '.mjs' }, entryNames: '[name]', logLevel: 'silent',
   alias: { '@': path.join(ROOT, 'src') },
@@ -69,14 +77,15 @@ await build({
   } }],
 });
 const load = (name) => import(pathToFileURL(path.join(OUT_DIR, `${name}.mjs`)).href);
-const { openingStyle, affordableNote } = await load('affordableStyle');
+const { openingStyle, affordableNote, OPENING_CANDIDATES } = await load('affordableStyle');
 const { middleEllipsis } = await load('middleEllipsis');
 const { sheetLeaveLosesWork } = await load('sheetSession');
-const { getStyleById, GENERATION_STYLES } = await load('styleRegistry');
+const { getStyleById, GENERATION_STYLES, OFFERED_STYLES } = await load('styleRegistry');
 const { DAILY_LOGIN_TOKENS, EMAIL_LIST_BONUS_TOKENS } = await load('constants');
 const { ANIMATED_STILLS, stillFrameStyle } = await load('animatedStills');
 const { createFormVisit } = await load('createFormVisit');
 const { borderMostlyTransparent } = await load('sheetAlpha');
+const { readRecent, accountRecentStorage, recentStylesKey } = await load('recentStyles');
 const { StyleExamplesLightbox } = await load('lightbox');
 const { resetDailyRewardClaim, useSpriteStore } = await load('rewardClient');
 
@@ -174,21 +183,29 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     names.every((n) => new RegExp(`\\b${n}\\b`).test(constImport))
     && landing.includes('`${DAILY_LOGIN_TOKENS} free tokens each day, ${STREAK_WEEKLY_BONUS_TOKENS} on every ${ordinal(STREAK_INTERVAL_DAYS)} day in a row`')
     && landing.includes('`${SIGNUP_BONUS_TOKENS} tokens to start`') && landing.includes('`+${EMAIL_LIST_BONUS_TOKENS} for joining the newsletter`'));
-  check('4: the animation style count comes from the registry, and the footer line is the new one',
-    /GENERATION_STYLES\.filter\(\(s\) => s\.isAnimation\)\.length/.test(landing) && landing.includes('${ANIMATED_STYLE_COUNT} animation styles available now.')
+  // The page's own count, run on the real registry.
+  const countExpr = landing.match(/const ANIMATED_STYLE_COUNT = (GENERATION_STYLES\.filter\([^\n]*\)\.length);/)?.[1];
+  let pageCount = null;
+  try { pageCount = countExpr ? new Function('GENERATION_STYLES', `return ${countExpr};`)(GENERATION_STYLES) : null; } catch { pageCount = null; }
+  check('4: the animation style count comes from the registry and counts the 5 offered animated styles, and the footer line is the new one',
+    /GENERATION_STYLES\.filter\(\(s\) => s\.isAnimation && !s\.hidden\)\.length/.test(landing) && landing.includes('${ANIMATED_STYLE_COUNT} animation styles available now.')
     && landing.includes('Made by George, an indie developer') && landing.includes('Zoom in to edit single pixels.')
-    && GENERATION_STYLES.filter((s) => s.isAnimation).length === 6);
+    && pageCount === 5 && OFFERED_STYLES.filter((s) => s.isAnimation).length === 5 && GENERATION_STYLES.filter((s) => s.isAnimation).length === 6, pageCount);
 
   const layout = stripComments(read('src/app/layout.tsx'));
   check('4: layout.tsx has metadataBase spritebrew.com and a per-page canonical',
     layout.includes("metadataBase: new URL('https://spritebrew.com')") && layout.includes("alternates: { canonical: './' }"));
 
   const result = stripComments(read('src/components/sprites/GenerationResult.tsx'));
-  check('4: the result card says "Download unedited sheet", never "Download original"',
-    !result.includes('Download original') && result.includes('Download unedited sheet')
-    && result.includes('Could not make the sheet. Try Download unedited sheet.'));
+  check('4: the result card says "Download as delivered", never "Download original" or "Download unedited sheet"',
+    !result.includes('Download original') && !result.includes('Download unedited sheet') && result.includes('Download as delivered')
+    && result.includes('Could not make the sheet. Try Download as delivered.'));
   check('4: the result card has the hint under it, 12 px, text-secondary',
-    /<p id=\{uneditedHintId\} className="text-xs font-mono text-text-secondary mt-1">\s*The whole sheet as SpriteBrew delivered it, background removed, before any frame edits\.\s*<\/p>/.test(result));
+    /<p id=\{uneditedHintId\} className="text-xs font-mono text-text-secondary mt-1">\s*The whole sheet as SpriteBrew delivered it, background removed, before any frame or pixel edits\.\s*<\/p>/.test(result));
+  // DESIGN -012: the old name is gone from every file under src/.
+  const srcFiles = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? srcFiles(path.join(dir, d.name)) : [path.join(dir, d.name)]));
+  const oldName = srcFiles(path.join(ROOT, 'src')).filter((f) => fs.readFileSync(f, 'utf8').includes('Download unedited sheet')).map((f) => path.relative(ROOT, f));
+  check('4: "Download unedited sheet" appears nowhere under src/', oldName.length === 0, oldName);
   // From the <Button that holds a label to the label: its props and icon.
   const buttonFor = (label) => {
     const at = result.indexOf(label);
@@ -320,9 +337,9 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     /\{moreRight && \(\s*<div\s+className="pointer-events-none absolute top-0 right-0 bottom-1 w-6 bg-linear-to-r from-transparent to-bg-surface"/.test(form)
     && /setMoreRight\(row\.scrollLeft \+ row\.clientWidth < row\.scrollWidth - 1\)/.test(form)
     && /className="flex flex-nowrap gap-1\.5 overflow-x-auto/.test(form));
-  check('7: under 640 px the bar leads with the cost and the balance; from 640 px the same order, the cost never shrinking; a short balance reads "tokens · you have", in red',
+  check('7: under 640 px the bar leads with the cost and the balance; from 640 px the same order, only the style\'s name shrinking; a short balance reads "tokens · you have", in red',
     /<span className="sm:hidden">\s*\{summaryCost\} &middot; \{selectedStyle\.label\} &middot; \{sizeLabel\} px\s*<\/span>/.test(form)
-    && /<span className="max-sm:hidden inline-flex max-w-full items-center gap-\[1ch\] align-bottom">\s*<span className="min-w-0 truncate">\{selectedStyle\.label\} &middot; \{sizeLabel\} px &middot;<\/span>\{' '\}\s*<span className="flex-shrink-0">\{summaryCost\}<\/span>\s*<\/span>/.test(form)
+    && /<span className="max-sm:hidden inline-flex max-w-full items-center gap-\[1ch\] align-bottom">\s*<span className="min-w-0 truncate">\{selectedStyle\.label\}<\/span>\{' '\}\s*<span className="flex-shrink-0">&middot; \{sizeLabel\} px &middot;<\/span>\{' '\}\s*<span className="flex-shrink-0">\{summaryCost\}<\/span>\s*<\/span>/.test(form)
     && /\{formatCount\(tokenCost\)\}\s*\{!userId \? \(\s*' tokens'\s*\) : insufficientTokens \? \(\s*<>\s*\{' '\}tokens &middot;\{' '\}\s*<span className="text-red-400">you have \{formatCount\(tokenBalance\)\}<\/span>\s*<\/>\s*\) : \(\s*<span>\s*\{' '\}of \{formatCount\(tokenBalance\)\} tokens\s*<\/span>\s*\)\}/.test(form)
     && /className="min-w-0 sm:flex-1 truncate /.test(form));
   check('7: the Generate button carries the cost at every width (no hidden sm:inline-flex)',
@@ -362,6 +379,20 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     two?.props?.slides?.length === 2 && Object.keys(twoRender).join() === 'slide' && twoRender.slide === oneRender.slide
     && JSON.stringify({ ...one.props, render: null, slides: null, toolbar: null }) === JSON.stringify({ ...two.props, render: null, slides: null, toolbar: null })
     && two.props.labels.Previous === 'Previous example' && two.props.labels.Next === 'Next example' && two.props.carousel.finite === true, Object.keys(twoRender));
+  // Audit r2: both of these could be removed with every test passing.
+  const useOne = () => {};
+  const useTwo = () => {};
+  const withUse = [
+    StyleExamplesLightbox({ style: classicStyle, onClose() {}, onUseStyle: useOne }),
+    StyleExamplesLightbox({ style: { ...classicStyle, examplePaths: ['/a.png', '/b.png'] }, onClose() {}, onUseStyle: useTwo }),
+  ];
+  const toolbarButtons = withUse.map((el) => el?.props?.toolbar?.buttons ?? []);
+  check('7: the lightbox toolbar\'s Use this style button calls onUseStyle, then Close, with one example or two',
+    toolbarButtons.every((b) => b.length === 2 && b[0]?.type === 'button' && b[0]?.key === 'use-style' && b[1] === 'close')
+    && toolbarButtons[0][0].props.onClick === useOne && toolbarButtons[1][0].props.onClick === useTwo
+    && toolbarButtons[0][0].props['aria-label'] === `Use ${classicStyle.label} style`);
+  check('7: the lightbox still closes on a backdrop click (controller exactly { closeOnBackdropClick: true }), with one example or two',
+    withUse.every((el) => JSON.stringify(el?.props?.controller) === '{"closeOnBackdropClick":true}'), withUse.map((el) => el?.props?.controller));
   const yarl = read('node_modules/yet-another-react-lightbox/dist/index.js');
   check('7: YARL renders render.buttonPrev and render.buttonNext in place of its own buttons (what the one-example case relies on)',
     yarl.includes('buttonPrev ? (buttonPrev()) : (React.createElement(NavigationButton, { label: "Previous"')
@@ -457,60 +488,123 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     const b = a < 0 ? -1 : formSrc.indexOf(to, a + from.length);
     return a < 0 || b < 0 ? null : formSrc.slice(a + from.length, b);
   };
+  // A JSX handler, whole: from the `={` before `marker` through the `}` that
+  // closes its arrow (the first `}}` after the marker).
+  const handlerAround = (marker) => {
+    const at = formSrc.indexOf(marker);
+    const open = at < 0 ? -1 : formSrc.lastIndexOf('={', at);
+    const close = at < 0 ? -1 : formSrc.indexOf('}}', at);
+    return open < 0 || close < 0 ? null : formSrc.slice(open + 2, close + 1);
+  };
   const parts = {
     visit: formSrc.match(/const \[visitAtMount\] = useState\(\(\) => (.+)\);\n/)?.[1],
     acted: formSrc.match(/const actedRef = useRef\((.+)\);\n/)?.[1],
+    styleIds: formSrc.match(/^const STYLE_IDS = (.+);$/m)?.[1],
+    recent: formSrc.match(/const \[recentIds, setRecentIds\] = useState<string\[\]>\((.+)\);\n/)?.[1],
     init: grab('  const [selectedStyleId, setSelectedStyleId] = useState(() => {\n', '\n  });\n'),
     mark: grab('  const markActed = useCallback(() => {\n', '\n  }, [userId]);'),
     choose: grab('  const chooseStyle = useCallback((id: string) => {\n', '\n  }, [selectedStyleId, recentIds, markActed, userId]);'),
     effect: grab('  useLayoutEffect(() => {\n', '\n  }, [serverBalanceKnown, tokenBalance, selectedStyleId, userId]);'),
+    size: grab('  // Update dimensions when style changes\n  useEffect(() => {\n', '\n  }, [selectedStyle]);'),
     change: grab('          onChange={(e) => {\n', '\n          }}'),
     chip: grab('          onPick={(example) => {\n', '\n          }}'),
+    width: handlerAround('setCustomWidth(Math.max('),
+    height: handlerAround('setCustomHeight(Math.max('),
+    bg: handlerAround('setRemoveBg((v) => !v);'),
+    refs: handlerAround('setReferenceImages(images);'),
+    note: formSrc.match(/  const balanceNote = ([\s\S]*?: null);\n/)?.[1],
+    tokenCost: formSrc.match(/^ {2}const tokenCost = (.+);$/m)?.[1],
+    insufficient: formSrc.match(/^ {2}const insufficientTokens = (.+);$/m)?.[1],
+    disabled: formSrc.match(/\n {14}disabled=\{(GENERATION_PAUSED [^\n]*)\}\n/)?.[1],
   };
   const missing = Object.entries(parts).filter(([, v]) => !v).map(([k]) => k);
   check('8: the form\'s opening, latch and visit code is found in GenerationForm.tsx', missing.length === 0, missing);
   let makeForm = null;
   try {
-    const { code: formCode } = await transform(`function makeForm({ formVisit, openingStyle, getStyleById, DEFAULT_STYLE_ID, userId, pushRecent, writeRecent }) {
+    // React's state as plain variables; the layout effect and then the size
+    // effect (which React runs when selectedStyle moves) after each change.
+    const { code: formCode } = await transform(`function makeForm({ formVisit, openingStyle, getStyleById, DEFAULT_STYLE_ID, userId, pushRecent, writeRecent,
+  OFFERED_STYLES, GENERATION_STYLES, readRecent, recentStore, OPENING_CANDIDATES, affordableNote, GENERATION_PAUSED }) {
   const visitAtMount = ${parts.visit};
-  const state = { selectedStyleId: null, prompt: '', recentIds: [], announcement: '', serverBalanceKnown: false, tokenBalance: 0 };
+  const STYLE_IDS = ${parts.styleIds};
+  const recentStorage = () => recentStore;
+  const state = { selectedStyleId: null, prompt: '', recentIds: [], announcement: '', serverBalanceKnown: false, tokenBalance: 0,
+    customWidth: 256, customHeight: 256, removeBg: true, referenceImages: [] };
   state.selectedStyleId = (() => {\n${parts.init}\n})();
+  state.recentIds = (${parts.recent})();
   const actedRef = { current: ${parts.acted} };
   const setSelectedStyleId = (id) => { state.selectedStyleId = id; };
   const setPrompt = (p) => { state.prompt = p; };
   const setRecentIds = (l) => { state.recentIds = l; };
   const setStyleAnnouncement = (t) => { state.announcement = t; };
-  const recentStorage = () => null;
+  const setCustomWidth = (v) => { state.customWidth = v; };
+  const setCustomHeight = (v) => { state.customHeight = v; };
+  const setRemoveBg = (v) => { state.removeBg = typeof v === 'function' ? v(state.removeBg) : v; };
+  const setReferenceImages = (v) => { state.referenceImages = v; };
+  const styleNow = () => getStyleById(state.selectedStyleId) ?? GENERATION_STYLES[0];
   const markActed = () => {\n${parts.mark}\n};
-  const effect = () => { const { serverBalanceKnown, tokenBalance, selectedStyleId } = state;\n${parts.effect}\n};
+  let sizedFor = null;
+  const sizeEffect = () => {
+    if (sizedFor === state.selectedStyleId) return;
+    sizedFor = state.selectedStyleId;
+    const selectedStyle = styleNow();\n${parts.size}\n};
+  const layoutEffect = () => { const { serverBalanceKnown, tokenBalance, selectedStyleId } = state;\n${parts.effect}\n};
+  const effect = () => { layoutEffect(); sizeEffect(); };
+  sizeEffect();
   const chooseStyle = (id) => { const { selectedStyleId, recentIds } = state;\n${parts.choose}\n  effect();\n};
   return {
     state, actedRef,
     balance(b) { state.serverBalanceKnown = true; state.tokenBalance = b; effect(); effect(); },
     type(value) { const e = { target: { value } };\n${parts.change}\n  effect();\n},
     chip(example) {\n${parts.chip}\n  effect();\n},
+    width(value) { const selectedStyle = styleNow(); (${parts.width})({ target: { value: String(value) } }); effect(); },
+    height(value) { const selectedStyle = styleNow(); (${parts.height})({ target: { value: String(value) } }); effect(); },
+    background() { (${parts.bg})(); effect(); },
+    references(images) { (${parts.refs})(images); effect(); },
+    note({ emailListClaimed = false, emailListClaimKnown = true } = {}) {
+      const { serverBalanceKnown, tokenBalance, selectedStyleId } = state;
+      return ${parts.note};
+    },
+    disabled(isGenerating = false) {
+      const selectedStyle = styleNow();
+      const { tokenBalance, prompt } = state;
+      const tokenCost = ${parts.tokenCost};
+      const insufficientTokens = ${parts.insufficient};
+      return ${parts.disabled};
+    },
     choose: chooseStyle,
   };
 }`, { loader: 'ts' });
     makeForm = new Function(`${formCode}\nreturn makeForm;`)();
   } catch (e) { makeForm = null; console.log(String(e)); }
-  const mountForm = (visit, userId) => {
+  const mountForm = (visit, userId, recentStore = null) => {
     // Without the form's code every check below fails by its title.
-    if (!makeForm) return { style: 'missing', acted: null, prompt: null, balance() {}, type() {}, chip() {}, choose() {}, note: () => 'missing', disabled: () => null, announced: () => 'missing', recent: () => ['missing'] };
+    if (!makeForm) return { style: 'missing', acted: null, prompt: null, size: null, balance() {}, type() {}, chip() {}, choose() {}, width() {}, height() {}, background() {}, references() {}, note: () => 'missing', formNote: () => 'missing', disabled: () => null, announced: () => 'missing', recent: () => ['missing'] };
     const real = makeForm({
       formVisit: visit, openingStyle, getStyleById, DEFAULT_STYLE_ID: 'plus-classic', userId,
       pushRecent: (list, prev, id) => [prev, ...list.filter((x) => x !== id && x !== prev)], writeRecent: () => {},
+      OFFERED_STYLES, GENERATION_STYLES, readRecent, recentStore, OPENING_CANDIDATES, affordableNote,
+      // Not paused, so the balance alone decides the button.
+      GENERATION_PAUSED: false,
     });
     const f = {
       get style() { return real.state.selectedStyleId; },
       get acted() { return real.actedRef.current; },
       get prompt() { return real.state.prompt; },
+      get size() { return { w: real.state.customWidth, h: real.state.customHeight, bg: real.state.removeBg, refs: real.state.referenceImages.length }; },
       balance: (b) => real.balance(b),
       type: (t) => real.type(t),
       chip: (t) => real.chip(t),
       choose: (id) => real.choose(id),
+      width: (v) => real.width(v),
+      height: (v) => real.height(v),
+      background: () => real.background(),
+      references: (images) => real.references(images),
       note: () => affordableNote({ balance: real.state.tokenBalance, emailListClaimed: false, emailListClaimKnown: true }),
-      disabled: () => real.state.tokenBalance < getStyleById(real.state.selectedStyleId).tokenCost,
+      // The note as the form shows it (its own balanceNote expression).
+      formNote: () => real.note(),
+      // The Generate button's own disabled expression.
+      disabled: () => real.disabled(),
       announced: () => real.state.announcement,
       recent: () => real.state.recentIds,
     };
@@ -616,6 +710,95 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     const unknown = mountForm(visit3, 'user_a');
     check('8: no userId reads empty and writes nothing (what is held stays); an unknown remembered id opens on the default',
       empty && kept && unknown.style === 'plus-classic' && unknown.acted === false, { empty, kept, unknown: unknown.style });
+  }
+
+  // Fix round 2, A (audit N1; HQ -090 ruling 1): any edit of the form is an
+  // act. Balance 8 opens on Retro Arcade; the edit; then the balance becomes
+  // 508: the style, the size and Background stay as the person left them.
+  {
+    const run = (edit) => {
+      const f = mountForm(createFormVisit(), 'user_a');
+      f.balance(8);
+      const opened = f.style;
+      edit(f);
+      const edited = { style: f.style, ...f.size };
+      f.balance(508);
+      return { opened, edited, after: { style: f.style, ...f.size }, acted: f.acted };
+    };
+    const kept = (r) => r.opened === 'fast-retro' && r.acted === true && JSON.stringify(r.after) === JSON.stringify(r.edited);
+    const size = run((f) => { f.width(128); f.height(128); });
+    // Each field alone acts too.
+    const widthOnly = run((f) => f.width(128));
+    const heightOnly = run((f) => f.height(128));
+    check('8: A: after a size edit (128 x 128, and the width or the height alone), 8 to 508 leaves the style, the size and Background unchanged',
+      kept(size) && size.after.style === 'fast-retro' && size.after.w === 128 && size.after.h === 128 && size.after.bg === true
+      && kept(widthOnly) && widthOnly.after.w === 128 && kept(heightOnly) && heightOnly.after.h === 128, { size, widthOnly, heightOnly });
+    const bg = run((f) => f.background());
+    check('8: A: after a Background press (off), 8 to 508 leaves the style, the size and Background unchanged',
+      kept(bg) && bg.after.style === 'fast-retro' && bg.after.bg === false && bg.after.w === getStyleById('fast-retro').defaultWidth, bg);
+    const refs = run((f) => f.references(['iVBORw0KGgo']));
+    check('8: A: after a reference image is added, 8 to 508 leaves the style, the size and Background unchanged',
+      kept(refs) && refs.after.style === 'fast-retro' && refs.after.refs === 1 && refs.after.bg === true, refs);
+    const none = run(() => {});
+    check('8: A: with no edit, 8 to 508 still moves to Classic and its size (the harness runs the size effect)',
+      none.opened === 'fast-retro' && none.edited.w === getStyleById('fast-retro').defaultWidth
+      && none.after.style === 'plus-classic' && none.acted === false && none.after.w === getStyleById('plus-classic').defaultWidth, none);
+  }
+
+  // Fix round 2, C (audit N6; HQ -090 ruling 3): the form's own note
+  // expression shows the note only on the two opening styles.
+  {
+    const known10 = affordableNote({ balance: 10, emailListClaimed: false, emailListClaimKnown: true });
+    const noteOn = (styleId) => {
+      const f = mountForm(createFormVisit(), 'user_a');
+      f.balance(10);
+      if (styleId !== null) f.choose(styleId);
+      return { style: f.style, note: f.formNote() };
+    };
+    const opened = noteOn(null);
+    const classic = noteOn('plus-classic');
+    const third = noteOn('pro-fantasy');
+    const anim = noteOn('anim-any');
+    check('8: C: at balance 10 the note is the known sentence on fast-retro and plus-classic, and null on a third style',
+      known10 === 'You have 10 tokens: Retro Arcade is ready at 5. Classic Pixel Art needs 16 (+3 a day, +5 for the newsletter).'
+      && opened.style === 'fast-retro' && opened.note === known10 && classic.style === 'plus-classic' && classic.note === known10
+      && third.style === 'pro-fantasy' && third.note === null && anim.style === 'anim-any' && anim.note === null, { opened, classic, third, anim });
+    check('8: C: the form checks the opening styles through OPENING_CANDIDATES, not ids typed again',
+      /const balanceNote = serverBalanceKnown && \(OPENING_CANDIDATES as readonly string\[\]\)\.includes\(selectedStyleId\)\s*\?/.test(stripComments(formSrc))
+      && !/balanceNote[^;]*'(plus-classic|fast-retro)'/.test(formSrc));
+  }
+
+  // Fix round 2, E (HQ -076, -083; ENG -091): 8-Direction Rotation remembered
+  // in the visit and in this account's Recent: the form opens on the default
+  // and offers no way back to it.
+  {
+    const raw = new Map([[recentStylesKey('user_a'), JSON.stringify(['anim-8dir', 'pro-fantasy'])]]);
+    const browser = { getItem: (k) => (raw.has(k) ? raw.get(k) : null), setItem: (k, v) => raw.set(k, v) };
+    const visit = createFormVisit();
+    visit.rememberStyle('user_a', 'anim-8dir');
+    const f = mountForm(visit, 'user_a', accountRecentStorage(browser, 'user_a'));
+    const opened = f.style;
+    const recentAtOpen = [...f.recent()];
+    f.balance(508);
+    const before = JSON.stringify({ style: f.style, acted: f.acted, recent: f.recent(), announced: f.announced(), visit: visit.read('user_a') });
+    f.choose('anim-8dir');
+    const after = JSON.stringify({ style: f.style, acted: f.acted, recent: f.recent(), announced: f.announced(), visit: visit.read('user_a') });
+    // The picker's groups, run from StylePicker.tsx's own code.
+    const pickerSrc = read('src/components/sprites/StylePicker.tsx');
+    const names = pickerSrc.match(/const CATEGORY_NAMES: Record<StyleCategory, string> = (\{[\s\S]*?\});/)?.[1];
+    const groupsSrc = pickerSrc.match(/const CATEGORIES: [^=]*= (\(\(\) => \{[\s\S]*?\}\)\(\));/)?.[1];
+    let pickerIds = ['missing'];
+    try {
+      const { code: g } = await transform(`const CATEGORY_NAMES = ${names};\nreturn ${groupsSrc};`, { loader: 'ts' });
+      pickerIds = new Function('OFFERED_STYLES', 'GENERATION_STYLES', g)(OFFERED_STYLES, GENERATION_STYLES).flatMap((c) => c.styles.map((s) => s.id));
+    } catch { pickerIds = ['missing']; }
+    check('8: E: anim-8dir remembered in the visit opens on the default, and Recent read from this account drops it',
+      opened === 'plus-classic' && JSON.stringify(recentAtOpen) === '["pro-fantasy"]' && JSON.stringify(readRecent(accountRecentStorage(browser, 'user_a'), GENERATION_STYLES.map((s) => s.id))) === '["anim-8dir","pro-fantasy"]',
+      { opened, recentAtOpen });
+    check('8: E: chooseStyle(\'anim-8dir\') changes nothing: no style, no latch, no Recent, no visit write, no announcement',
+      before === after && f.style === 'plus-classic' && f.acted === false && f.announced() === '', { before, after });
+    check('8: E: the picker\'s groups (StylePicker\'s own code) hold the 20 offered styles and not anim-8dir',
+      pickerIds.length === 20 && !pickerIds.includes('anim-8dir') && JSON.stringify([...pickerIds].sort()) === JSON.stringify(OFFERED_STYLES.map((s) => s.id).sort()), pickerIds.length);
   }
 }
 

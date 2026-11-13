@@ -80,11 +80,16 @@ export function signalSheetSessionChanged(): void {
 }
 
 /** Calls `onChange` each time another tab changes the saved session. Returns
- *  a function that stops listening. */
+ *  a function that stops listening. Never throws: where the transport cannot
+ *  be opened, nothing is heard and the stop function does nothing. */
 export function onSheetSessionChangedElsewhere(onChange: () => void): () => void {
-  const t = currentTransport();
-  if (!t) return () => {};
-  return t.listen((from) => {
-    if (from !== TAB_ID) onChange();
-  });
+  try {
+    const t = currentTransport();
+    if (!t) return () => {};
+    return t.listen((from) => {
+      if (from !== TAB_ID) onChange();
+    });
+  } catch {
+    return () => {};
+  }
 }

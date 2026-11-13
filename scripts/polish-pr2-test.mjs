@@ -34,6 +34,15 @@
 // styles; "Download as delivered"; the lightbox's toolbar button and
 // backdrop close pinned.
 //
+// Fix round 3 (audit round 3, F1, and the audit pass on fix 3, G1 to G4; HQ
+// room 2026-11-13-006, -012): from 640 px the bar's summary keeps at least
+// 300 px, the name gives way first, then the size, and the cost never
+// shrinks; the reason may wrap, so a long one (the paused message) cannot
+// push the cost or the button out of the bar; while paused the bar shows
+// one short line (HQ 2026-11-13-015); and
+// 9. generateBarHeight.ts: the notice above the bar follows the bar's real
+//    height, driven here with a stand-in for the page.
+//
 // Run from the repo root: `node scripts/polish-pr2-test.mjs`. Bundles with
 // esbuild into local/.polish-pr2-test/ (gitignored). Prints only case names
 // and pass or fail. Source pins read the source with comments stripped.
@@ -49,7 +58,8 @@ const OUT_DIR = path.join(ROOT, 'local', '.polish-pr2-test');
 
 await build({
   entryPoints: ['src/lib/affordableStyle.ts', 'src/lib/middleEllipsis.ts', 'src/lib/sheetSession.ts', 'src/lib/styleRegistry.ts', 'src/lib/constants.ts',
-    'src/components/sprites/animatedStills.ts', 'src/lib/createFormVisit.ts', 'src/lib/sheetAlpha.ts', 'src/lib/recentStyles.ts']
+    'src/components/sprites/animatedStills.ts', 'src/lib/createFormVisit.ts', 'src/lib/sheetAlpha.ts', 'src/lib/recentStyles.ts',
+    'src/lib/generateBarHeight.ts']
     .map((p) => path.join(ROOT, p)),
   bundle: true, format: 'esm', platform: 'node', outdir: OUT_DIR, outExtension: { '.js': '.mjs' }, entryNames: '[name]', logLevel: 'silent',
   alias: { '@': path.join(ROOT, 'src') },
@@ -86,6 +96,7 @@ const { ANIMATED_STILLS, stillFrameStyle } = await load('animatedStills');
 const { createFormVisit } = await load('createFormVisit');
 const { borderMostlyTransparent } = await load('sheetAlpha');
 const { readRecent, accountRecentStorage, recentStylesKey } = await load('recentStyles');
+const { GENERATE_BAR_SELECTOR, GENERATE_BAR_GAP_PX, readBarHeight, watchBar } = await load('generateBarHeight');
 const { StyleExamplesLightbox } = await load('lightbox');
 const { resetDailyRewardClaim, useSpriteStore } = await load('rewardClient');
 
@@ -340,13 +351,28 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     /\{moreRight && \(\s*<div\s+className="pointer-events-none absolute top-0 right-0 bottom-1 w-6 bg-linear-to-r from-transparent to-bg-surface"/.test(form)
     && /setMoreRight\(row\.scrollLeft \+ row\.clientWidth < row\.scrollWidth - 1\)/.test(form)
     && /className="flex flex-nowrap gap-1\.5 overflow-x-auto/.test(form));
-  check('7: under 640 px the bar leads with the cost and the balance; from 640 px the same order, only the style\'s name shrinking; a short balance reads "tokens · you have", in red',
+  check('7: under 640 px the bar leads with the cost and the balance; from 640 px the same order, the style\'s name shrinking first, then the size; a short balance reads "tokens · you have", in red',
     /<span className="sm:hidden">\s*\{summaryCost\} &middot; \{selectedStyle\.label\} &middot; \{sizeLabel\} px\s*<\/span>/.test(form)
-    && /<span className="max-sm:hidden inline-flex max-w-full items-center gap-\[1ch\] align-bottom">\s*<span className="min-w-0 truncate">\{selectedStyle\.label\}<\/span>\{' '\}\s*<span className="flex-shrink-0">&middot; \{sizeLabel\} px &middot;<\/span>\{' '\}\s*<span className="flex-shrink-0">\{summaryCost\}<\/span>\s*<\/span>/.test(form)
+    && /<span className="max-sm:hidden inline-flex max-w-full items-center gap-\[1ch\] align-bottom">\s*<span className="min-w-0 shrink-\[99999\] truncate">\{selectedStyle\.label\}<\/span>\{' '\}\s*<span className="min-w-0 truncate">&middot; \{sizeLabel\} px &middot;<\/span>\{' '\}\s*<span className="flex-shrink-0">\{summaryCost\}<\/span>\s*<\/span>/.test(form)
     && /\{formatCount\(tokenCost\)\}\s*\{!userId \? \(\s*' tokens'\s*\) : insufficientTokens \? \(\s*<>\s*\{' '\}tokens &middot;\{' '\}\s*<span className="text-red-400">you have \{formatCount\(tokenBalance\)\}<\/span>\s*<\/>\s*\) : \(\s*<span>\s*\{' '\}of \{formatCount\(tokenBalance\)\} tokens\s*<\/span>\s*\)\}/.test(form)
-    && /className="min-w-0 sm:flex-1 truncate /.test(form));
+    && /<p\s+className="min-w-0 sm:min-w-\[300px\] sm:flex-1 truncate text-\[13px\] font-mono text-text-secondary tabular-nums"/.test(form));
   check('7: the Generate button carries the cost at every width (no hidden sm:inline-flex)',
     !form.includes('hidden sm:inline-flex') && /<span className="inline-flex items-center gap-1\.5 tabular-nums">\s*&middot; <PixelCoin \/> \{formatCount\(tokenCost\)\}/.test(form));
+  // Fix round 3: the button's side may shrink and the reason may wrap, so no
+  // reason, however long, sets the width of that side (G1, G2).
+  check('7: the reason sits under the button below 1024 px and beside it from 1024 px; the button\'s side can shrink, and the reason is not held to one line and, from 640 px, wraps in lines of even length',
+    /<div className="flex flex-col-reverse items-stretch gap-1 lg:flex-row lg:items-center lg:gap-3">\s*\{disabledReason && \(\s*<p id=\{reasonId\} className="text-\[13px\] font-mono text-text-secondary text-center sm:text-balance lg:text-right">\s*\{disabledReason\}\s*<\/p>\s*\)\}/.test(form));
+  check('7: the Get tokens link keeps its 44 px touch target everywhere and adds no height to the reason beside the button',
+    /<a\s+href="\/buy-tokens"\s+className="inline-flex items-center pointer-coarse:min-h-11 lg:pointer-coarse:-my-3 text-accent-amber underline hover:text-accent-amber-strong"/.test(form));
+  check('7: while paused the bar shows one short line, and the whole message stays for screen readers in the element the button is described by',
+    /if \(GENERATION_PAUSED\) \{\s*disabledReason = \(\s*<>\s*<span aria-hidden="true">Generating is paused for now\. Details are in the notice above\.<\/span>\s*<span className="sr-only">\{GENERATION_PAUSED_MESSAGE\}<\/span>\s*<\/>\s*\);\s*\} else if \(insufficientTokens\)/.test(form)
+    && !form.includes('disabledReason = GENERATION_PAUSED_MESSAGE')
+    && /<p id=\{reasonId\} className="[^"]*">\s*\{disabledReason\}\s*<\/p>/.test(form)
+    && /aria-describedby=\{disabledReason \? reasonId : undefined\}/.test(form)
+    && form.includes('title={GENERATION_PAUSED ? GENERATION_PAUSED_MESSAGE : insufficientTokens ?'));
+  check('7: the bar is marked for what sits above it (data-generate-bar), once',
+    /<div\s+data-generate-bar=""\s+className="fixed bottom-0 left-0 right-0 lg:left-\[var\(--sidebar-width\)\] z-40 /.test(form)
+    && form.split('data-generate-bar').length === 2);
 
   const panel = stripComments(read('src/components/sprites/ReferenceImagesPanel.tsx'));
   check('7: held reference images on a non-Pro style: the one and the many sentences, no "will be sent"',
@@ -875,6 +901,75 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
   check('8: the Play badge stays bottom-right (DESIGN 010 item 1: the top-right corner had still pixels under it at 56 px)',
     badgeAreas.every((src) => src.includes('"absolute bottom-1 right-1 flex items-center justify-center w-4 h-4 rounded bg-black/60 text-white"')
       && !src.includes('"absolute top-1 right-1 flex items-center justify-center w-4 h-4')));
+}
+
+{
+  // 9. The notice above the bar follows the bar's real height (the audit pass
+  // on fix 3, G3). watchBar and readBarHeight driven with a stand-in page.
+  const page = () => {
+    const p = { bar: null, sizeWatchers: new Map(), treeWatchers: new Set(), sizeStops: 0, treeStops: 0 };
+    p.env = {
+      find: () => p.bar,
+      observeSize: (bar, onChange) => { p.sizeWatchers.set(bar, onChange); return () => { p.sizeWatchers.delete(bar); p.sizeStops++; }; },
+      observeTree: (onChange) => { p.treeWatchers.add(onChange); return () => { p.treeWatchers.delete(onChange); p.treeStops++; }; },
+    };
+    p.tree = () => [...p.treeWatchers].forEach((f) => f());
+    p.resize = (bar, h) => { bar.offsetHeight = h; p.sizeWatchers.get(bar)?.(); };
+    return p;
+  };
+  check('9: the height is null with no bar, null for a bar that takes no room, and the bar\'s height otherwise',
+    readBarHeight(() => null) === null && readBarHeight(() => ({ offsetHeight: 0 })) === null
+    && readBarHeight(() => ({ offsetHeight: 73 })) === 73 && readBarHeight(() => ({ offsetHeight: 144 })) === 144);
+  check('9: the selector is the attribute the form puts on its bar, and the gap is 8 px',
+    GENERATE_BAR_SELECTOR === '[data-generate-bar]' && GENERATE_BAR_GAP_PX === 8);
+  {
+    const p = page(); const bar = { offsetHeight: 73 }; p.bar = bar; let calls = 0;
+    const stop = watchBar(p.env, () => { calls++; });
+    const atStart = calls === 0 && p.sizeWatchers.has(bar) && p.treeWatchers.size === 1;
+    p.resize(bar, 116);
+    const afterResize = calls === 1 && readBarHeight(p.env.find) === 116;
+    p.tree();                                   // something else on the page changed: the same bar
+    const sameBar = calls === 1 && p.sizeWatchers.size === 1;
+    check('9: watching a bar: nothing is called at the start, a resize is announced, and other changes on the page are not', atStart && afterResize && sameBar,
+      { atStart, afterResize, sameBar, calls });
+    p.bar = null; p.tree();                     // the form left the page
+    const gone = calls === 2 && p.sizeWatchers.size === 0 && p.sizeStops === 1 && readBarHeight(p.env.find) === null;
+    const next = { offsetHeight: 97 }; p.bar = next; p.tree();   // a form is back, with another bar
+    const back = calls === 3 && p.sizeWatchers.has(next) && !p.sizeWatchers.has(bar) && readBarHeight(p.env.find) === 97;
+    p.resize(next, 73);
+    const nextResize = calls === 4;
+    check('9: the bar leaving the page and another one arriving are both announced, and only the bar on the page is watched', gone && back && nextResize,
+      { gone, back, nextResize, calls });
+    stop();
+    const stopped = p.treeWatchers.size === 0 && p.sizeWatchers.size === 0 && p.treeStops === 1 && p.sizeStops === 2;
+    p.tree(); bar.offsetHeight = 1; next.offsetHeight = 1;
+    check('9: stopping ends both watches, and nothing is called after it', stopped && calls === 4, { stopped, calls });
+  }
+  {
+    const p = page(); let calls = 0;            // no bar at the start (the Animate tab), then the Create form arrives
+    const stop = watchBar(p.env, () => { calls++; });
+    const none = calls === 0 && p.sizeWatchers.size === 0 && readBarHeight(p.env.find) === null;
+    const bar = { offsetHeight: 121 }; p.bar = bar; p.tree();
+    check('9: with no bar at the start nothing is watched; a bar that arrives later is announced and watched',
+      none && calls === 1 && p.sizeWatchers.has(bar) && readBarHeight(p.env.find) === 121, { none, calls });
+    stop();
+  }
+
+  const notice = stripComments(read('src/components/sprites/GenerationErrorNotice.tsx'));
+  const STRIP = 'className={`pointer-events-none fixed left-0 right-0 lg:left-[var(--sidebar-width)] z-40 ${BOTTOM_OFFSET}`}';
+  check('9: the notice reads the marked bar from the page, watches its size and the page for a bar coming or going',
+    notice.includes('find: () => document.querySelector<HTMLElement>(GENERATE_BAR_SELECTOR),')
+    && /const sizes = new ResizeObserver\(onChange\);\s*sizes\.observe\(bar\);\s*return \(\) => sizes\.disconnect\(\);/.test(notice)
+    && /const nodes = new MutationObserver\(onChange\);\s*nodes\.observe\(document\.body, \{ childList: true, subtree: true \}\);\s*return \(\) => nodes\.disconnect\(\);/.test(notice)
+    && notice.includes('const subscribeBar = (onChange: () => void) => watchBar(browserBar, onChange);')
+    && notice.includes('const getBarHeight = () => readBarHeight(browserBar.find);')
+    && notice.includes('const getServerBarHeight = () => null;'));
+  check('9: both notices sit in one strip placed 8 px above the bar\'s real height, with the fixed offsets kept for a bar that is not marked',
+    notice.includes('const barHeight = useSyncExternalStore(subscribeBar, getBarHeight, getServerBarHeight);')
+    && notice.includes('style={barHeight === null ? undefined : { bottom: barHeight + GENERATE_BAR_GAP_PX }}')
+    && notice.split(STRIP).length === 2
+    && notice.split('<AboveBar>').length === 3 && notice.split('</AboveBar>').length === 3
+    && notice.includes("'bottom-[calc(147px+env(safe-area-inset-bottom))] sm:bottom-[calc(81px+env(safe-area-inset-bottom))]'"));
 }
 
 if (failed > 0) {

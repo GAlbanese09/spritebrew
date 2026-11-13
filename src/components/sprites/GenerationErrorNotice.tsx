@@ -1,18 +1,58 @@
 'use client';
 
+import { useSyncExternalStore, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { AlertCircle, Clock, X } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
+import {
+  GENERATE_BAR_GAP_PX, GENERATE_BAR_SELECTOR, readBarHeight, watchBar, type BarEnv,
+} from '@/lib/generateBarHeight';
 
-// Bottom offsets sit just above the tallest sticky generate bar on /generate
-// (GenerationForm.tsx and AnimateForm.tsx render the bars; they are not
-// looked up in the DOM because they are about to be rewritten). Tallest bar,
-// computed from classes: 139px below the sm breakpoint (stacked layout, two
-// line summary, Remove background toggle, 48px button, py-3, border) and 73px
-// from sm up (single row). Plus an 8px gap. The bars add max(12px, safe area)
-// of bottom padding, so the safe-area inset is added on top here.
+// The notices sit just above the sticky generate bar on /generate. The
+// Create form marks its bar (data-generate-bar), and while a notice shows
+// the bar's real height is read from the page: the bar grows when a reason
+// sits under the button or takes two lines, and a fixed offset then lands
+// on it (PR #53, audit pass on fix 3, G3).
+//
+// The fixed offsets below stay for a bar that is not marked (AnimateForm's).
+// Tallest such bar, computed from classes: 139px below the sm breakpoint
+// (stacked layout, two line summary, Remove background toggle, 48px button,
+// py-3, border) and 73px from sm up (single row). Plus an 8px gap. The bars
+// add max(12px, safe area) of bottom padding, so the safe-area inset is
+// added on top here.
 const BOTTOM_OFFSET =
   'bottom-[calc(147px+env(safe-area-inset-bottom))] sm:bottom-[calc(81px+env(safe-area-inset-bottom))]';
+
+const browserBar: BarEnv<HTMLElement> = {
+  find: () => document.querySelector<HTMLElement>(GENERATE_BAR_SELECTOR),
+  observeSize: (bar, onChange) => {
+    const sizes = new ResizeObserver(onChange);
+    sizes.observe(bar);
+    return () => sizes.disconnect();
+  },
+  observeTree: (onChange) => {
+    const nodes = new MutationObserver(onChange);
+    nodes.observe(document.body, { childList: true, subtree: true });
+    return () => nodes.disconnect();
+  },
+};
+const subscribeBar = (onChange: () => void) => watchBar(browserBar, onChange);
+const getBarHeight = () => readBarHeight(browserBar.find);
+const getServerBarHeight = () => null;
+
+/** The fixed strip that holds a notice just above the generate bar. It is
+ *  on the page only while a notice shows, so the bar is watched only then. */
+function AboveBar({ children }: { children: ReactNode }) {
+  const barHeight = useSyncExternalStore(subscribeBar, getBarHeight, getServerBarHeight);
+  return (
+    <div
+      className={`pointer-events-none fixed left-0 right-0 lg:left-[var(--sidebar-width)] z-40 ${BOTTOM_OFFSET}`}
+      style={barHeight === null ? undefined : { bottom: barHeight + GENERATE_BAR_GAP_PX }}
+    >
+      {children}
+    </div>
+  );
+}
 
 export default function GenerationErrorNotice() {
   return (
@@ -55,9 +95,7 @@ function Notice() {
   // screen readers hear the message from PausedStatus instead.
   if (!generationError && pausedMessage) {
     return (
-      <div
-        className={`pointer-events-none fixed left-0 right-0 lg:left-[var(--sidebar-width)] z-40 ${BOTTOM_OFFSET}`}
-      >
+      <AboveBar>
         <div className="max-w-5xl mx-auto px-4">
           <div className="rounded-lg bg-bg-primary">
             <div
@@ -69,7 +107,7 @@ function Notice() {
             </div>
           </div>
         </div>
-      </div>
+      </AboveBar>
     );
   }
 
@@ -79,9 +117,7 @@ function Notice() {
     generationError.includes('buy more tokens') || generationError.includes('top up');
 
   return (
-    <div
-      className={`pointer-events-none fixed left-0 right-0 lg:left-[var(--sidebar-width)] z-40 ${BOTTOM_OFFSET}`}
-    >
+    <AboveBar>
       <div className="max-w-5xl mx-auto px-4">
         <div className="pointer-events-auto max-h-[40vh] overflow-y-auto rounded-lg bg-bg-primary">
           <div
@@ -112,6 +148,6 @@ function Notice() {
           </div>
         </div>
       </div>
-    </div>
+    </AboveBar>
   );
 }

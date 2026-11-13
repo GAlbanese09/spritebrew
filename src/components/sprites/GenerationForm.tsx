@@ -434,18 +434,26 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const bgValueId = useId();
 
   // Why Generate is disabled, when the person can act on it (none while brewing).
+  // While paused the bar shows one short line: the pause banner carries the
+  // whole message, and screen readers get it here, through the button's
+  // aria-describedby.
   const reasonId = GENERATION_PAUSED ? 'generate-paused-reason' : 'generate-reason';
   let disabledReason: ReactNode = null;
   if (!isGenerating) {
     if (GENERATION_PAUSED) {
-      disabledReason = GENERATION_PAUSED_MESSAGE;
+      disabledReason = (
+        <>
+          <span aria-hidden="true">Generating is paused for now. Details are in the notice above.</span>
+          <span className="sr-only">{GENERATION_PAUSED_MESSAGE}</span>
+        </>
+      );
     } else if (insufficientTokens) {
       disabledReason = (
         <>
           You need {formatCount(tokensNeeded)} more {tokensWord(tokensNeeded)} for this style.{' '}
           <a
             href="/buy-tokens"
-            className="inline-flex items-center pointer-coarse:min-h-11 text-accent-amber underline hover:text-accent-amber-strong"
+            className="inline-flex items-center pointer-coarse:min-h-11 lg:pointer-coarse:-my-3 text-accent-amber underline hover:text-accent-amber-strong"
           >
             Get tokens
           </a>
@@ -660,6 +668,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
     {/* Sticky generate bar — viewport-fixed at bottom, sidebar-offset on desktop */}
     <div
+      data-generate-bar=""
       className="fixed bottom-0 left-0 right-0 lg:left-[var(--sidebar-width)] z-40 px-4 py-3 backdrop-blur-md border-t isolate transform-gpu overscroll-none"
       style={{
         backgroundColor: 'rgba(20, 18, 16, 0.92)',
@@ -670,18 +679,19 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
           {/* One line; the full text is in the title. Under 640 px the cost
-              and the balance lead; from 640 px only the style's name
-              shortens, and the size and the cost never shrink. */}
+              and the balance lead; from 640 px the line keeps at least
+              300 px, the style's name shortens first, then the size, and
+              the cost never shrinks. */}
           <p
-            className="min-w-0 sm:flex-1 truncate text-[13px] font-mono text-text-secondary tabular-nums"
+            className="min-w-0 sm:min-w-[300px] sm:flex-1 truncate text-[13px] font-mono text-text-secondary tabular-nums"
             title={summaryText}
           >
             <span className="sm:hidden">
               {summaryCost} &middot; {selectedStyle.label} &middot; {sizeLabel} px
             </span>
             <span className="max-sm:hidden inline-flex max-w-full items-center gap-[1ch] align-bottom">
-              <span className="min-w-0 truncate">{selectedStyle.label}</span>{' '}
-              <span className="flex-shrink-0">&middot; {sizeLabel} px &middot;</span>{' '}
+              <span className="min-w-0 shrink-[99999] truncate">{selectedStyle.label}</span>{' '}
+              <span className="min-w-0 truncate">&middot; {sizeLabel} px &middot;</span>{' '}
               <span className="flex-shrink-0">{summaryCost}</span>
             </span>
             {isAdmin && (
@@ -689,10 +699,12 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
             )}
           </p>
           {/* The reason sits under the button, centered, below 1024 px; from
-              1024 px it sits beside it on one line. */}
-          <div className="flex flex-col-reverse items-stretch gap-1 flex-shrink-0 lg:flex-row lg:items-center lg:gap-3">
+              1024 px it sits beside it. It wraps when the summary needs
+              the room (from 640 px in lines of even length), so a long
+              reason never pushes the cost or the button out of the bar. */}
+          <div className="flex flex-col-reverse items-stretch gap-1 lg:flex-row lg:items-center lg:gap-3">
             {disabledReason && (
-              <p id={reasonId} className="text-[13px] font-mono text-text-secondary text-center lg:text-right lg:whitespace-nowrap">
+              <p id={reasonId} className="text-[13px] font-mono text-text-secondary text-center sm:text-balance lg:text-right">
                 {disabledReason}
               </p>
             )}

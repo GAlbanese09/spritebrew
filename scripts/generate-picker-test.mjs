@@ -458,7 +458,7 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   const jsxStart = formSrc.indexOf('  const summaryCost = (');
   const jsxEnd = formSrc.indexOf('\n  );\n', jsxStart);
   const costJsx = jsxStart < 0 || jsxEnd < 0 ? '' : formSrc.slice(jsxStart, jsxEnd + 5);
-  const pStart = formSrc.indexOf('          <p\n            className="min-w-0 sm:flex-1 truncate');
+  const pStart = formSrc.indexOf('          <p\n            className="min-w-0 sm:min-w-[300px] sm:flex-1 truncate');
   const pEnd = formSrc.indexOf('          </p>\n', pStart);
   const barJsx = pStart < 0 || pEnd < 0 ? 'null' : formSrc.slice(pStart, pEnd + 14);
   let renderBar = null;
@@ -513,8 +513,11 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   check('6: the bar, signed out: "{coin} 16 tokens", unchanged',
     out?.narrow === '{coin}16 tokens · Classic Pixel Art · 192 px' && out?.title === 'Classic Pixel Art · 192 px · 16 tokens' && !out?.html.includes('text-red-400'), out && [out.narrow, out.title]);
 
-  // Fix round 2, D (audit N4): from 640 px the wide span's own children, from
-  // the rendered bar: the label alone may shrink; the size and the cost do not.
+  // Fix round 2, D (audit N4), amended by fix round 3 (audit round 3, F1, and
+  // the audit pass on fix 3, G4; HQ 2026-11-13-006, -012): from 640 px the wide
+  // span's own children, from the rendered bar: the label gives way first, by
+  // a ratio large enough that the size keeps its full width while the label
+  // shows; then the size; the cost does not shrink.
   const wideChildren = (html) => {
     const cls = 'max-sm:hidden inline-flex max-w-full items-center gap-[1ch] align-bottom';
     const at = (html ?? '').indexOf(`<span class="${cls}">`);
@@ -539,9 +542,9 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   const shortKids = wideChildren(short?.html);
   const coveredKids = wideChildren(covered?.html);
   const shrinks = (c) => /\b(min-w-0|truncate)\b/.test(c) || !/\bflex-shrink-0\b/.test(c);
-  check('6: D: from 640 px the truncating part holds the style\'s label alone; " · 192 px · " and the cost group sit in parts that do not shrink',
-    [shortKids, coveredKids].every((k) => k.length === 3 && k[0].cls === 'min-w-0 truncate' && k[0].text === 'Classic Pixel Art'
-      && k[1].cls === 'flex-shrink-0' && !shrinks(k[1].cls) && k[1].text === '· 192 px ·' && k[2].cls === 'flex-shrink-0' && !shrinks(k[2].cls))
+  check('6: D: from 640 px the style\'s label gives way first (shrink 99999), then " · 192 px · " (shrink 1); the cost group sits in a part that does not shrink',
+    [shortKids, coveredKids].every((k) => k.length === 3 && k[0].cls === 'min-w-0 shrink-[99999] truncate' && k[0].text === 'Classic Pixel Art'
+      && k[1].cls === 'min-w-0 truncate' && k[1].text === '· 192 px ·' && k[2].cls === 'flex-shrink-0' && !shrinks(k[2].cls))
     && shortKids[2]?.text === '{coin}16 tokens · you have 8' && coveredKids[2]?.text === '{coin}16 of 10,021 tokens', { shortKids, coveredKids });
 
   // E (audit L13): both measures run once more when the web font is ready.

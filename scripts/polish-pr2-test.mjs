@@ -231,6 +231,9 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
   check('4: the processed image is held with its source, and each save changes the status',
     /bgRemoved !== null && bgRemoved\.src === generatedImageDataUrl \? bgRemoved\.url : null/.test(result)
     && /setSheetReady\(\(prev\) => nextPress\(prev, generatedImageDataUrl\)\);\s*return;/.test(result) && !/setSheetReadySrc/.test(result));
+  check('4: a version switch clears the sheet and GIF status (handleShowVersion), and setSheetReadySrc appears nowhere',
+    /const handleShowVersion = useCallback\(\(version: CardVersion\) => \{[^}]*setSheetReady\(null\);\s*setGifReady\(null\);[^}]*\}, \[/.test(result)
+    && !/setSheetReadySrc/.test(read('src/components/sprites/GenerationResult.tsx')));
 
   const gallery = stripComments(read('src/app/gallery/page.tsx'));
   const loadingAt = gallery.indexOf('if (loading) {');
@@ -823,12 +826,12 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
   // one with only its center opaque, and a fully opaque one.
   const card = read('src/components/sprites/GenerationResult.tsx');
   const from = card.indexOf('        const strips = [');
-  const toLine = 'if (!cancelled) setSheetAlpha({ src, transparent: borderMostlyTransparent(ring, ring.length / 4, 1) });';
+  const toLine = 'if (!cancelled) setSheetAlpha({ src, key, transparent: borderMostlyTransparent(ring, ring.length / 4, 1) });';
   const to = from < 0 ? -1 : card.indexOf(toLine, from);
   const readSrc = from < 0 || to < 0 ? '' : card.slice(from, to + toLine.length);
   let runRead = null;
   try {
-    const { code: c } = await transform(`function run(ctx, W, H, borderMostlyTransparent, setSheetAlpha, src, cancelled) {\n${readSrc}\n}`, { loader: 'ts' });
+    const { code: c } = await transform(`function run(ctx, W, H, borderMostlyTransparent, setSheetAlpha, src, key, cancelled) {\n${readSrc}\n}`, { loader: 'ts' });
     runRead = new Function(`${c}\nreturn run;`)();
   } catch { runRead = null; }
   const sheetOf = (W, H, opaque) => {
@@ -846,7 +849,7 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
   const answer = ({ ctx, W, H }) => {
     if (!runRead) return 'no read';
     let got = 'none';
-    runRead(ctx, W, H, borderMostlyTransparent, (v) => { got = v.transparent; }, 's', false);
+    runRead(ctx, W, H, borderMostlyTransparent, (v) => { got = v.transparent; }, 's', 'k', false);
     return got;
   };
   check('8: the border read is found in GenerationResult.tsx and runs', readSrc.length > 0 && runRead !== null);

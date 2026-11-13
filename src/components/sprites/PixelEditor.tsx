@@ -6,12 +6,13 @@ import { HotkeysProvider } from 'react-hotkeys-hook';
 import PixelEditorBody, { type OnionSources } from './PixelEditorBody';
 
 export type { OnionSources };
-import { useEditorStore, selectIsDirty } from './editorStore';
+import { useEditorStore, selectIsDirty, selectHasPixelChanges } from './editorStore';
 import { closeEditorDraft, discardEditorDraft } from './useEditorRecovery';
 import { useEditorHistoryGuard } from './useEditorHistoryGuard';
 import type { SpriteProjectSource } from '@/lib/spriteProject';
 import { pixelsToPngDataUrl } from '@/lib/editorImage';
 import { newDraftKey } from '@/lib/editorRecovery';
+import { unsavedEditsText } from '@/lib/editorCopy';
 
 /**
  * Modal-mode wrapper around <PixelEditorBody>. Preserves the existing
@@ -89,15 +90,15 @@ export default function PixelEditor({
   // Save-and-close from the confirm dialog: serialize current store pixels
   // to a PNG dataURL, fire onSave, then onClose. Shares the pixelsToPngDataUrl
   // helper with PixelEditorBody so the recipe lives in one place.
-  // Skip onSave when there are no committed edits (historyIndex === 0): a
-  // dirty-via-hasAttemptedEdit session (e.g. an iOS-cancelled stroke) has
-  // byte-identical pixels, and pushing them downstream falsely trips "Edited"
-  // state. Still close in that case.
+  // Write only when the pixels differ from the loaded image
+  // (selectHasPixelChanges): a dirty-via-hasAttemptedEdit session (e.g. an
+  // iOS-cancelled stroke) has byte-identical pixels, and pushing them
+  // downstream falsely trips "Edited" state. Still close in that case.
   const saveAndCloseFromConfirm = useCallback(() => {
     void closeEditorDraft(draftKey);
-    const { pixels, width, height, historyIndex } = useEditorStore.getState();
-    if (historyIndex > 0 && pixels) {
-      onSave(pixelsToPngDataUrl(pixels, width, height));
+    const state = useEditorStore.getState();
+    if (state.pixels && selectHasPixelChanges(state)) {
+      onSave(pixelsToPngDataUrl(state.pixels, state.width, state.height));
     }
     onClose();
   }, [onSave, onClose, draftKey]);
@@ -151,42 +152,51 @@ export default function PixelEditor({
       >
         <div className="fixed inset-0 bg-black/60" aria-hidden="true" />
         <div className="fixed inset-0 flex items-center justify-center p-4">
-          <Dialog.Panel className="bg-bg-primary border border-border-default rounded-xl shadow-2xl w-full max-w-sm p-5 flex flex-col gap-4">
+          <Dialog.Panel className="bg-bg-primary border border-border-default rounded-xl shadow-2xl w-full max-w-md p-5 flex flex-col gap-4">
             <div>
               <Dialog.Title className="text-sm font-mono font-semibold text-text-primary">
                 Unsaved changes
               </Dialog.Title>
-              <p className="text-xs font-mono text-text-muted mt-1.5">
-                You have unsaved pixel edits. What would you like to do?
+              <p className="text-[13px] font-mono text-text-muted mt-1.5">
+                {unsavedEditsText(source)}
               </p>
             </div>
-            <div className="flex items-center justify-end gap-2 flex-wrap">
-              <button
-                autoFocus
-                onClick={keepEditing}
-                className="px-3 py-1.5 rounded text-xs font-mono cursor-pointer
-                  bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle"
-              >
-                Keep editing
-              </button>
+            {/* Tab order: Discard changes, Keep editing, Save and close. From
+                640 px they sit in one row, right-aligned, the primary last;
+                under 640 px they are full width and stacked the other way
+                up, Save and close first. The panel is wide enough (max-w-md)
+                for the row, and no label wraps. Each is 44 px tall on touch at
+                every width. Discard is the quiet one. Escape and the backdrop
+                mean Keep editing (onClose above). Focus starts on Save and
+                close with a mouse or keyboard; on touch Headless UI gives the
+                dialog itself the focus, so no control is focused. */}
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
               <button
                 onClick={() => {
                   setConfirmOpen(false);
                   void discardEditorDraft(draftKey);
                   onClose();
                 }}
-                className="px-3 py-1.5 rounded text-xs font-mono cursor-pointer
-                  bg-red-600 hover:bg-red-700 text-white"
+                className="px-3 py-1.5 min-h-11 sm:min-h-0 sm:pointer-coarse:min-h-11 rounded text-xs font-mono whitespace-nowrap cursor-pointer
+                  border border-transparent text-red-400 hover:text-red-300 hover:bg-red-500/10"
               >
                 Discard changes
               </button>
               <button
+                onClick={keepEditing}
+                className="px-3 py-1.5 min-h-11 sm:min-h-0 sm:pointer-coarse:min-h-11 rounded text-xs font-mono whitespace-nowrap cursor-pointer
+                  bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle"
+              >
+                Keep editing
+              </button>
+              <button
+                autoFocus
                 onClick={() => {
                   setConfirmOpen(false);
                   saveAndCloseFromConfirm();
                 }}
-                className="px-3 py-1.5 rounded text-xs font-mono cursor-pointer
-                  bg-accent-amber text-bg-primary hover:bg-accent-amber-strong"
+                className="px-3 py-1.5 min-h-11 sm:min-h-0 sm:pointer-coarse:min-h-11 rounded text-xs font-mono whitespace-nowrap cursor-pointer
+                  border border-transparent bg-accent-amber text-bg-primary hover:bg-accent-amber-strong"
               >
                 Save and close
               </button>

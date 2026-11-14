@@ -1,16 +1,22 @@
 'use client';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from 'react';
+import { Info } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import {
   alignmentSummary,
   measureFrame,
   moveWords,
   planAlignment,
+  heldWords,
   shiftFrame,
   solidBackground,
+  walkLike,
+  fillsCell,
+  type AlignAnchor,
   type AlignFrame,
-  type AlignTarget,
+  type AlignParts,
+  type BodyMeasure,
   type FrameMove,
 } from '@/lib/alignFrames';
 import { frameToDataURL, imageToCanvas, loadImage } from '@/lib/spriteUtils';
@@ -27,7 +33,7 @@ export interface AlignedSheet {
 type Decoded = {
   urls: Map<string, string>;
   frames: Map<string, AlignFrame>;
-  measured: Map<string, AlignTarget | null>;
+  measured: Map<string, BodyMeasure | null>;
 };
 
 interface AlignFramesPanelProps {
@@ -43,12 +49,50 @@ interface AlignFramesPanelProps {
 
 /** Group types whose frames start left out: the body leaves its feet. */
 const LEFT_OUT_TYPES = ['jump', 'death', 'destroy'];
+/** A walk or a run moves its legs on purpose: these are centered from the
+ *  head and torso, not the legs (HQ room 2026-11-11-098, 2026-11-14-053). */
+const WALK_TYPES = ['walk', 'run'];
+/** The type of a group nobody labelled; frames in no group count as this. */
+const UNLABELLED = 'custom';
+/** The note and its button when a part of the plan would make the head move
+ *  more than it does now, by the part that is left out to start. */
+const WORSE_WORDS: Record<Exclude<AlignParts, 'both'>, { before: string; go: string; after: string; back: string }> = {
+  sideways: {
+    before: 'Feet left as drawn: lining them up would make the head bob more.',
+    go: 'Line up feet anyway',
+    after: 'Feet lined up. The head will bob more than before.',
+    back: 'Leave feet as drawn',
+  },
+  height: {
+    before: 'Not centered: centering would make the head sway more.',
+    go: 'Center anyway',
+    after: 'Centered. The head will sway more than before.',
+    back: "Don't center",
+  },
+  none: {
+    before: 'Left as drawn: aligning would make the head move more.',
+    go: 'Align anyway',
+    after: 'Aligned. The head will move more than before.',
+    back: 'Leave as drawn',
+  },
+};
+/** When a walk's or a run's centering is held only because its head could
+ *  not be tracked: nothing measured says centering would make it sway, so
+ *  the note says "might" (DESIGN 2026-11-14-156). The buttons are case 2's. */
+const UNSURE_WORDS = {
+  ...WORSE_WORDS.height,
+  before: 'Not centered: the head could not be tracked, so centering might make it sway more.',
+  after: 'Centered. The head may sway more than before.',
+};
 const ALL_FRAMES = 'all-frames';
 const ALL_FRAMES_FPS = 8;
 /** The widest a preview is drawn, in CSS pixels, at a whole scale. */
 const PREVIEW_SIZE = 160;
 /** Dims a button that cannot act yet but keeps its focus (no native disabled). */
 const DIMMED = 'aria-disabled:opacity-40 aria-disabled:cursor-not-allowed';
+/** Every button in the card is 44 px tall on touch, at any width: the small
+ *  size drops its touch floor from 768 px up. */
+const TOUCH = 'pointer-coarse:min-h-11';
 
 const CHECKERBOARD = {
   backgroundImage:
@@ -235,10 +279,11 @@ export default function AlignFramesPanel({
   const selectId = useId();
   const undoNoteId = useId();
   const groupsLabelId = useId();
+  const worseNoteId = useId();
 
   const allFrames = useMemo(() => sheet.animations.flatMap((a) => a.frames), [sheet]);
   const frameNumbers = useMemo(() => new Map(allFrames.map((f, i) => [f.id, i + 1])), [allFrames]);
-  const groups = animations.filter((a) => a.frames.length > 0);
+  const groups = useMemo(() => animations.filter((a) => a.frames.length > 0), [animations]);
   const group = groups.find((a) => a.id === scopeId) ?? null;
   const groupFrames = group?.frames ?? allFrames;
   const fps = group?.fps ?? ALL_FRAMES_FPS;
@@ -261,8 +306,65 @@ export default function AlignFramesPanel({
   const leaveOut = useMemo(() => scopeFrames.map((f) => isLeftOut(f.id)), [scopeFrames, isLeftOut]);
   const current = useMemo(() => scopeFrames.map((f) => decoded!.frames.get(f.id)!), [scopeFrames, decoded]);
   const measured = useMemo(() => scopeFrames.map((f) => decoded!.measured.get(f.id) ?? null), [scopeFrames, decoded]);
-  // Only a plan: the After preview shifts each frame when it draws it.
-  const plan = useMemo(() => planAlignment(current, { leaveOut, measured }), [current, leaveOut, measured]);
+  // Which animation each frame plays in (the scope's own group, else the
+  // first group that holds it, else -1), and where each is centered from: a
+  // Walk or a Run from its head and torso; frames nobody labelled by their
+  // own shape (walkLike); every other type from its legs.
+  const { anchors, plays } = useMemo(() => {
+    const first = new Map<string, number>();
+    groups.forEach((g, index) => g.frames.forEach((f) => { if (!first.has(f.id)) first.set(f.id, index); }));
+    const scopeIndex = group ? groups.indexOf(group) : -1;
+    const plays = scopeFrames.map((f) => (group ? scopeIndex : first.get(f.id) ?? -1));
+    const typeOf = (index: number) => (index >= 0 ? groups[index].type : UNLABELLED);
+    const byShape = new Map<number, boolean>();
+    for (const index of new Set(plays)) {
+      if (typeOf(index) !== UNLABELLED) continue;
+      // A frame that fills its cell gets no move, so it does not steer the
+      // shape either.
+      byShape.set(index, walkLike(measured.filter((_, i) => plays[i] === index && !leaveOut[i] && !fillsCell(current[i]))));
+    }
+    const anchors: AlignAnchor[] = plays.map((index) =>
+      (WALK_TYPES.includes(typeOf(index)) || byShape.get(index) ? 'upper' : 'legs'));
+    return { anchors, plays };
+  }, [groups, group, scopeFrames, measured, leaveOut, current]);
+  // Only a plan: the After preview shifts each frame when it draws it. The
+  // whole plan first; a part of it that would make the head move more than it
+  // does now is left out until the person asks for it.
+  const fullPlan = useMemo(
+    () => planAlignment(current, { leaveOut, measured, anchors, groups: plays, holdUntracked: true }),
+    [current, leaveOut, measured, anchors, plays]
+  );
+  const parts: AlignParts = fullPlan.worse.sideways && fullPlan.worse.height ? 'none'
+    : fullPlan.worse.height ? 'sideways' : fullPlan.worse.sideways ? 'height' : 'both';
+  // "Anyway" holds for the plan it was pressed on: a new scope, a Leave out
+  // or new pixels make a new plan, and the part is left out again.
+  const [anywayFor, setAnywayFor] = useState<object | null>(null);
+  const anyway = anywayFor === fullPlan;
+  // "Anyway" aligns the whole plan, with any animation whose head could not
+  // be tracked centered too.
+  const plan = useMemo(
+    () => (anyway ? (fullPlan.unsure ? planAlignment(current, { leaveOut, measured, anchors, groups: plays }) : fullPlan)
+      : parts === 'both' ? fullPlan
+      : planAlignment(current, { leaveOut, measured, anchors, groups: plays, parts, holdUntracked: true })),
+    [parts, anyway, fullPlan, current, leaveOut, measured, anchors, plays]
+  );
+  // A held walk beside animations that are aligned is named by its group (the
+  // chips' names), so the note does not read as the whole scope; one
+  // animation in the scope, every one held, or one in no group: the line
+  // as it was (DESIGN 2026-11-14-220).
+  const heldNames = useMemo(() => {
+    const playing = new Set(plays.filter((_, i) => !leaveOut[i]));
+    const held = fullPlan.heldGroups;
+    return held.length === 0 || held.length >= playing.size || held.some((index) => index < 0) ? null
+      : held.map((index) => groups[index].name);
+  }, [fullPlan, plays, leaveOut, groups]);
+  // A measured reason is named first; a held centering alone says "might".
+  const worseWords = fullPlan.refused ? null
+    : parts !== 'both' ? WORSE_WORDS[parts]
+    : fullPlan.unsure ? (heldNames ? { ...UNSURE_WORDS, ...heldWords(heldNames) } : UNSURE_WORDS) : null;
+  // Nothing is selected: Align has nothing to do until the person asks for
+  // the whole plan.
+  const nothingKept = parts === 'none' && !anyway;
   const numbers = scopeFrames.map((f) => frameNumbers.get(f.id) ?? 0);
   const scopeIds = useMemo(() => scopeFrames.map((f) => f.id), [scopeFrames]);
   const plannedFilled = useMemo(() => new Set(plan.filled.map((i) => scopeIds[i])), [plan, scopeIds]);
@@ -289,7 +391,8 @@ export default function AlignFramesPanel({
   const stillStep = before.length > 0 ? still % before.length : 0;
   const looping = !reducedMotion && before.length > 1;
   // A press's result wins over the standing lines, so "Align undone." shows.
-  const line = status || (reading ? 'Reading frames...' : plan.refused ? alignmentSummary(plan, numbers) : '');
+  // Steady frames say so without a press (HQ room 2026-11-11-098, point 1).
+  const line = status || (reading ? 'Reading frames...' : plan.refused || plan.steady ? alignmentSummary(plan, numbers) : '');
   // Only a solid background is one the page's banner can remove.
   const offersRemoveBackground = !status && !reading && plan.refused === 'opaque' && solid && !!onRemoveBackground;
 
@@ -413,7 +516,7 @@ export default function AlignFramesPanel({
 
   const handleAlign = useCallback(() => {
     // A frame map the card has not read yet waits for its decode.
-    if (reading || decoded?.urls !== frameDataUrls || plan.refused) return;
+    if (reading || decoded?.urls !== frameDataUrls || plan.refused || nothingKept) return;
     void runPress(async () => {
       if (scopeFrames.length > 0 && leaveOut.every(Boolean)) {
         await nextTask();
@@ -473,7 +576,7 @@ export default function AlignFramesPanel({
       }
       return alignmentSummary(plan, numbers);
     });
-  }, [reading, plan, scopeFrames, scopeIds, plannedFilled, leaveOut, current, decoded, numbers, sheet, frameDataUrls, onCommit, runPress, stillCurrent]);
+  }, [reading, plan, nothingKept, scopeFrames, scopeIds, plannedFilled, leaveOut, current, decoded, numbers, sheet, frameDataUrls, onCommit, runPress, stillCurrent]);
 
   const handleUndo = useCallback(() => {
     if (!undo || !undoOpen) return;
@@ -538,6 +641,7 @@ export default function AlignFramesPanel({
                 key={g.id}
                 variant={leftOut ? 'primary' : 'ghost'}
                 size="sm"
+                className={TOUCH}
                 aria-pressed={leftOut}
                 onClick={() => toggleGroup(g.frames, leftOut)}
               >
@@ -561,13 +665,13 @@ export default function AlignFramesPanel({
 
       {reducedMotion && before.length > 1 && (
         <div className="flex flex-wrap items-center gap-3">
-          <Button variant="secondary" size="sm" onClick={() => setStill((stillStep + before.length - 1) % before.length)}>
+          <Button variant="secondary" size="sm" className={TOUCH} onClick={() => setStill((stillStep + before.length - 1) % before.length)}>
             Previous frame
           </Button>
           <p aria-live="polite" className="text-xs font-mono text-text-secondary">
             Frame {stillStep + 1} of {before.length}
           </p>
-          <Button variant="secondary" size="sm" onClick={() => setStill((stillStep + 1) % before.length)}>
+          <Button variant="secondary" size="sm" className={TOUCH} onClick={() => setStill((stillStep + 1) % before.length)}>
             Next frame
           </Button>
         </div>
@@ -586,6 +690,7 @@ export default function AlignFramesPanel({
                 <Button
                   variant={leftOut ? 'primary' : 'ghost'}
                   size="sm"
+                  className={TOUCH}
                   aria-pressed={leftOut}
                   aria-label={`Leave out frame ${numbers[i]}`}
                   onClick={() => toggleLeaveOut(frame.id, leftOut)}
@@ -598,13 +703,60 @@ export default function AlignFramesPanel({
         </ul>
       )}
 
+      {/* A part of the plan that would make the head move more than it does
+          now is left out to start: the note says which and why, and the
+          button puts it back, and takes it out again. Said once when it
+          appears or changes. */}
+      {/* The status region is always in the page and only its words change,
+          so a screen reader hears the note when it arrives (a region added
+          together with its text often is not announced). With no note the
+          wrapper takes no box, so the card keeps its spacing. */}
+      <div className={worseWords && !reading ? 'space-y-1.5' : 'contents'}>
+        <p
+          id={worseNoteId}
+          role="status"
+          className={worseWords && !reading ? 'flex items-start gap-1.5 text-[13px] font-mono text-text-secondary' : undefined}
+        >
+          {worseWords && !reading && (
+            <>
+              <Info size={14} aria-hidden="true" className="mt-0.5 flex-shrink-0" />
+              {/* Both notes share one cell, so the swap never changes the
+                  height: the one not shown is invisible and not read. */}
+              <span className="grid">
+                <span className="col-start-1 row-start-1">{anyway ? worseWords.after : worseWords.before}</span>
+                <span aria-hidden="true" className="col-start-1 row-start-1 invisible">
+                  {anyway ? worseWords.before : worseWords.after}
+                </span>
+              </span>
+            </>
+          )}
+        </p>
+        {worseWords && !reading && (
+          <Button
+            variant="secondary"
+            size="sm"
+            className={TOUCH}
+            onClick={() => {
+              // The rows and the After preview must show what Align will
+              // do now: an earlier Align's result no longer does.
+              setAnywayFor(anyway ? null : fullPlan);
+              setStatus('');
+              setResult(null);
+            }}
+          >
+            {anyway ? worseWords.back : worseWords.go}
+          </Button>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-center gap-3">
         {!plan.refused && (
           <Button
             ref={alignRef}
             size="sm"
-            className={DIMMED}
-            aria-disabled={busy || reading || undefined}
+            className={`${DIMMED} ${TOUCH}`}
+            aria-disabled={busy || reading || nothingKept || undefined}
+            aria-describedby={nothingKept ? worseNoteId : undefined}
             aria-busy={busy || undefined}
             onClick={handleAlign}
           >
@@ -616,7 +768,7 @@ export default function AlignFramesPanel({
           <Button
             variant="secondary"
             size="sm"
-            className={DIMMED}
+            className={`${DIMMED} ${TOUCH}`}
             aria-disabled={busy || !undoOpen || undefined}
             aria-busy={busy || undefined}
             aria-describedby={undoOpen ? undefined : undoNoteId}
@@ -638,7 +790,7 @@ export default function AlignFramesPanel({
           {line}
         </p>
         {offersRemoveBackground && (
-          <Button variant="secondary" size="sm" onClick={onRemoveBackground}>
+          <Button variant="secondary" size="sm" className={TOUCH} onClick={onRemoveBackground}>
             Remove background
           </Button>
         )}

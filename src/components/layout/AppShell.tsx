@@ -53,7 +53,13 @@ export default function AppShell({ children }: AppShellProps) {
         <GenerationPauseBanner />
         <Header onMenuClick={() => setSidebarOpen(true)} />
 
-        <main className={`flex-1 pixel-grid overscroll-none ${isEditor ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+        {/* `relative`: <main> is the page's scroller, and it has to be the
+            containing block for what it holds. Without it, an absolutely
+            placed element with no positioned ancestor (every `sr-only`
+            status line is one) is laid out against the document instead,
+            the document grows taller than the window, and a wheel turn or a
+            drag over the sidebar or the header slides the whole app up. */}
+        <main className={`relative flex-1 pixel-grid overscroll-none ${isEditor ? 'overflow-hidden' : 'overflow-y-auto'}`}>
           <div className={isEditor ? 'h-full' : 'p-6 sm:p-8'}>
             {children}
           </div>

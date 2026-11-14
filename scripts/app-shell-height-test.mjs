@@ -419,6 +419,18 @@ check('ViewportVars still writes --app-vh and --app-top', /setProperty\('--app-v
 const shellSrc = code('src/components/layout/AppShell.tsx');
 check('AppShell: /editor keeps h-app-vh, every other route takes h-app-shell',
   shellSrc.includes("className={`flex ${isEditor ? 'h-app-vh' : 'h-app-shell'} overflow-hidden`}"));
+// The scroller is positioned. A hidden, absolutely placed element inside it
+// (an `sr-only` status line) is then laid out against <main>, not against the
+// document, so it cannot make the window itself scroll.
+{
+  const mains = shellSrc.match(/<main\b[^>]*>/g) ?? [];
+  const cls = mains.length === 1 ? (mains[0].match(/className=\{`([^`]*)`\}/)?.[1] ?? '') : '';
+  const words = cls.replace(/\$\{[^}]*\}/g, ' ').split(/\s+/);
+  check('AppShell: one <main>, and it is positioned (relative) on every route',
+    mains.length === 1 && words.includes('relative') && !/\$\{[^}]*relative[^}]*\}/.test(cls), { mains });
+  check('AppShell: <main> is still the scroller (overflow-y-auto, or overflow-hidden on /editor)',
+    cls.includes("${isEditor ? 'overflow-hidden' : 'overflow-y-auto'}"), { cls });
+}
 const css = code('src/app/globals.css');
 check('globals.css defines h-app-shell with the --app-vh fallback', /@utility h-app-shell \{\s*height: var\(--app-shell-h, var\(--app-vh, 100dvh\)\);\s*\}/.test(css));
 check('globals.css keeps h-app-vh', /@utility h-app-vh \{\s*height: var\(--app-vh, 100dvh\);\s*\}/.test(css));

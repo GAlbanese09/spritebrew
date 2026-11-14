@@ -1025,27 +1025,36 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   // from motionPrompt as before, and nothing here is read by it or by
   // Generate). It says what the motion text asks for that an animation
   // cannot do. Typing is taken a moment after the last key, so the line
-  // neither flickers nor is read out on every key. A change of action takes
-  // the text as it stands, at once, so a template that sets both never
-  // shows a line for the text that was there before. The names and costs
-  // in the line come from the style registry, never typed here.
+  // neither flickers nor is read out on every key. Only typing waits: a
+  // text set by anything else (a template, a restore) and a change of
+  // action are taken as they stand, at once, so the line never speaks for
+  // a text that is no longer in the box. motionKeys counts the changes a
+  // key made in the box; a change of the text that comes with no new key (a
+  // template, a restore, a paste, a drop, a cut) is taken at once, even when
+  // its text equals one typed before. The names and costs in the line come
+  // from the style registry, never typed here.
   const motionBoxId = useId();
   const motionHelpId = useId();
+  const [motionKeys, setMotionKeys] = useState(0);
+  const [motionSeen, setMotionSeen] = useState({ text: motionPrompt, keys: 0, typed: false });
+  if (motionSeen.text !== motionPrompt || motionSeen.keys !== motionKeys) {
+    setMotionSeen({ text: motionPrompt, keys: motionKeys, typed: motionSeen.keys !== motionKeys });
+  }
   const [motionSettled, setMotionSettled] = useState({ text: '', action: selectedAction });
-  const motionSettledForAction = motionSettled.action === selectedAction;
+  const motionWaits = motionSeen.typed && motionSeen.text === motionPrompt && motionSettled.action === selectedAction;
   useEffect(() => {
     const settle = () =>
       setMotionSettled((was) =>
         was.text === motionPrompt && was.action === selectedAction ? was : { text: motionPrompt, action: selectedAction },
       );
-    if (!motionSettledForAction) {
+    if (!motionWaits) {
       settle();
       return;
     }
     const timer = setTimeout(settle, MOTION_CATCH_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [motionPrompt, selectedAction, motionSettledForAction]);
-  const motionText = motionSettledForAction ? motionSettled.text : motionPrompt;
+  }, [motionPrompt, selectedAction, motionWaits]);
+  const motionText = motionWaits ? motionSettled.text : motionPrompt;
   const motionCaught = motionCatch(motionText, selectedAction);
   const sideViewStyle = getStyleById(SIDE_VIEW_STYLE_ID);
   const fourAngleStyle = getStyleById(FOUR_ANGLE_STYLE_ID);
@@ -1071,14 +1080,15 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     return () => observer.disconnect();
   }, [motionCaughtLine]);
   // What a screen reader hears: a line once, when it appears or changes.
-  // A line that comes back soon for a text that only grew ("turn" to
-  // "turning") is not said again; for another text, or after a longer gap,
-  // it is. The words stay in the read-out element for a moment, long enough
-  // to be picked up, then leave it, so the line is not on the page twice.
+  // A line that comes back soon for a text that only grew from the text
+  // that last showed it ("turn" to "turning") is not said again; for
+  // another text, or after a longer gap, it is. The words stay in the
+  // read-out element for a moment, long enough to be picked up, then leave
+  // it, so the line is not on the page twice.
   const [motionSpoken, setMotionSpoken] = useState('');
   const motionLineShownRef = useRef<string | null>(null);
   const motionLineGoneAtRef = useRef(0);
-  const motionLastSpokenRef = useRef<{ line: string; text: string } | null>(null);
+  const motionLineLastRef = useRef<{ line: string; text: string } | null>(null);
   useEffect(() => {
     if (motionCaughtLine === null) {
       if (motionLineShownRef.current !== null) {
@@ -1087,12 +1097,13 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       }
       return;
     }
-    if (motionLineShownRef.current === motionCaughtLine) return;
+    const shown = motionLineShownRef.current;
+    const last = motionLineLastRef.current;
     motionLineShownRef.current = motionCaughtLine;
-    const last = motionLastSpokenRef.current;
+    motionLineLastRef.current = { line: motionCaughtLine, text: motionText };
+    if (shown === motionCaughtLine) return;
     const backSoon = Date.now() - motionLineGoneAtRef.current < MOTION_SPEAK_AGAIN_MS;
     if (last !== null && last.line === motionCaughtLine && backSoon && motionText.startsWith(last.text)) return;
-    motionLastSpokenRef.current = { line: motionCaughtLine, text: motionText };
     setMotionSpoken(motionCaughtLine);
   }, [motionCaughtLine, motionText]);
   useEffect(() => {
@@ -1128,7 +1139,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
         {characterDataUrl ? (
           <div className="rounded-lg border border-border-default bg-bg-surface p-4">
-            <div className="flex items-start gap-4">
+            {/* Under 480 px the text takes a row of its own under the
+                picture, so its 12 px lines are never squeezed. */}
+            <div className="flex flex-wrap items-start gap-4">
               <div
                 className="flex-shrink-0 rounded border border-border-subtle overflow-hidden"
                 style={{
@@ -1145,17 +1158,17 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
                   style={{ imageRendering: 'pixelated' }}
                 />
               </div>
-              <div className="flex-1 min-w-0">
+              <div className="flex-1 min-w-0 max-[480px]:order-last max-[480px]:basis-full">
                 <p className="text-xs font-mono text-text-primary">Character ready</p>
-                <p className="text-[10px] font-mono text-text-muted mt-1">
+                <p className="text-xs font-mono text-text-muted mt-1">
                   {charWidth}x{charHeight} · transparent background
                 </p>
                 {sizeWarning ? (
-                  <p className="text-[10px] font-mono text-red-400 mt-1">
+                  <p className="text-xs font-mono text-red-400 mt-1">
                     Prepared at {charWidth}x{charHeight}. Choose {charWidth} or prepare it again.
                   </p>
                 ) : (
-                  <p className="text-[10px] font-mono text-green-400 mt-1">
+                  <p className="text-xs font-mono text-green-400 mt-1">
                     Ready for animation
                   </p>
                 )}
@@ -1164,7 +1177,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
                 type="button"
                 onClick={handleRemoveChar}
                 aria-label="Remove character"
-                className="flex-shrink-0 p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"
+                className="ml-auto flex-shrink-0 p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"
               >
                 <X size={16} />
               </button>
@@ -1193,10 +1206,13 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             <div className="flex items-center justify-center w-14 h-14 rounded-lg bg-bg-elevated mb-4">
               <UploadCloud size={28} className="text-text-muted" />
             </div>
-            <p className="text-sm font-mono text-text-secondary mb-1">
+            <p className="text-sm font-mono text-text-secondary text-center mb-1">
               Drop your pixel art character here
             </p>
-            <p className="text-[10px] font-mono text-text-muted mb-3">
+            <p className="text-xs font-mono text-text-secondary text-center text-balance mb-1">
+              Works best on a plain background in a color your character doesn&apos;t use.
+            </p>
+            <p className="text-xs font-mono text-text-muted text-center mb-3">
               PNG, JPG, or WebP &middot; any size, we&apos;ll auto-crop and resize
             </p>
             <Button
@@ -1473,7 +1489,12 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         <textarea
           id={motionBoxId}
           value={motionPrompt}
-          onChange={(e) => setMotionPrompt(e.target.value)}
+          onChange={(e) => {
+            setMotionPrompt(e.target.value);
+            // A key waits; a paste, a drop or a cut is taken at once.
+            const how = (e.nativeEvent as InputEvent).inputType ?? '';
+            if (!/^(?:insertFrom|deleteBy)/.test(how)) setMotionKeys((n) => n + 1);
+          }}
           placeholder={motionPlaceholder(selectedAction)}
           aria-describedby={motionHelpId}
           aria-required={isCustomAction}
@@ -1504,15 +1525,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         {/* Always in the page, so a screen reader hears a new line once. */}
         <p role="status" aria-live="polite" className="sr-only">
           {motionSpoken}
-        </p>
-      </div>
-
-      {/* Note about constraints. The one-direction sentence that stood here
-          is now said under the motion box, when it matters. */}
-      <div className="text-xs font-mono text-text-secondary border-t border-border-subtle pt-3">
-        <p>
-          For best results, your character should be on a solid color background
-          that contrasts with the character.
         </p>
       </div>
 

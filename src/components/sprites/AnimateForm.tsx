@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect, useId, useMemo } from 'react';
 import {
   UploadCloud,
   X,
@@ -10,6 +10,7 @@ import {
   Play,
   Lock,
   Save,
+  Info,
 } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore, type RescueInfo } from '@/stores/spriteStore';
@@ -18,9 +19,23 @@ import CharacterAutoPrep from './CharacterAutoPrep';
 import { despillIfTransparent, decodedSize, imageCharacterColours } from '@/lib/spriteUtils';
 import {
   getTokenCost,
+  getStyleById,
   ADVANCED_ANIM_RESOLUTION_PRESETS,
   ADVANCED_ANIM_DEFAULT_RESOLUTION,
 } from '@/lib/styleRegistry';
+import {
+  motionCatch,
+  motionLabel,
+  motionPlaceholder,
+  directionLine,
+  directionsLine,
+  MOTION_HELP,
+  MOTION_CATCH_DELAY_MS,
+  MOTION_SPEAK_AGAIN_MS,
+  MOTION_SPOKEN_CLEAR_MS,
+  SIDE_VIEW_STYLE_ID,
+  FOUR_ANGLE_STYLE_ID,
+} from '@/lib/motionWords';
 import {
   EMPTY_CHARACTER_STATE,
   startReprep,
@@ -1005,6 +1020,86 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   useEffect(() => () => setGenerationProgress(null, null, null, null), [setGenerationProgress]);
 
   const isCustomAction = selectedAction === 'custom_action';
+
+  // Prompt help under the motion box (display only: the request is built
+  // from motionPrompt as before, and nothing here is read by it or by
+  // Generate). It says what the motion text asks for that an animation
+  // cannot do. Typing is taken a moment after the last key, so the line
+  // neither flickers nor is read out on every key. A change of action takes
+  // the text as it stands, at once, so a template that sets both never
+  // shows a line for the text that was there before. The names and costs
+  // in the line come from the style registry, never typed here.
+  const motionBoxId = useId();
+  const motionHelpId = useId();
+  const [motionSettled, setMotionSettled] = useState({ text: '', action: selectedAction });
+  const motionSettledForAction = motionSettled.action === selectedAction;
+  useEffect(() => {
+    const settle = () =>
+      setMotionSettled((was) =>
+        was.text === motionPrompt && was.action === selectedAction ? was : { text: motionPrompt, action: selectedAction },
+      );
+    if (!motionSettledForAction) {
+      settle();
+      return;
+    }
+    const timer = setTimeout(settle, MOTION_CATCH_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [motionPrompt, selectedAction, motionSettledForAction]);
+  const motionText = motionSettledForAction ? motionSettled.text : motionPrompt;
+  const motionCaught = motionCatch(motionText, selectedAction);
+  const sideViewStyle = getStyleById(SIDE_VIEW_STYLE_ID);
+  const fourAngleStyle = getStyleById(FOUR_ANGLE_STYLE_ID);
+  const motionCaughtLine =
+    motionCaught === 'directions' && fourAngleStyle
+      ? directionsLine(fourAngleStyle.label, fourAngleStyle.tokenCost)
+      : motionCaught === 'direction' && sideViewStyle
+        ? directionLine(sideViewStyle.label, sideViewStyle.tokenCost)
+        : null;
+  // Once a line has shown, the room it took stays (a min-height that only
+  // grows). A page that gets shorter while it is scrolled to its end pulls
+  // everything down, and the person's next click lands on another control.
+  const motionLineRef = useRef<HTMLParagraphElement>(null);
+  const [motionLineRoom, setMotionLineRoom] = useState(0);
+  useEffect(() => {
+    const line = motionLineRef.current;
+    if (!line || motionCaughtLine === null) return;
+    const keepRoom = () => setMotionLineRoom((room) => Math.max(room, Math.ceil(line.getBoundingClientRect().height)));
+    keepRoom();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(keepRoom);
+    observer.observe(line);
+    return () => observer.disconnect();
+  }, [motionCaughtLine]);
+  // What a screen reader hears: a line once, when it appears or changes.
+  // A line that comes back soon for a text that only grew ("turn" to
+  // "turning") is not said again; for another text, or after a longer gap,
+  // it is. The words stay in the read-out element for a moment, long enough
+  // to be picked up, then leave it, so the line is not on the page twice.
+  const [motionSpoken, setMotionSpoken] = useState('');
+  const motionLineShownRef = useRef<string | null>(null);
+  const motionLineGoneAtRef = useRef(0);
+  const motionLastSpokenRef = useRef<{ line: string; text: string } | null>(null);
+  useEffect(() => {
+    if (motionCaughtLine === null) {
+      if (motionLineShownRef.current !== null) {
+        motionLineShownRef.current = null;
+        motionLineGoneAtRef.current = Date.now();
+      }
+      return;
+    }
+    if (motionLineShownRef.current === motionCaughtLine) return;
+    motionLineShownRef.current = motionCaughtLine;
+    const last = motionLastSpokenRef.current;
+    const backSoon = Date.now() - motionLineGoneAtRef.current < MOTION_SPEAK_AGAIN_MS;
+    if (last !== null && last.line === motionCaughtLine && backSoon && motionText.startsWith(last.text)) return;
+    motionLastSpokenRef.current = { line: motionCaughtLine, text: motionText };
+    setMotionSpoken(motionCaughtLine);
+  }, [motionCaughtLine, motionText]);
+  useEffect(() => {
+    if (motionSpoken === '') return;
+    const clear = setTimeout(() => setMotionSpoken(''), MOTION_SPOKEN_CLEAR_MS);
+    return () => clearTimeout(clear);
+  }, [motionSpoken]);
   // sizeWarning: the character is present and not the selected size.
   // generateBlockedReason: the first reason Generate is disabled, in
   // canGenerate's order; null while generating or when Generate is enabled.
@@ -1368,32 +1463,53 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         </p>
       </div>
 
-      {/* Motion prompt */}
-      <div>
-        <label className="block text-[10px] font-mono text-text-muted mb-1">
-          Motion description {isCustomAction ? '(required)' : '(optional — less is more)'}
+      {/* Motion prompt. "relative" keeps the hidden read-out paragraph inside
+          this block; without it that paragraph is laid out against the
+          document and the whole window scrolls. */}
+      <div className="relative">
+        <label htmlFor={motionBoxId} className="block text-xs font-mono text-text-secondary mb-1">
+          {motionLabel(isCustomAction)}
         </label>
         <textarea
+          id={motionBoxId}
           value={motionPrompt}
           onChange={(e) => setMotionPrompt(e.target.value)}
-          placeholder="Keep short (2-4 words) or leave blank. e.g., walking forward, sword swing"
+          placeholder={motionPlaceholder(selectedAction)}
+          aria-describedby={motionHelpId}
+          aria-required={isCustomAction}
           rows={2}
           className="w-full rounded-lg bg-bg-elevated border border-border-default px-3 py-2
-            text-xs font-mono text-text-primary placeholder:text-text-muted resize-none
-            focus:outline-none focus:border-accent-amber"
+            text-xs font-mono text-text-primary placeholder:text-text-secondary resize-none
+            focus:outline-none focus:border-accent-amber
+            [@media(hover:none)_and_(pointer:coarse)]:min-h-[calc(3lh+1rem+2px)]
+            max-[340px]:min-h-[calc(3lh+1rem+2px)]"
         />
-        <p className="text-[9px] font-mono text-text-muted/70 mt-1">
-          For best character fidelity, leave blank or use minimal descriptions.
-          Detailed prompts may alter your character&apos;s appearance.
+        <p id={motionHelpId} className="text-xs font-mono text-text-secondary mt-1">
+          {MOTION_HELP}
+        </p>
+        {/* The line. Empty when the text asks for nothing an animation cannot
+            do; its room stays once a line has shown (motionLineRoom). */}
+        <p
+          ref={motionLineRef}
+          style={motionLineRoom > 0 ? { minHeight: motionLineRoom } : undefined}
+          className="text-xs font-mono text-accent-amber"
+        >
+          {motionCaughtLine !== null && (
+            <span className="pt-1 flex items-start gap-1.5">
+              <Info size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <span>{motionCaughtLine}</span>
+            </span>
+          )}
+        </p>
+        {/* Always in the page, so a screen reader hears a new line once. */}
+        <p role="status" aria-live="polite" className="sr-only">
+          {motionSpoken}
         </p>
       </div>
 
-      {/* Note about constraints */}
-      <div className="text-[9px] font-mono text-text-muted/70 border-t border-border-subtle pt-3 space-y-1">
-        <p>
-          Generates a single-direction sprite strip — generate separately for each
-          direction if you need a full 4-direction sheet.
-        </p>
+      {/* Note about constraints. The one-direction sentence that stood here
+          is now said under the motion box, when it matters. */}
+      <div className="text-xs font-mono text-text-secondary border-t border-border-subtle pt-3">
         <p>
           For best results, your character should be on a solid color background
           that contrasts with the character.

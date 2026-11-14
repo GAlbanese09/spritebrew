@@ -132,6 +132,35 @@ export function deserializeSheetSession(
   };
 }
 
+// ── Saved or not (the leave guard) ──────────────────────────────────────────
+
+/** Same session: every field the same object. The store hands out a new
+ *  object on every change, so a change always reads as different. */
+export function sameSheetSession(a: SheetSessionState | null, b: SheetSessionState | null): boolean {
+  return !!a && !!b &&
+    a.spriteSheet === b.spriteSheet &&
+    a.animations === b.animations &&
+    a.frameDataUrls === b.frameDataUrls &&
+    a.currentSheetMetadata === b.currentSheetMetadata &&
+    a.generationStyle === b.generationStyle;
+}
+
+/**
+ * Pure: whether leaving now would lose work. Nothing to lose without a
+ * sheet. With one, the work is safe only when the latest change is the
+ * session this device last saved and saving is still on; after a failed save
+ * (saving off) or without IndexedDB, a sheet is always at risk.
+ */
+export function sheetLeaveLosesWork({ current, lastSaved, savingOn }: {
+  current: SheetSessionState | null;
+  lastSaved: SheetSessionState | null;
+  savingOn: boolean;
+}): boolean {
+  if (!current) return false;
+  if (!savingOn) return true;
+  return !sameSheetSession(current, lastSaved);
+}
+
 // ── IndexedDB ───────────────────────────────────────────────────────────────
 
 interface SheetSessionDbV1 extends DBSchema {

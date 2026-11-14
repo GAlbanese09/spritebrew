@@ -8,8 +8,11 @@ import {
   isSheetSessionSaving,
   loadSheetSession,
   saveSheetSession,
+  sameSheetSession,
+  sheetLeaveLosesWork,
   type SheetSessionState,
 } from '@/lib/sheetSession';
+import { onSheetSessionChangedElsewhere, signalSheetSessionChanged } from '@/lib/sheetSessionSignal';
 import type { SpriteSheet } from '@/lib/types';
 
 /** Same cadence as the editor's recovery controller (useEditorRecovery). */
@@ -32,6 +35,31 @@ let lastSaved: SheetSessionState | null = null;
 /** A sheet the user threw away; never saved again, even by a save that was
  *  already scheduled when they did. */
 let forgottenSheet: SpriteSheet | null = null;
+let listeningElsewhere = false;
+/** Another tab saved or cleared the session since this tab's own save, or
+ *  the page came back from the back-forward cache: the record this tab saved
+ *  may be gone. Only the leave guard reads it; the autosave still compares
+ *  with lastSaved, so hearing never makes this tab save. */
+let changedElsewhere = false;
+
+/**
+ * From the first Sheet Tools mount to the end of the page: when another tab
+ * saves or clears the session, or the page is restored by Back or Forward
+ * (it missed any message sent meanwhile), the leave guard asks while a sheet
+ * is held. Hearing it never saves, loads or clears anything.
+ */
+function listenElsewhere() {
+  if (listeningElsewhere) return;
+  listeningElsewhere = true;
+  onSheetSessionChangedElsewhere(() => {
+    changedElsewhere = true;
+  });
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pageshow', (e: PageTransitionEvent) => {
+      if (e.persisted) changedElsewhere = true;
+    });
+  }
+}
 
 function snapshot(): SheetSessionState | null {
   const s = useSpriteStore.getState();
@@ -45,13 +73,18 @@ function snapshot(): SheetSessionState | null {
   };
 }
 
-function sameSession(a: SheetSessionState | null, b: SheetSessionState | null): boolean {
-  return !!a && !!b &&
-    a.spriteSheet === b.spriteSheet &&
-    a.animations === b.animations &&
-    a.frameDataUrls === b.frameDataUrls &&
-    a.currentSheetMetadata === b.currentSheetMetadata &&
-    a.generationStyle === b.generationStyle;
+/**
+ * For the leave guard: true while the latest change is not yet saved on this
+ * device, or saving has turned itself off. lastSaved moves only once a save
+ * has landed (doSave) or a Restore put the saved session back (restore), so
+ * a Restore with nothing changed, or a reload after the save, is not at risk.
+ * After another tab's save or clear (listenElsewhere) it is true while a
+ * sheet is held, until this tab's own save lands.
+ */
+export function sheetLeaveLosesWorkNow(): boolean {
+  const current = snapshot();
+  if (changedElsewhere && current) return true;
+  return sheetLeaveLosesWork({ current, lastSaved, savingOn: isSheetSessionSaving() });
 }
 
 function clearTimers() {
@@ -62,12 +95,16 @@ function clearTimers() {
 async function doSave() {
   if (saving) { resaveQueued = true; return; }
   const snap = snapshot();
-  if (!snap || sameSession(snap, lastSaved)) return;
+  if (!snap || sameSheetSession(snap, lastSaved)) return;
   saving = true;
   try {
     // Never throws; a failure turns saving off for the page session.
     await saveSheetSession(snap);
     lastSaved = snap;
+    if (isSheetSessionSaving()) {
+      changedElsewhere = false;
+      signalSheetSessionChanged();
+    }
   } finally {
     saving = false;
     if (resaveQueued) { resaveQueued = false; scheduleSave(); }
@@ -77,7 +114,7 @@ async function doSave() {
 function scheduleSave() {
   if (!isSheetSessionSaving()) return;
   const snap = snapshot();
-  if (!snap || sameSession(snap, lastSaved)) return;
+  if (!snap || sameSheetSession(snap, lastSaved)) return;
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => { clearTimers(); void doSave(); }, DEBOUNCE_MS);
   if (!maxWaitTimer) {
@@ -126,8 +163,9 @@ export function forgetSheetSession(): void {
   if (!sheet) return;
   forgottenSheet = sheet;
   lastSaved = null;
+  changedElsewhere = false;
   clearTimers();
-  void clearSheetSession();
+  void clearSheetSession().then(signalSheetSessionChanged);
 }
 
 /**
@@ -141,6 +179,7 @@ export function useSheetSession() {
   const [restoring, setRestoring] = useState(false);
 
   useEffect(() => {
+    listenElsewhere();
     if (mounts++ === 0) stopAutosave = startAutosave();
     return () => {
       if (--mounts === 0 && stopAutosave) {
@@ -174,8 +213,13 @@ export function useSheetSession() {
    *  something newer while it loaded. */
   const restore = useCallback(async (stillCurrent?: () => boolean): Promise<boolean> => {
     setRestoring(true);
+    // The store holds no sheet here, and the record about to be read is the
+    // saved one: a message heard while it loads sets the flag again.
+    changedElsewhere = false;
     try {
       const session = await loadSheetSession();
+      // loadSheetSession deletes a record it cannot read: tell the other tabs.
+      if (!session) signalSheetSessionChanged();
       if (!session || useSpriteStore.getState().spriteSheet) {
         if (session) URL.revokeObjectURL(session.spriteSheet.sourceImage);
         setSaved(false);
@@ -197,7 +241,8 @@ export function useSheetSession() {
 
   const discard = useCallback(() => {
     setSaved(false);
-    void clearSheetSession();
+    changedElsewhere = false;
+    void clearSheetSession().then(signalSheetSessionChanged);
   }, []);
 
   return { offerRestore: saved && !hasSheet, restoring, restore, discard };

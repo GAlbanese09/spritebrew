@@ -26,6 +26,24 @@ function GithubIcon({ size = 14 }: { size?: number }) {
   );
 }
 import { CURRENT_VERSION } from '@/lib/changelog';
+import {
+  DAILY_LOGIN_TOKENS,
+  EMAIL_LIST_BONUS_TOKENS,
+  SIGNUP_BONUS_TOKENS,
+  STREAK_INTERVAL_DAYS,
+  STREAK_WEEKLY_BONUS_TOKENS,
+} from '@/lib/constants';
+import { GENERATION_STYLES } from '@/lib/styleRegistry';
+
+/** 1st, 2nd, 3rd, 4th ... 11th, 12th, 13th ... 21st. */
+function ordinal(n: number): string {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
+}
+
+/** Animated styles offered on Create, counted from the registry. */
+const ANIMATED_STYLE_COUNT = GENERATION_STYLES.filter((s) => s.isAnimation && !s.hidden).length;
 
 // ── Data ──
 
@@ -33,7 +51,7 @@ const FEATURES = [
   {
     icon: Sparkles,
     title: 'AI Character Generation',
-    desc: 'Describe any character in plain text and get a complete animated sprite sheet. 4 animation styles available now, more coming soon.',
+    desc: `Describe any character in plain text and get a complete animated sprite sheet. ${ANIMATED_STYLE_COUNT} animation styles available now.`,
     span: 'sm:col-span-2',
   },
   {
@@ -57,7 +75,7 @@ const FEATURES = [
   {
     icon: Pencil,
     title: 'Pixel Editor',
-    desc: 'Touch up AI output pixel by pixel. Pencil, eraser, eyedropper, undo/redo. Edit at up to 16x zoom.',
+    desc: 'Touch up AI output pixel by pixel. Pencil, eraser, eyedropper, undo/redo. Zoom in to edit single pixels.',
     span: '',
   },
   {
@@ -186,7 +204,7 @@ export default function LandingPage() {
           </a>
         </div>
         <p className="mt-4 text-[10px] font-mono text-[#5c5550]">
-          Start free. Earn +3 tokens every day you log in. No credit card required.
+          Start free. Earn +{DAILY_LOGIN_TOKENS} tokens every day you log in. No credit card required.
         </p>
       </section>
 
@@ -291,11 +309,10 @@ export default function LandingPage() {
             </div>
             <ul className="space-y-2 text-xs text-[#9a918a]">
               {[
-                '5 tokens to start',
-                'Earn +3 every day you log in',
-                '+6 bonus on 7-day streaks',
-                '+5 for joining the newsletter',
-                'Sprite slicer, pixel editor, BG removal — free forever',
+                `${SIGNUP_BONUS_TOKENS} tokens to start`,
+                `${DAILY_LOGIN_TOKENS} free tokens each day, ${STREAK_WEEKLY_BONUS_TOKENS} on every ${ordinal(STREAK_INTERVAL_DAYS)} day in a row`,
+                `+${EMAIL_LIST_BONUS_TOKENS} for joining the newsletter`,
+                'Sprite slicer, pixel editor, BG removal: free forever',
                 '6 export formats',
               ].map((item) => (
                 <li key={item} className="flex items-start gap-2">
@@ -406,44 +423,45 @@ export default function LandingPage() {
       {/* ── Footer ── */}
       <footer className="border-t border-[#1e1b18] px-6 py-8">
         <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-4 text-[10px] text-[#5c5550]">
+          {/* At least 12 px, and 44 px tall on a coarse pointer. */}
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-[#5c5550]">
             <a
               href="https://github.com/GAlbanese09/spritebrew"
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-[#9a918a] transition-colors flex items-center gap-1"
+              className="hover:text-[#9a918a] transition-colors inline-flex items-center gap-1 pointer-coarse:min-h-11"
             >
               <GithubIcon size={12} /> GitHub
             </a>
             <a
               href="mailto:support@spritebrew.com"
-              className="hover:text-[#9a918a] transition-colors"
+              className="hover:text-[#9a918a] transition-colors inline-flex items-center pointer-coarse:min-h-11"
             >
               Contact
             </a>
-            <a href="/privacy" className="hover:text-[#9a918a] transition-colors">
+            <a href="/privacy" className="hover:text-[#9a918a] transition-colors inline-flex items-center pointer-coarse:min-h-11">
               Privacy
             </a>
-            <a href="/terms" className="hover:text-[#9a918a] transition-colors">
+            <a href="/terms" className="hover:text-[#9a918a] transition-colors inline-flex items-center pointer-coarse:min-h-11">
               Terms
             </a>
-            <a href="/refund-policy" className="hover:text-[#9a918a] transition-colors">
+            <a href="/refund-policy" className="hover:text-[#9a918a] transition-colors inline-flex items-center pointer-coarse:min-h-11">
               Refund Policy
             </a>
             <a
               href="https://tally.so/r/Y5oGp6"
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-[#9a918a] transition-colors"
+              className="hover:text-[#9a918a] transition-colors inline-flex items-center pointer-coarse:min-h-11"
             >
               Feedback
             </a>
           </div>
-          <p className="text-[10px] text-[#5c5550]">
-            <a href="/updates" title="See all updates" className="underline underline-offset-2 hover:text-[#9a918a] transition-colors">
+          <p className="text-center text-xs text-[#5c5550]">
+            <a href="/updates" title="See all updates" className="underline underline-offset-2 hover:text-[#9a918a] transition-colors inline-flex items-center pointer-coarse:min-h-11">
               SpriteBrew {CURRENT_VERSION}
             </a>{' '}
-            &middot; Built by George Albanese
+            &middot; Made by George, an indie developer
           </p>
         </div>
       </footer>

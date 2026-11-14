@@ -1,18 +1,21 @@
 'use client';
 
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { Sparkles, X, Check, Loader2, AlertCircle, ChevronDown, ChevronUp, Maximize2 } from 'lucide-react';
+import { useState, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
+import { Sparkles, X, Loader2, AlertCircle } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
+import PixelCoin from '@/components/ui/PixelCoin';
 import ReferenceImagesPanel from '@/components/sprites/ReferenceImagesPanel';
 import {
   GENERATION_STYLES,
   getStyleById,
-  getTierLabel,
+  OFFERED_STYLES,
   type GenerationStyle,
-  type StyleCategory,
 } from '@/lib/styleRegistry';
+import { accountRecentStorage, pushRecent, readRecent, visibleRecent, writeRecent, type RecentStorage } from '@/lib/recentStyles';
+import { affordableNote, DEFAULT_STYLE_ID, OPENING_CANDIDATES, openingStyle } from '@/lib/affordableStyle';
+import { formVisit } from '@/lib/createFormVisit';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
@@ -20,43 +23,39 @@ import { type FinishedJob } from '@/lib/pollResume';
 import { finishJob, type JobResultIO } from '@/lib/jobResult';
 import { despillIfTransparent, decodedSize } from '@/lib/spriteUtils';
 import { StyleExamplesLightbox } from './StyleExamplesLightbox';
+import StyleField from './StyleField';
+import StylePicker from './StylePicker';
 
 /** The browser steps for finishing a job's result (see jobResult.ts). */
 const JOB_RESULT_IO: JobResultIO = { despill: despillIfTransparent, decodedSize };
 
+/** Each chip shows one word and fills its full prompt. */
 const EXAMPLE_PROMPTS = [
-  'pixel art knight with sword',
-  'small goblin with wooden club',
-  'wizard with blue robe and staff',
-  'skeleton warrior with shield',
-  'cute slime monster',
-  'robot with laser gun',
+  { label: 'Knight', prompt: 'pixel art knight with sword' },
+  { label: 'Goblin', prompt: 'small goblin with wooden club' },
+  { label: 'Wizard', prompt: 'wizard with blue robe and staff' },
+  { label: 'Skeleton', prompt: 'skeleton warrior with shield' },
+  { label: 'Slime', prompt: 'cute slime monster' },
+  { label: 'Robot', prompt: 'robot with laser gun' },
 ];
 
-const CATEGORY_LABELS: Record<StyleCategory, string> = {
-  characters: 'Characters',
-  items: 'Items',
-  animations: 'Animations',
-  tiles: 'Tiles',
-  ui: 'UI',
-  environments: 'Environments',
-};
+/** The styles Create offers: what Recent, the visit and chooseStyle accept. */
+const STYLE_IDS = OFFERED_STYLES.map((s) => s.id);
 
-// Group styles by category for the picker
-const GROUPED_STYLES = (() => {
-  const groups: Partial<Record<StyleCategory, GenerationStyle[]>> = {};
-  for (const style of GENERATION_STYLES) {
-    (groups[style.category] ??= []).push(style);
+/** This account's Recent in this browser's localStorage (recentStyles.ts),
+ *  or null where it cannot be reached or no one is signed in. */
+function recentStorage(userId: string | null | undefined): RecentStorage | null {
+  try {
+    return typeof window === 'undefined' ? null : accountRecentStorage(window.localStorage, userId);
+  } catch {
+    return null;
   }
-  return groups;
-})();
+}
 
-const TIER_COLORS: Record<string, string> = {
-  pro: 'text-purple-400 border-purple-400/30',
-  plus: 'text-accent-amber border-accent-amber/30',
-  fast: 'text-green-400 border-green-400/30',
-  animation: 'text-accent-teal border-accent-teal/30',
-};
+/** Token numbers with thousands separators (10,021). */
+const formatCount = (n: number) => n.toLocaleString('en-US');
+/** "token" at exactly one, "tokens" otherwise. */
+const tokensWord = (n: number) => (n === 1 ? 'token' : 'tokens');
 
 interface GenerationFormProps {
   onGenerated: (imageUrl: string, prompt: string, style: string, animateContext?: FinishedJob['animate'], jobId?: string) => void;
@@ -78,9 +77,14 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const tokenBalance = useSpriteStore((s) => s.tokenBalance);
   const isGenerating = useSpriteStore((s) => s.isGenerating);
   const generationError = useSpriteStore((s) => s.generationError);
+  const emailListClaimed = useSpriteStore((s) => s.emailListClaimed);
+  const emailListClaimKnown = useSpriteStore((s) => s.emailListClaimKnown);
 
   // Cost visibility for admins: the server's answer on the balance fetch below.
   const [isAdmin, setIsAdmin] = useState(false);
+  // True once the server has answered with this visit's balance (the cached
+  // localStorage value does not count): the opening style and the note wait for it.
+  const [serverBalanceKnown, setServerBalanceKnown] = useState(false);
 
   // Fetch token balance from server
   const fetchBalance = useCallback(async () => {
@@ -94,6 +98,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       const data = await res.json();
       if (data.success) {
         setTokenBalance(data.balance);
+        setServerBalanceKnown(true);
         setIsAdmin(data.isAdmin === true);
         try {
           localStorage.setItem(`spritebrew_tokens_${userId}`, String(data.balance));
@@ -128,30 +133,71 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   // existing isGenerating boolean (which has a one-render race window).
   const lastGenerateAtRef = useRef<number>(0);
 
+  // What this visit remembers for this account (createFormVisit.ts): the
+  // page rebuilds the form after every result and on every Create or Animate
+  // switch, and it comes back on the same style and the same latch.
+  const [visitAtMount] = useState(() => formVisit.read(userId));
   const [prompt, setPrompt] = useState('');
-  const [selectedStyleId, setSelectedStyleId] = useState('plus-classic');
+  const [selectedStyleId, setSelectedStyleId] = useState(() => {
+    const id = visitAtMount.styleId;
+    return id !== null && STYLE_IDS.includes(id) ? id : DEFAULT_STYLE_ID;
+  });
   const [customWidth, setCustomWidth] = useState(256);
   const [customHeight, setCustomHeight] = useState(256);
   const [removeBg, setRemoveBg] = useState(true);
   const [referenceImages, setReferenceImages] = useState<string[]>([]);
-  // Per-category collapse state — empty Set = all expanded (default).
-  // Not persisted; resets per page load to keep discoverability.
-  const [collapsedCategories, setCollapsedCategories] = useState<Set<StyleCategory>>(new Set());
 
   // Style whose examples are open in the lightbox carousel. null = closed.
   const [lightboxStyle, setLightboxStyle] = useState<GenerationStyle | null>(null);
 
-  const toggleCategory = (category: StyleCategory) => {
-    setCollapsedCategories((prev) => {
-      const next = new Set(prev);
-      if (next.has(category)) {
-        next.delete(category);
-      } else {
-        next.add(category);
-      }
-      return next;
-    });
-  };
+  // The style picker, Recent styles (per account, in this browser) and the
+  // polite announcement of a style change. This form renders only inside the
+  // signed-in Show on /generate, which renders nothing on the server, so
+  // Recent can read localStorage on its first render.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [recentIds, setRecentIds] = useState<string[]>(() => readRecent(recentStorage(userId), STYLE_IDS));
+  const [styleAnnouncement, setStyleAnnouncement] = useState('');
+  const changeStyleRef = useRef<HTMLButtonElement>(null);
+
+  // The latch: set by the person's first act this visit (a style chosen, the
+  // current one included; a prompt typed; an example tapped; the size,
+  // Background or reference images changed), in the handler that acts, never
+  // in an effect, and never cleared. Until it is set the style follows the
+  // balance.
+  const actedRef = useRef(visitAtMount.acted);
+  const markActed = useCallback(() => {
+    actedRef.current = true;
+    formVisit.rememberActed(userId);
+  }, [userId]);
+
+  // Every style change goes through here: the picker, a Recent badge and the
+  // lightbox's Use this style. Recent is computed from the current values, not
+  // inside a state updater, so a double call in development cannot push twice.
+  // A style Create does not offer changes nothing.
+  const chooseStyle = useCallback((id: string) => {
+    if (!STYLE_IDS.includes(id)) return;
+    markActed();
+    if (id === selectedStyleId) return;
+    const next = getStyleById(id);
+    if (!next) return;
+    const list = pushRecent(recentIds, selectedStyleId, id);
+    setRecentIds(list);
+    writeRecent(recentStorage(userId), list);
+    formVisit.rememberStyle(userId, id);
+    setSelectedStyleId(id);
+    setStyleAnnouncement(`Style: ${next.label}, ${next.tokenCost} tokens`);
+  }, [selectedStyleId, recentIds, markActed, userId]);
+
+  // Until the person acts, the style follows the server's balance
+  // (affordableStyle.ts) each time it changes, before paint. Not a choice:
+  // Recent and the announcement stay as they are. Never once the latch is set.
+  useLayoutEffect(() => {
+    if (!serverBalanceKnown || actedRef.current) return;
+    const id = openingStyle({ balance: tokenBalance, currentId: selectedStyleId, acted: actedRef.current });
+    if (id === selectedStyleId) return;
+    formVisit.rememberStyle(userId, id);
+    setSelectedStyleId(id);
+  }, [serverBalanceKnown, tokenBalance, selectedStyleId, userId]);
 
   const selectedStyle = useMemo(
     () => getStyleById(selectedStyleId) ?? GENERATION_STYLES[0],
@@ -362,20 +408,106 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   // outlives the form whose poll set it; the other tab's form resumes the job.
   useEffect(() => () => setGenerationProgress(null, null, null, null), [setGenerationProgress]);
 
+  // Character and animated styles ask for a character; the others for a thing.
+  const asksForCharacter = selectedStyle.category === 'characters' || selectedStyle.isAnimation;
+  const recentStyles = visibleRecent(recentIds, selectedStyleId)
+    .map((id) => getStyleById(id))
+    .filter((s): s is GenerationStyle => !!s);
+  const sizeLabel = effectiveWidth === effectiveHeight ? `${effectiveWidth}` : `${effectiveWidth}×${effectiveHeight}`;
+  // The bar's summary as one string, for its title (the line itself truncates).
+  // A short balance reads "16 tokens · you have 8"; one that covers the
+  // cost, "16 of 10,021 tokens".
+  const summaryCostText = !userId
+    ? `${formatCount(tokenCost)} tokens`
+    : insufficientTokens
+      ? `${formatCount(tokenCost)} tokens \u00b7 you have ${formatCount(tokenBalance)}`
+      : `${formatCount(tokenCost)} of ${formatCount(tokenBalance)} tokens`;
+  const summaryText = `${selectedStyle.label} \u00b7 ${sizeLabel} px \u00b7 ${summaryCostText}${
+    isAdmin ? ` \u00b7 ~$${selectedStyle.costPerGeneration.toFixed(2)}` : ''
+  }`;
+  // What the balance buys, once the server has said what it is. The note
+  // speaks of the opening styles only, so it shows only while one is chosen.
+  const balanceNote = serverBalanceKnown && (OPENING_CANDIDATES as readonly string[]).includes(selectedStyleId)
+    ? affordableNote({ balance: tokenBalance, emailListClaimed, emailListClaimKnown })
+    : null;
+  const bgLabelId = useId();
+  const bgValueId = useId();
+
+  // Why Generate is disabled, when the person can act on it (none while brewing).
+  // While paused the bar shows one short line: the pause banner carries the
+  // whole message, and screen readers get it here, through the button's
+  // aria-describedby.
+  const reasonId = GENERATION_PAUSED ? 'generate-paused-reason' : 'generate-reason';
+  let disabledReason: ReactNode = null;
+  if (!isGenerating) {
+    if (GENERATION_PAUSED) {
+      disabledReason = (
+        <>
+          <span aria-hidden="true">Generating is paused for now. Details are in the notice above.</span>
+          <span className="sr-only">{GENERATION_PAUSED_MESSAGE}</span>
+        </>
+      );
+    } else if (insufficientTokens) {
+      disabledReason = (
+        <>
+          You need {formatCount(tokensNeeded)} more {tokensWord(tokensNeeded)} for this style.{' '}
+          <a
+            href="/buy-tokens"
+            className="inline-flex items-center pointer-coarse:min-h-11 lg:pointer-coarse:-my-3 text-accent-amber underline hover:text-accent-amber-strong"
+          >
+            Get tokens
+          </a>
+        </>
+      );
+    } else if (!prompt.trim()) {
+      disabledReason = asksForCharacter ? 'Describe a character to start.' : 'Describe what to generate to start.';
+    }
+  }
+
+  // The bar's coin, cost and balance. A short balance reads "16 tokens ·
+  // you have 8", the balance in red.
+  const summaryCost = (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap align-middle">
+      <PixelCoin />
+      <span>
+        {formatCount(tokenCost)}
+        {!userId ? (
+          ' tokens'
+        ) : insufficientTokens ? (
+          <>
+            {' '}tokens &middot;{' '}
+            <span className="text-red-400">you have {formatCount(tokenBalance)}</span>
+          </>
+        ) : (
+          <span>
+            {' '}of {formatCount(tokenBalance)} tokens
+          </span>
+        )}
+      </span>
+    </span>
+  );
+
   return (
     <>
     <div className="space-y-6">
       {/* Prompt */}
       <div>
-        <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2">
-          {selectedStyle.isAnimation ? 'Describe the character to animate' : 'Describe what to generate'}
+        <label
+          htmlFor="create-prompt"
+          className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2"
+        >
+          {asksForCharacter ? 'Describe your character' : 'Describe what to generate'}
         </label>
         <textarea
+          id="create-prompt"
           value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
+          onChange={(e) => {
+            if (e.target.value) markActed();
+            setPrompt(e.target.value);
+          }}
           placeholder={
-            selectedStyle.isAnimation
-              ? "Describe the character. Keep it simple — 'knight with sword', 'goblin with club'."
+            asksForCharacter
+              ? 'e.g. a small knight in a blue cape, full body, facing down'
               : "Describe what you want to generate. Be specific about style and details."
           }
           rows={3}
@@ -383,157 +515,117 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
             text-sm font-mono text-text-primary placeholder:text-text-muted resize-none
             focus:outline-none focus:border-accent-amber"
         />
-        <div className="flex flex-wrap gap-1.5 mt-3">
-          {EXAMPLE_PROMPTS.map((ex) => (
-            <button
-              key={ex}
-              onClick={() => setPrompt(ex)}
-              className="px-2.5 py-1 rounded text-[10px] font-mono bg-bg-elevated text-text-muted
-                border border-border-subtle hover:bg-bg-hover hover:text-text-secondary cursor-pointer
-                transition-colors"
-            >
-              {ex}
-            </button>
-          ))}
-        </div>
+        <ExampleChips
+          onPick={(example) => {
+            markActed();
+            setPrompt(example);
+          }}
+        />
       </div>
 
-      {/* Style picker — grouped by category */}
+      {/* Style: the chosen style, Change style and Recent */}
       <div>
-        <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-3">
-          Style
-          <span className="text-text-muted font-normal ml-2">
-            ({GENERATION_STYLES.length} styles across {Object.keys(GROUPED_STYLES).length} categories)
-          </span>
-        </label>
-        <div className="space-y-3">
-          {(Object.entries(GROUPED_STYLES) as [StyleCategory, GenerationStyle[]][]).map(
-            ([category, styles]) => {
-              const isCollapsed = collapsedCategories.has(category);
-              return (
-                <div key={category}>
-                  <button
-                    type="button"
-                    onClick={() => toggleCategory(category)}
-                    className="flex w-full items-center justify-between py-2 text-left text-text-muted hover:text-text-default transition-colors"
-                  >
-                    <span className="text-[10px] font-mono uppercase tracking-wider">
-                      {CATEGORY_LABELS[category]} ({styles.length})
-                    </span>
-                    {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-                  </button>
-                  {!isCollapsed && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                      {styles.map((style) => {
-                        const active = selectedStyleId === style.id;
-                        return (
-                          <div key={style.id} className="relative group/example">
-                            <button
-                              onClick={() => setSelectedStyleId(style.id)}
-                              className={`w-full h-full block text-left rounded-lg border px-3 py-2 transition-all duration-150 cursor-pointer
-                                ${active
-                                  ? 'border-accent-amber bg-accent-amber-glow'
-                                  : 'border-border-default bg-bg-surface hover:border-border-strong hover:bg-bg-elevated'
-                                }`}
-                            >
-                              {style.examplePaths && style.examplePaths.length > 0 && (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={style.examplePaths[0]}
-                                  alt={`${style.label} example`}
-                                  loading="lazy"
-                                  className="w-full aspect-square mb-2 rounded-md object-contain bg-[#1a1614]"
-                                  style={{ imageRendering: 'pixelated' }}
-                                />
-                              )}
-                              <div className="flex items-center gap-1.5">
-                                <h3 className={`text-[11px] font-mono font-semibold truncate ${active ? 'text-accent-amber' : 'text-text-primary'}`}>
-                                  {style.label}
-                                </h3>
-                                {active && <Check size={10} className="text-accent-amber flex-shrink-0" />}
-                                <span className={`ml-auto text-[8px] font-mono px-1.5 py-0.5 rounded border flex-shrink-0 ${TIER_COLORS[style.tier] ?? 'text-text-muted border-border-subtle'}`}>
-                                  {getTierLabel(style.tier)}
-                                </span>
-                              </div>
-                              <p className="text-[9px] font-mono text-text-muted mt-0.5 truncate">
-                                {style.description}
-                              </p>
-                            </button>
-                            {style.examplePaths && style.examplePaths.length > 0 && (
-                              <button
-                                type="button"
-                                aria-label={`View ${style.label} examples`}
-                                onClick={() => setLightboxStyle(style)}
-                                className="absolute top-1.5 right-1.5 p-1.5 rounded-md bg-black/60 hover:bg-black/80 text-amber-400 backdrop-blur-sm transition-opacity opacity-70 group-hover/example:opacity-100 focus-visible:opacity-100"
-                              >
-                                <Maximize2 size={14} strokeWidth={2.5} />
-                              </button>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-          )}
-        </div>
-        <p className="text-[9px] font-mono text-text-muted mt-2">
-          For animating an existing character, use the Animate My Character tab.
+        <StyleField
+          ref={changeStyleRef}
+          style={selectedStyle}
+          recent={recentStyles}
+          pickerOpen={pickerOpen}
+          onOpenPicker={() => setPickerOpen(true)}
+          onViewExamples={setLightboxStyle}
+          onChooseRecent={chooseStyle}
+        />
+        {balanceNote && (
+          <p className="text-[13px] font-mono text-text-secondary mt-2">{balanceNote}</p>
+        )}
+        <p className="sr-only" role="status" aria-live="polite">
+          {styleAnnouncement}
         </p>
       </div>
 
       {/* Reference Images — Pro styles only */}
       <ReferenceImagesPanel
         referenceImages={referenceImages}
-        onChange={setReferenceImages}
+        onChange={(images) => {
+          markActed();
+          setReferenceImages(images);
+        }}
         enabled={referencesEnabled}
       />
 
-      {/* Size controls — only if not fixed */}
+      {/* Size, on one line: the fields (or the fixed size), then Background. */}
       <div>
-        <label className="block text-[10px] font-mono text-text-muted mb-1">
-          Size: {effectiveWidth}x{effectiveHeight}
-          {selectedStyle.fixedSize && (
-            <span className="ml-2 text-text-muted/60">(fixed for this style)</span>
-          )}
-        </label>
-        {!selectedStyle.fixedSize ? (
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="block text-[9px] font-mono text-text-muted mb-1">Width</label>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {selectedStyle.fixedSize ? (
+            <p className="text-[13px] font-mono text-text-secondary">
+              Size {effectiveWidth}×{effectiveHeight} (fixed for this style)
+            </p>
+          ) : (
+            <div className="flex items-center gap-1.5" role="group" aria-label="Size in pixels">
+              <span className="text-xs font-mono text-text-secondary mr-1" aria-hidden="true">Size</span>
               <input
                 type="number"
+                aria-label="Width in pixels"
                 min={selectedStyle.minSize}
                 max={selectedStyle.maxSize}
                 value={customWidth}
-                onChange={(e) => setCustomWidth(Math.max(selectedStyle.minSize, Math.min(selectedStyle.maxSize, Number(e.target.value))))}
-                className="w-full rounded bg-bg-elevated border border-border-default px-3 py-1.5
+                onChange={(e) => {
+                  markActed();
+                  setCustomWidth(Math.max(selectedStyle.minSize, Math.min(selectedStyle.maxSize, Number(e.target.value))));
+                }}
+                className="w-[88px] rounded bg-bg-elevated border border-border-default px-3 py-1.5 pointer-coarse:min-h-11
                   text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
               />
-            </div>
-            <div className="flex-1">
-              <label className="block text-[9px] font-mono text-text-muted mb-1">Height</label>
+              <span className="text-xs font-mono text-text-secondary" aria-hidden="true">×</span>
               <input
                 type="number"
+                aria-label="Height in pixels"
                 min={selectedStyle.minSize}
                 max={selectedStyle.maxSize}
                 value={customHeight}
-                onChange={(e) => setCustomHeight(Math.max(selectedStyle.minSize, Math.min(selectedStyle.maxSize, Number(e.target.value))))}
-                className="w-full rounded bg-bg-elevated border border-border-default px-3 py-1.5
+                onChange={(e) => {
+                  markActed();
+                  setCustomHeight(Math.max(selectedStyle.minSize, Math.min(selectedStyle.maxSize, Number(e.target.value))));
+                }}
+                className="w-[88px] rounded bg-bg-elevated border border-border-default px-3 py-1.5 pointer-coarse:min-h-11
                   text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber"
               />
             </div>
-          </div>
-        ) : (
-          <p className="text-[9px] font-mono text-text-muted">
-            This style uses fixed {effectiveWidth}x{effectiveHeight} dimensions.
-          </p>
-        )}
+          )}
+          {selectedStyle.supportsRemoveBg && (
+            <div className="flex items-center gap-2">
+              <span id={bgLabelId} className="text-xs font-mono text-text-secondary">Background</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={removeBg}
+                aria-labelledby={`${bgLabelId} ${bgValueId}`}
+                onClick={() => {
+                  markActed();
+                  setRemoveBg((v) => !v);
+                }}
+                className="inline-flex items-center gap-2 min-h-8 pointer-coarse:min-h-11 px-1 rounded cursor-pointer
+                  focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber"
+              >
+                <span
+                  aria-hidden="true"
+                  className={`relative inline-block w-8 h-[18px] rounded-full border ${
+                    removeBg ? 'bg-accent-amber border-accent-amber' : 'bg-bg-elevated border-border-strong'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-[2px] w-3 h-3 rounded-full ${
+                      removeBg ? 'left-[16px] bg-bg-primary' : 'left-[2px] bg-text-secondary'
+                    }`}
+                  />
+                </span>
+                <span id={bgValueId} className="text-xs font-mono text-text-primary">Transparent</span>
+              </button>
+            </div>
+          )}
+        </div>
         {!selectedStyle.fixedSize && (
-          <p className="text-[9px] font-mono text-text-muted/70 mt-1">
-            Larger canvas = more room for detail and extended poses. Tokens scale with canvas size.
+          <p className="text-[13px] font-mono text-text-secondary mt-2">
+            Larger canvas = more room for detail and extended poses.
           </p>
         )}
       </div>
@@ -561,7 +653,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
           {generationError.includes('top up') && (
             <a
               href="/buy-tokens"
-              className="inline-block mt-2 ml-6 px-3 py-1.5 rounded text-[10px] font-mono
+              className="inline-block mt-2 ml-6 px-3 py-1.5 rounded text-xs font-mono
                 bg-accent-amber text-bg-primary hover:bg-accent-amber/90 transition-colors"
             >
               Buy Tokens
@@ -576,6 +668,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
     {/* Sticky generate bar — viewport-fixed at bottom, sidebar-offset on desktop */}
     <div
+      data-generate-bar=""
       className="fixed bottom-0 left-0 right-0 lg:left-[var(--sidebar-width)] z-40 px-4 py-3 backdrop-blur-md border-t isolate transform-gpu overscroll-none"
       style={{
         backgroundColor: 'rgba(20, 18, 16, 0.92)',
@@ -585,79 +678,142 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     >
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
-          <p className="text-[10px] font-mono text-text-muted">
-            {effectiveWidth}x{effectiveHeight}px &middot; {tokenCost} tokens
+          {/* One line; the full text is in the title. Under 640 px the cost
+              and the balance lead; from 640 px the line keeps at least
+              300 px, the style's name shortens first, then the size, and
+              the cost never shrinks. */}
+          <p
+            className="min-w-0 sm:min-w-[300px] sm:flex-1 truncate text-[13px] font-mono text-text-secondary tabular-nums"
+            title={summaryText}
+          >
+            <span className="sm:hidden">
+              {summaryCost} &middot; {selectedStyle.label} &middot; {sizeLabel} px
+            </span>
+            <span className="max-sm:hidden inline-flex max-w-full items-center gap-[1ch] align-bottom">
+              <span className="min-w-0 shrink-[99999] truncate">{selectedStyle.label}</span>{' '}
+              <span className="min-w-0 truncate">&middot; {sizeLabel} px &middot;</span>{' '}
+              <span className="flex-shrink-0">{summaryCost}</span>
+            </span>
             {isAdmin && (
               <span> &middot; ~${selectedStyle.costPerGeneration.toFixed(2)}</span>
             )}
-            {userId && (
-              <span className={`ml-2 ${insufficientTokens ? 'text-red-400' : 'text-accent-amber'}`}>
-                &middot; Balance: {tokenBalance} 🪙
-              </span>
-            )}
           </p>
-          {/* Toggles group — column wrapper so the conditional warning sits
-              under the toggles, and the whole group flows as one sticky-bar item. */}
-          <div className="flex flex-col items-start gap-1">
-            <div className="flex items-center gap-3 flex-wrap">
-              {selectedStyle.supportsRemoveBg && (
-                <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer select-none whitespace-nowrap">
-                  <input
-                    type="checkbox"
-                    checked={removeBg}
-                    onChange={(e) => setRemoveBg(e.target.checked)}
-                    className="accent-[var(--accent-amber)] cursor-pointer"
-                  />
-                  <span>Remove background</span>
-                </label>
-              )}
-            </div>
-          </div>
-          <Button
-            size="lg"
-            onClick={handleGenerate}
-            disabled={GENERATION_PAUSED || !prompt.trim() || isGenerating || insufficientTokens}
-            className={`w-full sm:w-auto whitespace-nowrap ${!GENERATION_PAUSED && !isGenerating && prompt.trim() && !insufficientTokens ? 'animate-pulse' : ''}`}
-            title={GENERATION_PAUSED ? GENERATION_PAUSED_MESSAGE : insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined}
-            aria-describedby={GENERATION_PAUSED ? 'generate-paused-reason' : undefined}
-          >
-            {isGenerating ? (
-              <>
-                <Loader2 size={16} className="animate-spin" />
-                Brewing...
-              </>
-            ) : insufficientTokens ? (
-              <>
-                <Sparkles size={16} />
-                Need {tokensNeeded} more 🪙
-              </>
-            ) : (
-              <>
-                <Sparkles size={16} />
-                {selectedStyle.isAnimation ? 'Generate Animation' : 'Generate Sprite'} ({tokenCost} 🪙)
-              </>
+          {/* The reason sits under the button, centered, below 1024 px; from
+              1024 px it sits beside it. It wraps when the summary needs
+              the room (from 640 px in lines of even length), so a long
+              reason never pushes the cost or the button out of the bar. */}
+          <div className="flex flex-col-reverse items-stretch gap-1 lg:flex-row lg:items-center lg:gap-3">
+            {disabledReason && (
+              <p id={reasonId} className="text-[13px] font-mono text-text-secondary text-center sm:text-balance lg:text-right">
+                {disabledReason}
+              </p>
             )}
-          </Button>
-          {GENERATION_PAUSED && (
-            <span id="generate-paused-reason" className="sr-only">
-              {GENERATION_PAUSED_MESSAGE}
-            </span>
-          )}
+            <Button
+              size="lg"
+              onClick={handleGenerate}
+              disabled={GENERATION_PAUSED || !prompt.trim() || isGenerating || insufficientTokens}
+              className={`w-full sm:w-auto whitespace-nowrap pointer-coarse:min-h-11 ${!GENERATION_PAUSED && !isGenerating && prompt.trim() && !insufficientTokens ? 'animate-pulse motion-reduce:animate-none' : ''}`}
+              title={GENERATION_PAUSED ? GENERATION_PAUSED_MESSAGE : insufficientTokens ? `Need ${tokensNeeded} more ${tokensWord(tokensNeeded)}` : undefined}
+              aria-describedby={disabledReason ? reasonId : undefined}
+            >
+              {isGenerating ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" />
+                  Brewing...
+                </>
+              ) : (
+                <>
+                  <Sparkles size={16} />
+                  Generate
+                  <span className="inline-flex items-center gap-1.5 tabular-nums">
+                    &middot; <PixelCoin /> {formatCount(tokenCost)}
+                  </span>
+                </>
+              )}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
 
-    {/* Style-examples lightbox carousel — opened by the ⤢ overlay on style cards. */}
+    {/* Style-examples lightbox carousel, opened from the style field's thumbnail. */}
     <StyleExamplesLightbox
       style={lightboxStyle}
       onClose={() => setLightboxStyle(null)}
       onUseStyle={() => {
         if (lightboxStyle) {
-          setSelectedStyleId(lightboxStyle.id);
+          chooseStyle(lightboxStyle.id);
         }
         setLightboxStyle(null);
       }}
     />
+
+    {/* The style picker: a dialog from 768 px, a bottom sheet below. */}
+    <StylePicker
+      open={pickerOpen}
+      currentStyleId={selectedStyleId}
+      onChoose={chooseStyle}
+      onClose={() => setPickerOpen(false)}
+    />
     </>
+  );
+}
+
+/**
+ * The example chips: one row that never wraps; the chips past the row's width
+ * scroll sideways inside it. A fade at the right edge shows while more chips
+ * sit past it.
+ */
+function ExampleChips({ onPick }: { onPick: (prompt: string) => void }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [moreRight, setMoreRight] = useState(false);
+
+  useEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    const measure = () => setMoreRight(row.scrollLeft + row.clientWidth < row.scrollWidth - 1);
+    // A ResizeObserver reports once on observe, so this also takes the first measure.
+    const ro = new ResizeObserver(measure);
+    ro.observe(row);
+    row.addEventListener('scroll', measure, { passive: true });
+    // Once more when the web font has loaded: the chips' width changes with it.
+    let mounted = true;
+    if ('fonts' in document) {
+      void document.fonts.ready.then(() => {
+        if (mounted) measure();
+      });
+    }
+    return () => {
+      mounted = false;
+      ro.disconnect();
+      row.removeEventListener('scroll', measure);
+    };
+  }, []);
+
+  return (
+    <div className="relative mt-3">
+      <div ref={rowRef} className="flex flex-nowrap gap-1.5 overflow-x-auto overscroll-x-contain pb-1">
+        {EXAMPLE_PROMPTS.map((ex) => (
+          <button
+            key={ex.label}
+            type="button"
+            onClick={() => onPick(ex.prompt)}
+            aria-label={`Use example: ${ex.prompt}`}
+            title={`Use example: ${ex.prompt}`}
+            className="flex-shrink-0 whitespace-nowrap inline-flex items-center min-h-8 pointer-coarse:min-h-11 px-3 rounded-2xl text-[13px] font-mono
+              bg-bg-secondary text-text-secondary border border-border-default
+              hover:bg-bg-hover hover:text-text-secondary cursor-pointer transition-colors"
+          >
+            {ex.label}
+          </button>
+        ))}
+      </div>
+      {moreRight && (
+        <div
+          className="pointer-events-none absolute top-0 right-0 bottom-1 w-6 bg-linear-to-r from-transparent to-bg-surface"
+          aria-hidden="true"
+        />
+      )}
+    </div>
   );
 }

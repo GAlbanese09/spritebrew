@@ -114,14 +114,21 @@ export default function GalleryPage() {
     return run;
   }, []);
 
-  // Initial fetch on mount.
+  // The list for the current account. Until its first answer the grid shows
+  // skeletons: Clerk can load after the first render (userId undefined), and
+  // a new account or a new fetch starts loading again, so "No generations
+  // yet" shows only for a real empty answer.
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
+      if (userId === undefined) return; // Clerk still loading: keep the skeletons.
       if (!userId) {
+        setError('Please sign in to view your gallery.');
         setLoading(false);
         return;
       }
+      setLoading(true);
+      setError(null);
       try {
         const token = await getToken();
         if (!token) {
@@ -439,12 +446,35 @@ export default function GalleryPage() {
     return entries.filter((e) => e.mode === filter);
   }, [entries, filter]);
 
-  // Render: loading
+  // Render: loading. Today's grid with skeleton cards, so the page shows its
+  // shape at once; no animation.
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-3 text-text-secondary">
-        <Loader2 size={24} className="animate-spin" />
-        <p className="text-sm">Loading your gallery…</p>
+      <div className="px-4 sm:px-6 py-6 max-w-7xl mx-auto">
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold text-text-primary">Your Gallery</h1>
+          <p className="text-sm text-text-secondary mt-1" aria-hidden="true">&nbsp;</p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" aria-busy="true">
+          <p className="sr-only" role="status">Loading your gallery</p>
+          {Array.from({ length: 8 }, (_, i) => (
+            <div
+              key={i}
+              aria-hidden="true"
+              className="bg-bg-elevated rounded-lg border border-border-subtle overflow-hidden flex flex-col"
+            >
+              <div className="aspect-square bg-bg-primary" />
+              <div className="p-3 flex flex-col gap-3">
+                <div className="h-4 w-3/4 rounded bg-bg-hover" />
+                <div className="h-3 w-1/3 rounded bg-bg-hover" />
+                <div className="flex gap-2">
+                  <div className="h-8 flex-1 rounded-md bg-bg-hover" />
+                  <div className="h-8 flex-1 rounded-md bg-bg-hover" />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     );
   }

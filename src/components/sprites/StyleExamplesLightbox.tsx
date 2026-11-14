@@ -63,13 +63,16 @@ export function StyleExamplesLightbox({ style, onClose, onUseStyle }: Props) {
     src: path,
     alt: `${style.label} example ${i + 1}`,
   }));
+  // One example: no Previous or Next, so nothing points at slides that are
+  // not there.
+  const single = slides.length === 1;
 
   return (
     <Lightbox
       open={true}
       close={onClose}
       slides={slides}
-      render={{ slide: PixelArtSlide }}
+      render={single ? { slide: PixelArtSlide, buttonPrev: () => null, buttonNext: () => null } : { slide: PixelArtSlide }}
       animation={{ fade: 220, swipe: 300 }}
       controller={{ closeOnBackdropClick: true }}
       carousel={{ finite: true, preload: 2 }}

@@ -60,6 +60,17 @@ function computeFitZoom(naturalWidth: number, containerWidth: number): number {
   return 1; // even 1x overflows — let it scroll
 }
 
+/** "Sheet ready." on the first save, "Sheet ready again (2)." after, so the
+ *  polite status changes on every press. */
+function pressStatus(what: string, n: number): string {
+  return n <= 1 ? `${what}.` : `${what} again (${n}).`;
+}
+
+/** The next count of saves for `src`: 1 for a new source. */
+function nextPress(prev: { src: string; n: number } | null, src: string): { src: string; n: number } {
+  return { src, n: prev && prev.src === src ? prev.n + 1 : 1 };
+}
+
 /** Saves a data URL as a file, byte for byte. */
 function saveDataUrl(url: string, filename: string) {
   const a = document.createElement('a');
@@ -154,16 +165,25 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const [gifScale, setGifScale] = useState<GifScale>(GIF_SCALE_DEFAULT);
   const [gifEncoding, setGifEncoding] = useState(false);
   const [gifError, setGifError] = useState<{ src: string; message: string } | null>(null);
+  // The GIFs saved for a source, counted, so each save is announced.
+  const [gifReady, setGifReady] = useState<{ src: string; n: number } | null>(null);
   // Download on an Animate result: an in-flight flag, and the sources a sheet
   // failed for and was last saved for, so a new generation drops the note and
   // the status the same way.
   const [sheetPreparing, setSheetPreparing] = useState(false);
   const [sheetFailedSrc, setSheetFailedSrc] = useState<string | null>(null);
-  const [sheetReadySrc, setSheetReadySrc] = useState<string | null>(null);
+  // The sheets saved for a source, counted, so a second press on an unedited
+  // loop (saved with no Preparing step) still changes the status text.
+  const [sheetReady, setSheetReady] = useState<{ src: string; n: number } | null>(null);
   const sheetStatus = sheetPreparing
     ? 'Preparing the sheet.'
-    : sheetReadySrc !== null && sheetReadySrc === generatedImageDataUrl
-      ? 'Sheet ready.'
+    : sheetReady !== null && sheetReady.src === generatedImageDataUrl
+      ? pressStatus('Sheet ready', sheetReady.n)
+      : '';
+  const gifStatus = gifEncoding
+    ? 'Making the GIF.'
+    : gifReady !== null && gifReady.src === generatedImageDataUrl
+      ? pressStatus('GIF ready', gifReady.n)
       : '';
 
   // Whether the sheet's border is already transparent, held with the source
@@ -186,7 +206,12 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const bgNoteId = useId();
   const bgTitleId = useId();
   const bgToggleId = useId();
-  const [bgRemovedDataUrl, setBgRemovedDataUrl] = useState<string | null>(null);
+  const uneditedHintId = useId();
+  // The processed image, held with the source it was made from, so a new
+  // result never shows the previous result's processed image, not even for
+  // the one render before the reset effect below runs.
+  const [bgRemoved, setBgRemoved] = useState<{ src: string; url: string } | null>(null);
+  const bgRemovedDataUrl = bgRemoved !== null && bgRemoved.src === generatedImageDataUrl ? bgRemoved.url : null;
   const [bgTolerance, setBgTolerance] = useState(10);
   const [detectedBgColor, setDetectedBgColor] = useState<{ r: number; g: number; b: number } | null>(null);
   const [bgRemovalError, setBgRemovalError] = useState<string | null>(null);
@@ -230,7 +255,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   const dimsResultKeyRef = useRef(resultKey);
   useEffect(() => {
     setBgRemovalWanted(false);
-    setBgRemovedDataUrl(null);
+    setBgRemoved(null);
     setDetectedBgColor(null);
     setBgRemovalError(null);
     if (dimsResultKeyRef.current !== resultKey) setNaturalDims({ w: 0, h: 0 });
@@ -256,8 +281,22 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         if (!ctx) return;
         ctx.drawImage(img, 0, 0);
-        const px = ctx.getImageData(0, 0, W, H).data;
-        if (!cancelled) setSheetAlpha({ src, key, transparent: borderMostlyTransparent(px, W, H) });
+        // Only the outer ring is read back: four one-pixel strips (top,
+        // bottom, then left and right without the corners), laid end to end
+        // as one row, which borderMostlyTransparent counts pixel by pixel.
+        const strips = [ctx.getImageData(0, 0, W, 1).data];
+        if (H > 1) strips.push(ctx.getImageData(0, H - 1, W, 1).data);
+        if (H > 2) {
+          strips.push(ctx.getImageData(0, 1, 1, H - 2).data);
+          if (W > 1) strips.push(ctx.getImageData(W - 1, 1, 1, H - 2).data);
+        }
+        const ring = new Uint8ClampedArray(strips.reduce((n, strip) => n + strip.length, 0));
+        let at = 0;
+        for (const strip of strips) {
+          ring.set(strip, at);
+          at += strip.length;
+        }
+        if (!cancelled) setSheetAlpha({ src, key, transparent: borderMostlyTransparent(ring, ring.length / 4, 1) });
       } catch {
         // Unknown: keep today's behaviour.
       }
@@ -268,6 +307,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   // Recompute background removal when tolerance changes
   useEffect(() => {
     if (!bgRemovalActive || !generatedImageDataUrl) return;
+    const src = generatedImageDataUrl;
     let cancelled = false;
     (async () => {
       try {
@@ -275,7 +315,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         if (cancelled) return;
         const result = removeBackgroundColor(img, bgTolerance);
         if (!cancelled) {
-          setBgRemovedDataUrl(result.dataUrl);
+          setBgRemoved({ src, url: result.dataUrl });
           setDetectedBgColor(result.detectedColor);
           setBgRemovalError(null);
         }
@@ -341,11 +381,10 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     const src = displayImageDataUrl;
     if (!src || !generatedImageDataUrl || !loopGeometry || sheetPreparing) return;
     setSheetFailedSrc(null);
-    setSheetReadySrc(null);
     // An unedited loop is the displayed image, so it saves with no canvas.
     if (playedIsIdentity(loopPlayback, loopFrames)) {
       saveDataUrl(src, `spritebrew_animation_${Date.now()}.png`);
-      setSheetReadySrc(generatedImageDataUrl);
+      setSheetReady((prev) => nextPress(prev, generatedImageDataUrl));
       return;
     }
     setSheetPreparing(true);
@@ -361,9 +400,10 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         return canvas;
       });
       downloadFile(await canvasToBlob(sheet), `spritebrew_animation_${Date.now()}.png`);
-      setSheetReadySrc(generatedImageDataUrl);
+      setSheetReady((prev) => nextPress(prev, generatedImageDataUrl));
     } catch {
       setSheetFailedSrc(generatedImageDataUrl);
+      setSheetReady(null);
     } finally {
       setSheetPreparing(false);
     }
@@ -392,7 +432,9 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
       const frames = framesFromSheet(img, loopGeometry, loopPlayback);
       const blob = encodeGif(frames, { scale: gifScale, fps: loopSeq.fps });
       downloadFile(blob, `spritebrew_animation_${Date.now()}.gif`);
+      setGifReady((prev) => nextPress(prev, generatedImageDataUrl));
     } catch {
+      setGifReady(null);
       setGifError({ src: generatedImageDataUrl, message: 'Could not make the GIF. Try a smaller scale.' });
     } finally {
       setGifEncoding(false);
@@ -424,7 +466,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     // Decode on demand here so the click is never blocked by the async
     // population path. Fast path: if dims are already populated, no decode.
     const url = displayImageDataUrl;
-    if (!url) return;
+    if (!url || openingEditor) return;
     setOpeningEditor(true);
     try {
       let { w, h } = naturalDims;
@@ -440,12 +482,12 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
     } finally {
       setOpeningEditor(false);
     }
-  }, [naturalDims, displayImageDataUrl]);
+  }, [naturalDims, displayImageDataUrl, openingEditor]);
 
   // Editor Save: the edit becomes the card's image and the working image,
   // and every downstream action (Animate, Send to Slicer, Download PNG,
   // Download GIF) uses it. The store keeps the sheet from before the edit and
-  // the delivered sheet, so the card's "Before edit" and "Download original"
+  // the delivered sheet, so the card's "Before edit" and "Download as delivered"
   // still give them (src/lib/cardImage.ts).
   //
   // Each save is announced once, for the edit it made: the note is cleared
@@ -472,13 +514,15 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
       : '';
 
   // The card's switch: a view change only. Notes made for the version being
-  // left (the save note, "Sheet ready.", a GIF or sheet failure) are dropped
-  // with it, so nothing stale is shown or read out again on the way back.
+  // left (the save note, "Sheet ready.", "GIF ready.", a GIF or sheet failure)
+  // are dropped with it, so nothing stale is shown or read out again on the
+  // way back.
   const handleShowVersion = useCallback((version: CardVersion) => {
     if (version === cardVersion) return;
     showCardVersion(version);
     setAnnouncedEdit(null);
-    setSheetReadySrc(null);
+    setSheetReady(null);
+    setGifReady(null);
     setSheetFailedSrc(null);
     setGifError(null);
   }, [cardVersion, showCardVersion]);
@@ -533,9 +577,11 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   // loading overlay on top instead of fully replacing it
   if (isGenerating && generatedImageDataUrl) {
     return (
-      <div className="relative space-y-4">
+      // Both in one grid cell (grid-area 1 / 1): the box is as tall as the
+      // taller of the two, so the loader never spills past the card.
+      <div className="grid">
         {/* Dimmed previous result */}
-        <div className="opacity-20 pointer-events-none">
+        <div className="[grid-area:1/1] opacity-20 pointer-events-none">
           <div className="rounded-lg border border-border-default bg-bg-elevated p-4 overflow-auto">
             <div className="inline-block mx-auto">
               <img
@@ -548,7 +594,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           </div>
         </div>
         {/* Overlay loading indicator */}
-        <div className="absolute inset-0 flex items-center justify-center">
+        <div className="[grid-area:1/1] flex items-center justify-center">
           {loadingIndicator}
         </div>
       </div>
@@ -764,82 +810,98 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         ref={containerRef}
         className="rounded-lg border border-border-default bg-bg-elevated p-4 overflow-auto"
       >
-        {showLoop && loopGeometry && (
+        {/* An animate result keeps the loop and the sheet in one grid cell.
+            The one not shown is invisible and takes no height, so the box is
+            as tall as the view shown. */}
+        <div className={loopGeometry ? 'grid grid-cols-[minmax(0,1fr)]' : undefined}>
+          {loopGeometry && (
+            <div
+              className={`[grid-area:1/1] self-center mx-auto ${showLoop ? '' : 'invisible h-0 overflow-hidden'}`}
+              inert={!showLoop}
+              aria-hidden={!showLoop || undefined}
+              style={{
+                width: `min(100%, ${Math.max(1, Math.floor(LOOP_TARGET_PX / loopGeometry.frameW)) * loopGeometry.frameW}px)`,
+                aspectRatio: `${loopGeometry.frameW} / ${loopGeometry.frameH}`,
+                backgroundImage:
+                  'linear-gradient(45deg, #2a2725 25%, transparent 25%), linear-gradient(-45deg, #2a2725 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2725 75%), linear-gradient(-45deg, transparent 75%, #2a2725 75%)',
+                backgroundSize: '8px 8px',
+                backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0',
+              }}
+            >
+              <SheetLoop
+                src={displayImageDataUrl ?? generatedImageDataUrl}
+                geometry={loopGeometry}
+                sequence={loopPlayback}
+                fps={loopSeq.fps}
+                playing={showLoop}
+                className="w-full h-full"
+              />
+            </div>
+          )}
+          {/* The sheet image stays mounted while the loop shows (invisible,
+              no size) so its onLoad keeps feeding naturalDims and the fit
+              zoom, and its zoom holds for Sheet view. */}
           <div
-            className="mx-auto"
+            className={loopGeometry
+              ? `[grid-area:1/1] self-center [justify-self:safe_center] inline-block ${showLoop ? 'invisible w-0 h-0 overflow-hidden' : ''}`
+              : 'inline-block mx-auto'}
+            inert={showLoop}
             style={{
-              width: `min(100%, ${Math.max(1, Math.floor(LOOP_TARGET_PX / loopGeometry.frameW)) * loopGeometry.frameW}px)`,
-              aspectRatio: `${loopGeometry.frameW} / ${loopGeometry.frameH}`,
               backgroundImage:
                 'linear-gradient(45deg, #2a2725 25%, transparent 25%), linear-gradient(-45deg, #2a2725 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2725 75%), linear-gradient(-45deg, transparent 75%, #2a2725 75%)',
               backgroundSize: '8px 8px',
               backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0',
             }}
           >
-            <SheetLoop
+            <img
               src={displayImageDataUrl ?? generatedImageDataUrl}
-              geometry={loopGeometry}
-              sequence={loopPlayback}
-              fps={loopSeq.fps}
-              className="w-full h-full"
+              alt="Generated sprite sheet"
+              className="pixel-art-render block max-w-none"
+              style={{
+                imageRendering: 'pixelated',
+                width: naturalDims.w ? naturalDims.w * zoom : undefined,
+                height: naturalDims.h ? naturalDims.h * zoom : undefined,
+              }}
+              onLoad={(e) => {
+                // Always record natural dims (used by the explicit width/height
+                // style on every render, including bg-removal toggle loads).
+                const nw = e.currentTarget.naturalWidth;
+                const nh = e.currentTarget.naturalHeight;
+                setNaturalDims({ w: nw, h: nh });
+
+                // Fit-to-container default zoom: fires once per new generation.
+                // Skip if this load is just a bg-removal toggle, an editor save
+                // or a version switch on the same result (ref still matches).
+                // Once a user manually picks a zoom, no further loads happen
+                // until a genuinely new source URL arrives, so manual zoom
+                // sticks.
+                if (lastDefaultZoomSrcRef.current === resultKey) return;
+                lastDefaultZoomSrcRef.current = resultKey;
+
+                // clientWidth includes the container's p-4 padding (16px each
+                // side = 32px total). Subtract it to get usable content width.
+                // Fallback to 480 if the ref isn't ready (defensive: onLoad
+                // runs after the first commit so the ref is normally populated).
+                const el = containerRef.current;
+                const containerWidth = el ? Math.max(64, el.clientWidth - 32) : 480;
+                setZoom(computeFitZoom(nw, containerWidth));
+              }}
             />
           </div>
-        )}
-        {/* The sheet image stays mounted while the loop shows (hidden) so
-            its onLoad keeps feeding naturalDims and the fit zoom. */}
-        <div
-          className={showLoop ? 'hidden' : 'inline-block mx-auto'}
-          style={{
-            backgroundImage:
-              'linear-gradient(45deg, #2a2725 25%, transparent 25%), linear-gradient(-45deg, #2a2725 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2725 75%), linear-gradient(-45deg, transparent 75%, #2a2725 75%)',
-            backgroundSize: '8px 8px',
-            backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0',
-          }}
-        >
-          <img
-            src={displayImageDataUrl ?? generatedImageDataUrl}
-            alt="Generated sprite sheet"
-            className="pixel-art-render block max-w-none"
-            style={{
-              imageRendering: 'pixelated',
-              width: naturalDims.w ? naturalDims.w * zoom : undefined,
-              height: naturalDims.h ? naturalDims.h * zoom : undefined,
-            }}
-            onLoad={(e) => {
-              // Always record natural dims (used by the explicit width/height
-              // style on every render, including bg-removal toggle loads).
-              const nw = e.currentTarget.naturalWidth;
-              const nh = e.currentTarget.naturalHeight;
-              setNaturalDims({ w: nw, h: nh });
-
-              // Fit-to-container default zoom — fires once per new generation.
-              // Skip if this load is just a bg-removal toggle, an editor save
-              // or a version switch on the same result (ref still matches).
-              // Once a user manually picks a zoom, no further loads happen
-              // until a genuinely new source URL arrives — so manual zoom
-              // sticks.
-              if (lastDefaultZoomSrcRef.current === resultKey) return;
-              lastDefaultZoomSrcRef.current = resultKey;
-
-              // clientWidth includes the container's p-4 padding (16px each
-              // side = 32px total). Subtract it to get usable content width.
-              // Fallback to 480 if the ref isn't ready (defensive — onLoad
-              // runs after the first commit so the ref is normally populated).
-              const el = containerRef.current;
-              const containerWidth = el ? Math.max(64, el.clientWidth - 32) : 480;
-              setZoom(computeFitZoom(nw, containerWidth));
-            }}
-          />
         </div>
       </div>
 
-      {showLoop && loopGeometry && (
-        <LoopFrameStrip
-          src={displayImageDataUrl ?? generatedImageDataUrl}
-          geometry={loopGeometry}
-          sequence={loopSeq}
-          onChange={handleLoopChange}
-        />
+      {/* In Sheet view the frame strip and its edit controls keep their
+          space (invisible, inert), so nothing below moves. */}
+      {loopGeometry && (
+        <div className={showLoop ? undefined : 'invisible'} inert={!showLoop} aria-hidden={!showLoop || undefined}>
+          <LoopFrameStrip
+            src={displayImageDataUrl ?? generatedImageDataUrl}
+            geometry={loopGeometry}
+            sequence={loopSeq}
+            onChange={handleLoopChange}
+          />
+        </div>
       )}
 
       {/* Zoom controls */}
@@ -895,7 +957,8 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
             aria-labelledby={`${bgTitleId} ${bgToggleId}`}
             aria-disabled={sheetIsTransparent === true || undefined}
             aria-describedby={sheetIsTransparent === true ? bgNoteId : undefined}
-            className={`px-2.5 py-1 rounded text-[10px] font-mono transition-colors
+            className={`inline-flex items-center justify-center px-2.5 py-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11
+              rounded text-xs font-mono transition-colors
               focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber
               ${sheetIsTransparent === true
                 ? 'bg-bg-elevated text-text-muted border border-border-subtle cursor-not-allowed'
@@ -971,7 +1034,16 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           <Scissors size={14} />
           Send to Slicer
         </Button>
-        <Button variant="secondary" size="md" onClick={handleSendToEditor} disabled={openingEditor}>
+        {/* aria-disabled, as on Download PNG below: focus stays while busy,
+            and the handler ignores a press. */}
+        <Button
+          variant="secondary"
+          size="md"
+          onClick={handleSendToEditor}
+          aria-disabled={openingEditor || undefined}
+          aria-busy={openingEditor || undefined}
+          className="aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
+        >
           <Pencil size={14} />
           Send to Editor
         </Button>
@@ -996,8 +1068,12 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           {sheetPreparing ? 'Preparing...' : 'Download PNG'}
         </Button>
         {playedSheetReady && (
-          <Button variant="secondary" size="md" onClick={handleDownloadGif} disabled={gifEncoding}>
-            {gifEncoding ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+          <Button variant="secondary" size="md" onClick={handleDownloadGif}
+            aria-disabled={gifEncoding || undefined}
+            aria-busy={gifEncoding || undefined}
+            className="aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
+          >
+            {gifEncoding ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" /> : <Download size={14} />}
             Download GIF
           </Button>
         )}
@@ -1013,21 +1089,27 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
         </Link>
       </div>
       {playedSheetReady && (
-        <div className="flex">
-          <Button variant="ghost" size="sm" onClick={handleDownloadOriginal}>
+        <div>
+          <Button variant="ghost" size="sm" onClick={handleDownloadOriginal} aria-describedby={uneditedHintId}>
             <Download size={12} />
-            Download original
+            Download as delivered
           </Button>
+          <p id={uneditedHintId} className="text-xs font-mono text-text-secondary mt-1">
+            The whole sheet as SpriteBrew delivered it, background removed, before any frame or pixel edits.
+          </p>
         </div>
       )}
       {gifError && gifError.src === generatedImageDataUrl && (
-        <p className="text-[10px] font-mono text-red-400" role="alert">{gifError.message}</p>
+        <p className="text-xs font-mono text-red-400" role="alert">{gifError.message}</p>
       )}
       {sheetFailedSrc !== null && sheetFailedSrc === generatedImageDataUrl && (
-        <p className="text-[10px] font-mono text-red-400" role="alert">Could not make the sheet. Try Download original.</p>
+        <p className="text-xs font-mono text-red-400" role="alert">Could not make the sheet. Try Download as delivered.</p>
       )}
-      {/* Always rendered, so a screen reader announces each change. */}
+      {/* Always rendered, so a screen reader announces each change: the
+          sheet, the GIF, the editor while it opens and an editor save. */}
       <p className="sr-only" role="status">{sheetStatus}</p>
+      <p className="sr-only" role="status">{gifStatus}</p>
+      <p className="sr-only" role="status">{openingEditor ? 'Opening the editor.' : ''}</p>
       <p className="sr-only" role="status">{editNote}</p>
 
       {/* A Recent entry that could not be saved (localStorage full); the

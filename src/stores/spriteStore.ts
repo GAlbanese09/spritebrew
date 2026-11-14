@@ -105,6 +105,10 @@ interface SpriteStore {
    *  CTA in the sidebar and the panel on /buy-tokens. Hydrated from server
    *  on rewards check. Optimistically set after a successful subscribe. */
   emailListClaimed: boolean;
+  /** True once the daily reward's answer has said whether the newsletter is
+   *  claimed (dailyRewardClient.ts); false again on sign-out. Until then the
+   *  Create form's note does not offer the newsletter. */
+  emailListClaimKnown: boolean;
 
   /** One-shot intent flag: user clicked "Send to Editor" on the Generation
    *  Result. Consumed-and-cleared by /editor's mount effect. Does NOT replace
@@ -197,6 +201,7 @@ interface SpriteStore {
   dequeueReward: () => PendingReward | null;
   setStreak: (count: number, lifetimeMax: number) => void;
   setEmailListClaimed: (claimed: boolean) => void;
+  setEmailListClaimKnown: (known: boolean) => void;
 
   // Send-to-editor handoff
   setPendingEditorHandoff: (pending: boolean) => void;
@@ -280,6 +285,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   streakCount: 0,
   streakLifetimeMax: 0,
   emailListClaimed: false,
+  emailListClaimKnown: false,
   pendingEditorHandoff: false,
   pendingEditorRestore: null,
   pendingAnimatorHandoff: false,
@@ -482,6 +488,7 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   setStreak: (count, lifetimeMax) => set({ streakCount: count, streakLifetimeMax: lifetimeMax }),
 
   setEmailListClaimed: (claimed) => set({ emailListClaimed: claimed }),
+  setEmailListClaimKnown: (known) => set({ emailListClaimKnown: known }),
 
   setPendingEditorHandoff: (pending) => set({ pendingEditorHandoff: pending }),
   clearPendingEditorHandoff: () => set({ pendingEditorHandoff: false }),

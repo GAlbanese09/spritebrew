@@ -24,59 +24,21 @@ import {
   type PurchaseBaseline,
 } from '@/lib/purchaseBanner';
 
-const EARLY_ACCESS_DISMISS_KEY = 'spritebrew_early_access_dismissed';
 const LIMIT_NOTICE_DISMISS_KEY = 'spritebrew_dismissed_limit_notice';
-
-function EarlyAccessBanner() {
-  const [visible, setVisible] = useState(false);
-  const tokenBalance = useSpriteStore((s) => s.tokenBalance);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const dismissed = localStorage.getItem(EARLY_ACCESS_DISMISS_KEY);
-      setVisible(!dismissed);
-    } catch {
-      setVisible(true);
-    }
-  }, []);
-
-  const handleDismiss = useCallback(() => {
-    try {
-      localStorage.setItem(EARLY_ACCESS_DISMISS_KEY, '1');
-    } catch {
-      // ignore
-    }
-    setVisible(false);
-  }, []);
-
-  if (!visible) return null;
-
-  return (
-    <div className="flex items-center gap-3 rounded-lg border border-accent-amber/30 bg-accent-amber-glow px-4 py-2.5">
-      <p className="flex-1 text-xs font-mono text-accent-amber">
-        🧪 Early Access — You have 🪙 {tokenBalance} tokens. Each style costs a different amount. Earn +3 tokens daily (+6 on 7-day streaks) or{' '}
-        <a href="/buy-tokens" className="underline hover:text-accent-amber-strong">purchase token packs</a>.
-      </p>
-      <button
-        onClick={handleDismiss}
-        className="p-1 rounded text-accent-amber/70 hover:text-accent-amber hover:bg-accent-amber/10 cursor-pointer"
-        title="Dismiss"
-      >
-        <X size={14} />
-      </button>
-    </div>
-  );
-}
 
 function LimitNoticeBanner() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    // Once per browser: the first render that finds no key shows the notice
+    // and writes the key at once, so no later visit shows it.
     try {
       const dismissed = localStorage.getItem(LIMIT_NOTICE_DISMISS_KEY);
-      setVisible(!dismissed);
+      if (!dismissed) {
+        localStorage.setItem(LIMIT_NOTICE_DISMISS_KEY, '1');
+        setVisible(true);
+      }
     } catch {
       setVisible(true);
     }
@@ -95,7 +57,7 @@ function LimitNoticeBanner() {
 
   return (
     <div className="flex items-start gap-3 rounded-lg border border-accent-amber/20 bg-accent-amber-glow/50 px-4 py-3">
-      <p className="flex-1 text-[11px] font-mono text-text-secondary leading-relaxed">
+      <p className="flex-1 text-xs font-mono text-text-secondary leading-relaxed">
         Thanks for being an early user! You received bonus tokens to get started.
         Need more?{' '}
         <a href="/buy-tokens" className="text-accent-amber hover:underline">
@@ -376,7 +338,6 @@ export default function GeneratePage() {
         <PurchaseStatusContent />
       </Suspense>
       <LowBalanceBanner />
-      <EarlyAccessBanner />
       <LimitNoticeBanner />
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Form — left 3/5 */}

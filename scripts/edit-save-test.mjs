@@ -219,7 +219,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   check('E5: the transparency answer stands for the result while a version\'s own is read', /sheetAlpha\.src === generatedImageDataUrl \|\| sheetAlpha\.key === resultKey/.test(cardSrc) && /setSheetAlpha\(\{ src, key, transparent:/.test(cardSrc));
   const sw = fn(cardSrc, 'handleShowVersion');
   check('E6: the switch is a named group of pressed buttons that goes through handleShowVersion', /role="group" aria-label="Version"/.test(cardSrc) && /onClick=\{\(\) => handleShowVersion\(version\)\}\s*aria-pressed=\{selected\}/.test(cardSrc) && /\['edited', 'Edited'\], \['before', 'Before edit'\]/.test(cardSrc));
-  check('E6: a switch shows the version and drops the notes made for the other one', /if \(version === cardVersion\) return;\s*showCardVersion\(version\);\s*setAnnouncedEdit\(null\);\s*setSheetReadySrc\(null\);\s*setSheetFailedSrc\(null\);\s*setGifError\(null\);/.test(sw), sw.length);
+  check('E6: a switch shows the version and drops the notes made for the other one', /if \(version === cardVersion\) return;\s*showCardVersion\(version\);\s*setAnnouncedEdit\(null\);\s*setSheetReady\(null\);\s*setGifReady\(null\);\s*setSheetFailedSrc\(null\);\s*setGifError\(null\);/.test(sw), sw.length);
   const slicer = fn(cardSrc, 'handleSendToSlicer');
   const animator = fn(cardSrc, 'handleSendToAnimator');
   const handed = /const handed = bgRemovalActive && bgRemovedDataUrl \? bgRemovedDataUrl : generatedImageDataUrl;\s*if \(handed\) setWorkingImage\(handed\);/;

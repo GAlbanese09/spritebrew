@@ -188,6 +188,10 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
   const landing = stripComments(read('src/app/page.tsx'));
   const banned = ['+6 bonus', '7-day streaks', '4 animation styles', '16x zoom', 'Built by George Albanese'].filter((t) => landing.includes(t));
   check('4: the landing page has none of the old claims or the full name', banned.length === 0, banned);
+  // The pricing grid has one column below 640 px in a track that may
+  // shrink, so the three cards stay on a phone's screen (REV 2026-11-15-003, HQ -038).
+  check('4: the landing page\'s pricing cards sit in one shrinkable column below 640 px',
+    /<section id="pricing"[\s\S]{0,400}<div className="grid grid-cols-1 gap-4 sm:grid-cols-3">/.test(landing));
   const constImport = landing.match(/import \{([^}]*)\} from '@\/lib\/constants';/)?.[1] ?? '';
   const names = ['SIGNUP_BONUS_TOKENS', 'DAILY_LOGIN_TOKENS', 'STREAK_WEEKLY_BONUS_TOKENS', 'STREAK_INTERVAL_DAYS', 'EMAIL_LIST_BONUS_TOKENS'];
   check('4: the landing page imports the streak and bonus constants and uses them in the Free list',

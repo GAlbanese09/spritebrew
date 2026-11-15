@@ -298,7 +298,11 @@ export default function LandingPage() {
         <h2 className="font-display text-[10px] text-[#9a918a] uppercase tracking-[0.2em] text-center mb-10">
           Simple pricing. Start free.
         </h2>
-        <div className="grid gap-4 sm:grid-cols-3">
+        {/* One column below 640 px, in a track that may shrink to the
+            screen: without it the column takes the cards' widest content, and
+            the touch rule's 16 px email field (globals.css) pushed all three
+            cards past a phone's right edge (REV 2026-11-15-003). */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           {/* Free tier */}
           <div className="rounded-xl border border-[#d4871c]/30 bg-[#121010] p-6 space-y-4">
             <div>

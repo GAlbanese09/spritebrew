@@ -34,6 +34,9 @@ export default function Header({ onMenuClick }: HeaderProps) {
       <h1 className="text-sm font-mono font-medium text-text-primary tracking-wide">
         {title}
       </h1>
+      {/* A page's own control for this bar, put here by a portal: the
+          Gallery's "Show 2 new" (DESIGN 2026-11-14-278). */}
+      <div id="header-actions" className="flex min-w-0 items-center" />
       <div className="ml-auto flex items-center gap-3">
         <span className="hidden sm:inline-flex items-center gap-1.5 text-[10px] font-mono text-text-muted uppercase tracking-widest">
           <span className="w-1.5 h-1.5 rounded-full bg-accent-teal animate-pulse" />

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Download, Scissors, Trash2, Images, Sparkles, Play, Loader2 } from 'lucide-react';
@@ -15,6 +16,7 @@ import SheetLoop from '@/components/sprites/SheetLoop';
 import { sheetGeometry, galleryFrameSizeGuess } from '@/lib/animationGeometry';
 import { cleanGallerySheet } from '@/lib/spriteUtils';
 import { createGalleryOwnership } from '@/lib/galleryOwnership';
+import { dropKept, keepGallery, quietMerge, takeKept, type KeptGallery, type KeptPage } from '@/lib/galleryKeep';
 import {
   END_LINE,
   GALLERY_PAGE_SIZE,
@@ -29,10 +31,17 @@ import {
   clearKeptLine,
   clearLabel,
   clearNoneLine,
+  clearedLine,
+  CLEARED_HEADING,
   countLine,
   matchesFilter,
   noneAtEndLine,
   noneYetLine,
+  noneNextLine,
+  newAtTopLine,
+  showNewLabel,
+  showNewName,
+  newWaitingLine,
   passEndLine,
   passGoal,
   runGalleryPass,
@@ -59,9 +68,12 @@ async function readListPage(token: string, cursor: string | null): Promise<Galle
 async function readPictures(
   token: string,
   entries: GalleryEntryV1[]
-): Promise<{ urls: Record<string, string>; stored: Record<string, Blob> }> {
+): Promise<{ urls: Record<string, string>; stored: Record<string, Blob>; blobs: Record<string, Blob> }> {
   const urls: Record<string, string> = {};
   const stored: Record<string, Blob> = {};
+  // Every picture's bytes, so a return to the Gallery can show it again
+  // without reading it (galleryKeep.ts).
+  const blobs: Record<string, Blob> = {};
   await Promise.all(
     entries.map(async (e) => {
       try {
@@ -71,6 +83,7 @@ async function readPictures(
         if (imgResp.ok) {
           const blob = await imgResp.blob();
           urls[e.jobId] = URL.createObjectURL(blob);
+          blobs[e.jobId] = blob;
           if (e.mode === 'animate') stored[e.jobId] = blob;
         }
       } catch {
@@ -78,7 +91,7 @@ async function readPictures(
       }
     })
   );
-  return { urls, stored };
+  return { urls, stored, blobs };
 }
 
 // Phase 2 (server-side gallery writes) shipped May 20, 2026 ~14:00 UTC.
@@ -182,6 +195,57 @@ export default function GalleryPage() {
   const reloadNoteRef = useRef('');
   // The generation the newest Send to Slicer was pressed on.
   const slicerJobRef = useRef<string | null>(null);
+  // Keep the place (HQ 2026-11-14-077, DESIGN -230): each picture's bytes,
+  // the pages read with the cursor after each, and the page area's scroll
+  // position, kept when the Gallery is left and restored on a return.
+  const blobsRef = useRef<Record<string, Blob>>({});
+  const pagesRef = useRef<KeptPage[]>([]);
+  const scrollTopRef = useRef(0);
+  // A kept scroll position to restore once the kept list is on screen.
+  const restoreRef = useRef<number | null>(null);
+  // New generations a return found while the page was scrolled down: they
+  // wait behind "Show 2 new" in the app's top bar, so nothing on screen
+  // moves (DESIGN 2026-11-14-278; AUDIT keep-place r1, M4). Newest first.
+  const pendingRef = useRef<GalleryEntryV1[]>([]);
+  const [pending, setPending] = useState<GalleryEntryV1[]>([]);
+  // After a press of "Show 2 new": the page goes to the top.
+  const toTopRef = useRef(false);
+  // Where the button goes: the top bar's slot (Header.tsx).
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
+  // A Send to Slicer a Clear or a Delete set aside at its yes: sent again
+  // if its generation was not deleted (AUDIT gallery-paging-r2, G2-11).
+  const heldSlicerRef = useRef<GalleryEntryV1 | null>(null);
+  // How many the server says Clear all deleted.
+  const deletedAllRef = useRef<number | null>(null);
+  // Settles when the running Clear ends: a lost Delete answer waits for it
+  // before the gallery is read again (AUDIT gallery-paging-r3, L3-1).
+  const clearEndRef = useRef<Promise<void>>(Promise.resolve());
+  // Under a filter with cards showing: the last pass found none of the kind.
+  const [noneNext, setNoneNext] = useState('');
+  // After Clear all emptied the Gallery in this visit: the line that takes
+  // the place of the usual empty words (DESIGN 2026-11-14-243).
+  const [cleared, setCleared] = useState('');
+  // A return lands at the kept place, and landing is not the person
+  // scrolling: no read starts by itself (the scroll-in read, or a filter
+  // reading on) until the person's own first scroll or a tab (DESIGN
+  // 2026-11-14-243). "Load more" works as ever.
+  const [landingHeld, setLandingHeld] = useState(false);
+  // The account the list on screen was read for, and whether the page is
+  // loading or showing its error: a keep is taken only for the account the
+  // list belongs to, never while loading or on the error screen (AUDIT
+  // keep-place r1, C1).
+  const listOwnerRef = useRef<string | null>(null);
+  // The same, for the render: a list read for another account is never
+  // drawn, not even for the one render between an account change and the
+  // effect that empties it.
+  const [listOwner, setListOwner] = useState<string | null>(null);
+  const loadingRef = useRef(true);
+  const errorRef = useRef<string | null>(null);
+  // A return's quiet read of the first page, while it is on its way or once
+  // it ended: a Clear waits for it, and reads the page itself if it failed
+  // (AUDIT keep-place r1, M3). null on a fresh read.
+  const quietRef = useRef<Promise<'ok' | 'failed' | 'gap'> | null>(null);
+  const quietReadRef = useRef<() => Promise<'ok' | 'failed' | 'gap'>>(async () => 'failed');
   // After a press of "Load more" or "Try again": the first new card takes
   // the focus. Loading by scrolling never moves it (DESIGN 2026-11-14-126,
   // -134).
@@ -195,6 +259,10 @@ export default function GalleryPage() {
     entriesRef.current = entries;
     filterRef.current = filter;
   }, [entries, filter]);
+  useLayoutEffect(() => {
+    loadingRef.current = loading;
+    errorRef.current = error;
+  }, [loading, error]);
 
   // The pink cleanup of each animation (HQ 2026-10-28-005), made after the
   // first paint so the page never waits on it: the stored copy shows first,
@@ -225,6 +293,173 @@ export default function GalleryPage() {
     visitRef.current += 1;
     clearRunRef.current += 1;
   }, [userId]);
+  // Leaving the Gallery, or its account: what is loaded is kept for a
+  // return in this tab. Not while a Clear or a Delete is on its way (the
+  // server may be part way), not with nothing loaded, not while loading or
+  // on the error screen, and only when the list was read for the account
+  // that is leaving (AUDIT keep-place r1, C1).
+  useLayoutEffect(() => () => {
+    if (!userId || listOwnerRef.current !== userId || loadingRef.current || errorRef.current !== null
+      || clearBusyRef.current || cardBusyRef.current.size > 0 || entriesRef.current.length === 0) {
+      dropKept();
+      return;
+    }
+    const pictures: Record<string, Blob> = {};
+    for (const e of entriesRef.current) if (blobsRef.current[e.jobId]) pictures[e.jobId] = blobsRef.current[e.jobId];
+    keepGallery({
+      userId,
+      entries: entriesRef.current,
+      pictures,
+      cursor: cursorRef.current,
+      paged: pagesRef.current.length > 1,
+      total: totalRef.current,
+      filter: filterRef.current,
+      scrollTop: scrollTopRef.current,
+      pages: pagesRef.current,
+      gone: [...goneRef.current],
+      emptied: [...emptiedRef.current],
+    });
+  }, [userId]);
+
+  // A return in this tab: what was kept for this account goes on screen in
+  // the same commit, before the browser paints, so no skeleton shows and no
+  // focus moves (DESIGN 2026-11-14-230). The load effect then reads the
+  // first page quietly (restoredRef).
+  const restoredRef = useRef<KeptGallery | null>(null);
+  useLayoutEffect(() => {
+    if (!userId) return;
+    const kept = takeKept(userId);
+    if (!kept) return;
+    // At once, at the kept place, with no skeletons; no focus moves.
+    const urls: Record<string, string> = {};
+    const stored: Record<string, Blob> = {};
+    for (const e of kept.entries) {
+      const blob = kept.pictures[e.jobId];
+      if (!blob) continue;
+      urls[e.jobId] = URL.createObjectURL(blob);
+      if (e.mode === 'animate') stored[e.jobId] = blob;
+    }
+    Object.values(urlsRef.current).forEach((url) => URL.revokeObjectURL(url));
+    Object.values(keptRef.current).forEach((url) => URL.revokeObjectURL(url));
+    urlsRef.current = urls;
+    keptRef.current = {};
+    storedRef.current = stored;
+    cleaningRef.current = {};
+    blobsRef.current = { ...kept.pictures };
+    pagesRef.current = kept.pages.map((page) => ({ ids: [...page.ids], cursor: page.cursor }));
+    knownRef.current = new Set(kept.entries.map((e) => e.jobId));
+    goneRef.current = new Set(kept.gone);
+    emptiedRef.current = kept.emptied;
+    setEmptied(kept.emptied);
+    listOwnerRef.current = kept.userId;
+    setListOwner(kept.userId);
+    // What this sets is current at once: a cleanup before the next commit
+    // (React's development double run) keeps it again.
+    loadingRef.current = false;
+    errorRef.current = null;
+    cursorRef.current = kept.cursor;
+    entriesRef.current = kept.entries;
+    filterRef.current = kept.filter;
+    totalRef.current = kept.total;
+    restoreRef.current = kept.scrollTop;
+    scrollTopRef.current = kept.scrollTop;
+    setEntries(kept.entries);
+    setImageUrls(urls);
+    setCursor(kept.cursor);
+    setPaged(kept.paged);
+    setTotal(kept.total);
+    setFilter(kept.filter);
+    setLoading(false);
+    const visit = visitRef.current;
+    const queue = kept.entries.filter((e) => stored[e.jobId]).map((e) => e.jobId);
+    const worker = async (): Promise<void> => {
+      for (let jobId = queue.shift(); jobId !== undefined && visitRef.current === visit; jobId = queue.shift()) {
+        await cleanedUrl(jobId);
+      }
+    };
+    void Promise.all([worker(), worker()]);
+    restoredRef.current = kept;
+    setLandingHeld(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  // The person's own first scroll ends the landing: a wheel, a touch drag,
+  // a scrolling key, or a press on the page area's own scroll bar. A scroll
+  // set by the page (the landing, a card held in view) is none of these.
+  useEffect(() => {
+    if (!landingHeld) return;
+    const main = endRef.current?.closest('main');
+    if (!main) return;
+    const keys = new Set(['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' ']);
+    const release = () => setLandingHeld(false);
+    const onKey = (e: KeyboardEvent) => { if (keys.has(e.key)) release(); };
+    const onPointer = (e: PointerEvent) => { if (e.target === main) release(); };
+    main.addEventListener('wheel', release, { passive: true });
+    main.addEventListener('touchmove', release, { passive: true });
+    window.addEventListener('keydown', onKey);
+    main.addEventListener('pointerdown', onPointer);
+    return () => {
+      main.removeEventListener('wheel', release);
+      main.removeEventListener('touchmove', release);
+      window.removeEventListener('keydown', onKey);
+      main.removeEventListener('pointerdown', onPointer);
+    };
+  }, [landingHeld, loading]);
+
+  // The waiting new generations go on top of the list: on a press of
+  // "Show 2 new", at the very top of the page, on a tab, or before a Clear
+  // counts. The count line counts them only from then (DESIGN
+  // 2026-11-14-278).
+  const flushPending = useCallback((): GalleryEntryV1[] => {
+    const add = pendingRef.current;
+    if (add.length === 0) return add;
+    pendingRef.current = [];
+    setPending([]);
+    entriesRef.current = [...add, ...entriesRef.current];
+    setEntries((prev) => [...add, ...prev]);
+    if (totalRef.current !== null) {
+      totalRef.current += add.length;
+      setTotal(totalRef.current);
+    }
+    return add;
+  }, []);
+
+  // Where the page area is scrolled, for a return. The page's scroller is
+  // the shell's <main>. Scrolled to the very top, the waiting new
+  // generations go in, as at the top.
+  useEffect(() => {
+    if (loading) return;
+    const main = endRef.current?.closest('main');
+    if (!main) return;
+    const onScroll = () => {
+      scrollTopRef.current = main.scrollTop;
+      if (main.scrollTop > 0 || pendingRef.current.length === 0) return;
+      const shown = flushPending().filter((e) => matchesFilter(e, filterRef.current)).length;
+      if (shown > 0) setAnnounce(newAtTopLine(shown));
+    };
+    main.addEventListener('scroll', onScroll, { passive: true });
+    return () => main.removeEventListener('scroll', onScroll);
+  }, [loading, flushPending]);
+
+  // The top bar's slot for "Show 2 new", once the shell is on screen.
+  useEffect(() => {
+    setHeaderSlot(document.getElementById?.('header-actions') ?? null);
+  }, []);
+
+  // A return: once the kept list is on screen, the kept place. The router
+  // may bring the new page into view after this commit, so the place is put
+  // back once more on the next frame if it moved.
+  useLayoutEffect(() => {
+    const want = restoreRef.current;
+    if (want === null || loading) return;
+    const main = endRef.current?.closest('main');
+    if (!main) return;
+    restoreRef.current = null;
+    main.scrollTop = want;
+    requestAnimationFrame(() => {
+      if (main.isConnected && Math.abs(main.scrollTop - want) > 1) main.scrollTop = want;
+    });
+  }, [loading, entries]);
 
   const cleanedUrl = useCallback((jobId: string): Promise<string | undefined> => {
     const started = cleaningRef.current[jobId];
@@ -262,11 +497,62 @@ export default function GalleryPage() {
     const run = async () => {
       if (userId === undefined) return; // Clerk still loading: keep the skeletons.
       if (!userId) {
+        dropKept();
+        // Nothing of the last account stays on the page (AUDIT keep-place r1, C1).
+        listOwnerRef.current = null;
+        setListOwner(null);
+        entriesRef.current = [];
+        setEntries([]);
+        pendingRef.current = [];
+        setPending([]);
+        setImageUrls({});
         setError('Please sign in to view your gallery.');
         setLoading(false);
         return;
       }
-      // A new account, or a fresh read: the paging starts over with it.
+      // A return in this tab: the layout effect below has already put what
+      // was kept on screen; this reads the first page quietly. A reload reads
+      // from the top.
+      const kept = reloads === 0 ? restoredRef.current : null;
+      restoredRef.current = null;
+      if (kept) {
+        // Then the first page, quietly (quietRead): new generations go on
+        // top, generations the server no longer has go, and what is on
+        // screen does not move. A failed read is tried once more after a
+        // few seconds; a Clear reads it itself (AUDIT keep-place r1, M3).
+        const afterQuiet = async (outcome: 'ok' | 'failed' | 'gap', retry: boolean): Promise<void> => {
+          if (cancelled) return;
+          if (outcome === 'gap') {
+            // More new ones than a page: the kept list may not follow on,
+            // so the gallery is read from the top, after a running Clear.
+            if (clearBusyRef.current) await clearEndRef.current;
+            if (!cancelled) reload(reloadNoteRef.current);
+            return;
+          }
+          if (outcome === 'failed' && retry) {
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+            if (cancelled || clearBusyRef.current) return;
+            const again = quietReadRef.current();
+            quietRef.current = again;
+            await afterQuiet(await again, false);
+          }
+        };
+        const quiet = quietReadRef.current();
+        quietRef.current = quiet;
+        await afterQuiet(await quiet, true);
+        return;
+      }
+      // A new account, or a fresh read: the paging starts over with it, and
+      // nothing of the last list stays on the page (AUDIT keep-place r1, C1).
+      listOwnerRef.current = null;
+      setListOwner(null);
+      quietRef.current = null;
+      entriesRef.current = [];
+      setEntries([]);
+      pendingRef.current = [];
+      setPending([]);
+      setImageUrls({});
+      storedRef.current = {};
       setCursor(null);
       cursorRef.current = null;
       knownRef.current = new Set();
@@ -278,6 +564,8 @@ export default function GalleryPage() {
       setClearing(null);
       setClearNote(reloadNoteRef.current);
       reloadNoteRef.current = '';
+      setCleared('');
+      setLandingHeld(false);
       setEmptied([]);
       emptiedRef.current = [];
       setTotal(null);
@@ -287,6 +575,9 @@ export default function GalleryPage() {
       clearBusyRef.current = false;
       clearDeletingRef.current = false;
       failedRef.current = false;
+      setNoneNext('');
+      blobsRef.current = {};
+      pagesRef.current = [];
       setLoading(true);
       setError(null);
       try {
@@ -302,7 +593,7 @@ export default function GalleryPage() {
         // 1. The first page of the list, then its pictures in parallel.
         const first = await readListPage(token, null);
         const fetched = first.entries;
-        const { urls: newUrls, stored } = await readPictures(token, fetched);
+        const { urls: newUrls, stored, blobs } = await readPictures(token, fetched);
 
         if (cancelled) {
           // Cancelled during fetch — release any URLs we created
@@ -321,10 +612,15 @@ export default function GalleryPage() {
         keptRef.current = {};
         storedRef.current = stored;
         cleaningRef.current = {};
+        blobsRef.current = blobs;
+        pagesRef.current = [{ ids: fetched.map((e) => e.jobId), cursor: first.cursor }];
 
         knownRef.current = new Set(fetched.map((e) => e.jobId));
         cursorRef.current = first.cursor;
         entriesRef.current = fetched;
+        listOwnerRef.current = userId;
+        setListOwner(userId);
+        loadingRef.current = false;
         setEntries(fetched);
         setImageUrls(newUrls);
         setCursor(first.cursor);
@@ -383,7 +679,8 @@ export default function GalleryPage() {
     setPaging('loading');
     setAnnounce('');
     try {
-      const result = await runGalleryPass<{ urls: Record<string, string>; stored: Record<string, Blob> }>(trigger, {
+      setNoneNext('');
+      const result = await runGalleryPass<{ urls: Record<string, string>; stored: Record<string, Blob>; blobs: Record<string, Blob> }>(trigger, {
         cursor: () => cursorRef.current,
         known: () => knownRef.current,
         matches: (e) => matchesFilter(e, filterRef.current),
@@ -399,9 +696,11 @@ export default function GalleryPage() {
           return readPictures(token ?? '', fresh);
         },
         current,
+        // A kind a Clear has emptied: no further read (AUDIT r3, L3-2).
+        stop: kindDone,
         drop: ({ urls }) => Object.values(urls).forEach(URL.revokeObjectURL),
         // The page is in: its entries after the ones shown, never over them.
-        commit: ({ fresh: read, cursor: next, pictures: { urls: readUrls, stored: readStored } }) => {
+        commit: ({ fresh: read, cursor: next, pictures: { urls: readUrls, stored: readStored, blobs: readBlobs } }) => {
           // An entry deleted while its page was on the way stays deleted.
           const fresh = read.filter((e) => !goneRef.current.has(e.jobId));
           const urls: Record<string, string> = {};
@@ -414,7 +713,9 @@ export default function GalleryPage() {
             }
             if (url) urls[e.jobId] = url;
             if (readStored[e.jobId]) stored[e.jobId] = readStored[e.jobId];
+            if (readBlobs[e.jobId]) blobsRef.current[e.jobId] = readBlobs[e.jobId];
           }
+          pagesRef.current = [...pagesRef.current, { ids: read.map((e) => e.jobId), cursor: next }];
           read.forEach((e) => knownRef.current.add(e.jobId));
           urlsRef.current = { ...urlsRef.current, ...urls };
           Object.assign(storedRef.current, stored);
@@ -461,13 +762,20 @@ export default function GalleryPage() {
       failedRef.current = false;
       setCapped(result.capped);
       // Said once: the cards that came, or the line now standing in their place.
-      setAnnounce(passEndLine({
+      const endState = {
         added: result.added,
         filter: filterRef.current,
         shown: shown(),
         read: entriesRef.current.length,
         more: cursorRef.current !== null && !kindDone(),
-      }));
+        readThisPass: result.read,
+      };
+      const endLine = passEndLine(endState);
+      setAnnounce(endLine);
+      // Cards of the kind show and none came: the line stands beside "Load
+      // more" until the next pass or tab (DESIGN 2026-11-14-230).
+      setNoneNext(endState.filter !== 'all' && endState.shown > 0 && endState.more && endState.added === 0 && result.read > 0
+        ? noneNextLine(endState.filter, result.read) : '');
       setPaging('idle');
     } finally {
       ended();
@@ -480,7 +788,7 @@ export default function GalleryPage() {
   // capped pass the end has to leave and come back first.
   useEffect(() => {
     const end = endRef.current;
-    if (!end || loading || cursor === null || paging !== 'idle' || clearing || emptied.includes(filter)
+    if (!end || loading || landingHeld || cursor === null || paging !== 'idle' || clearing || emptied.includes(filter)
       || typeof IntersectionObserver === 'undefined') return;
     let armed = !capped;
     const observer = new IntersectionObserver(
@@ -494,13 +802,13 @@ export default function GalleryPage() {
     );
     observer.observe(end);
     return () => observer.disconnect();
-  }, [loading, cursor, paging, capped, filter, clearing, emptied, runPass]);
+  }, [loading, landingHeld, cursor, paging, capped, filter, clearing, emptied, runPass]);
 
   // A filter that shows less than a screenful reads on until it has one.
   useEffect(() => {
-    if (loading) return;
+    if (loading || landingHeld) return;
     void runPass('filter');
-  }, [filter, loading, runPass]);
+  }, [filter, loading, landingHeld, runPass]);
 
   // The list ended while "Load more" had the focus: the end line takes it,
   // so the keyboard is not dropped at the top of the page.
@@ -510,6 +818,15 @@ export default function GalleryPage() {
       endLineRef.current?.focus();
     }
   }, [cursor]);
+
+  // After a press of "Show 2 new": the page goes to the top, where the new
+  // generations are; the effect below then moves the focus to the first.
+  useLayoutEffect(() => {
+    if (!toTopRef.current) return;
+    toTopRef.current = false;
+    const main = endRef.current?.closest('main');
+    if (main) main.scrollTop = 0;
+  }, [entries]);
 
   // After a press of "Load more" or "Try again": the first new card itself
   // takes the focus and comes into view, so the keyboard is at the new
@@ -660,6 +977,23 @@ export default function GalleryPage() {
     },
   ), [imageUrls, cleanedUrl, ownership, setGeneratedImage, setGenerationStyle, setCurrentSheetMetadata, router]);
 
+  // A Send to Slicer still waiting on a generation about to be deleted is
+  // set aside at the yes, and sent again if that generation was not deleted
+  // (DESIGN 2026-11-14-230; AUDIT gallery-paging-r2, G2-11).
+  const setSlicerAside = useCallback(() => {
+    const id = slicerJobRef.current;
+    heldSlicerRef.current = id ? entriesRef.current.find((e) => e.jobId === id) ?? null : null;
+    slicerJobRef.current = null;
+    ownership.slicer();
+  }, [ownership]);
+  const sendSlicerAgain = useCallback(() => {
+    const entry = heldSlicerRef.current;
+    heldSlicerRef.current = null;
+    if (!entry || goneRef.current.has(entry.jobId) || slicerJobRef.current !== null) return;
+    slicerJobRef.current = entry.jobId;
+    void handleSendToSlicer(entry);
+  }, [handleSendToSlicer]);
+
   // The known total follows every delete.
   const lowerTotal = useCallback((by: number) => {
     if (totalRef.current === null || by === 0) return;
@@ -671,7 +1005,13 @@ export default function GalleryPage() {
   // no later page brings one back. Each lowers the known total once.
   const dropCards = useCallback((ids: readonly string[]) => {
     const gone = new Set(ids);
-    lowerTotal(ids.filter((id) => !goneRef.current.has(id)).length);
+    // A waiting new generation is not counted yet: it only leaves the wait.
+    const waiting = new Set(pendingRef.current.filter((e) => gone.has(e.jobId)).map((e) => e.jobId));
+    lowerTotal(ids.filter((id) => !goneRef.current.has(id) && !waiting.has(id)).length);
+    if (waiting.size > 0) {
+      pendingRef.current = pendingRef.current.filter((e) => !waiting.has(e.jobId));
+      setPending(pendingRef.current);
+    }
     ids.forEach((id) => {
       goneRef.current.add(id);
       knownRef.current.add(id);
@@ -681,6 +1021,7 @@ export default function GalleryPage() {
       if (keptRef.current[id]) URL.revokeObjectURL(keptRef.current[id]);
       delete keptRef.current[id];
       delete storedRef.current[id];
+      delete blobsRef.current[id];
     });
     entriesRef.current = entriesRef.current.filter((e) => !gone.has(e.jobId));
     setEntries((prev) => prev.filter((e) => !gone.has(e.jobId)));
@@ -701,11 +1042,79 @@ export default function GalleryPage() {
     keptRef.current = {};
     storedRef.current = {};
     cleaningRef.current = {};
+    blobsRef.current = {};
+    pagesRef.current = [];
     entriesRef.current = [];
     setEntries([]);
     setImageUrls({});
     setReloads((n) => n + 1);
   }, []);
+
+  // A return's quiet read of the first page against the kept list (AUDIT
+  // keep-place r1, M1, M2, M4): what stands before the first kept
+  // generation goes on top; kept generations the page covers but no longer
+  // holds go. At the very top of the page they go in; scrolled down they
+  // wait behind "Show 2 new" (DESIGN 2026-11-14-278). 'gap' when the page
+  // holds nothing kept: the caller reads from the top.
+  const quietRead = useCallback(async (): Promise<'ok' | 'failed' | 'gap'> => {
+    const visit = visitRef.current;
+    const alive = () => visitRef.current === visit;
+    try {
+      const token = await getToken();
+      if (!token) return 'failed';
+      const first = await readListPage(token, null);
+      if (!alive()) return 'ok';
+      const { fresh, removed, gap } = quietMerge(entriesRef.current, first.entries, goneRef.current, first.cursor === null);
+      if (gap) return 'gap';
+      if (removed.length > 0) dropCards(removed);
+      // The first page is the whole list: nothing is left to read, so no
+      // "Load more" (AUDIT keep-place r2, N2).
+      if (first.cursor === null && cursorRef.current !== null) {
+        cursorRef.current = null;
+        setCursor(null);
+      }
+      const candidates = fresh.filter((e) => !knownRef.current.has(e.jobId));
+      if (candidates.length === 0) return 'ok';
+      const read = await readPictures(token, candidates);
+      if (!alive() || clearDeletingRef.current) {
+        Object.values(read.urls).forEach(URL.revokeObjectURL);
+        return 'ok';
+      }
+      const add = candidates.filter((e) => !knownRef.current.has(e.jobId) && !goneRef.current.has(e.jobId));
+      add.forEach((e) => knownRef.current.add(e.jobId));
+      for (const e of candidates) if (!add.includes(e) && read.urls[e.jobId]) URL.revokeObjectURL(read.urls[e.jobId]);
+      if (add.length === 0) return 'ok';
+      urlsRef.current = { ...urlsRef.current, ...read.urls };
+      Object.assign(storedRef.current, read.stored);
+      Object.assign(blobsRef.current, read.blobs);
+      setImageUrls((prev) => ({ ...prev, ...read.urls }));
+      const shown = add.filter((e) => matchesFilter(e, filterRef.current)).length;
+      if (scrollTopRef.current > 0 && (shown > 0 || pendingRef.current.length > 0)) {
+        // Scrolled down: they wait behind "Show 2 new", and nothing on
+        // screen moves (DESIGN 2026-11-14-278).
+        pendingRef.current = [...add, ...pendingRef.current];
+        setPending(pendingRef.current);
+        setAnnounce(newWaitingLine(pendingRef.current.filter((e) => matchesFilter(e, filterRef.current)).length));
+      } else {
+        // At the very top, or none of the kind shown: they go in at once.
+        entriesRef.current = [...add, ...entriesRef.current];
+        setEntries((prev) => [...add, ...prev]);
+        if (totalRef.current !== null) {
+          totalRef.current += add.length;
+          setTotal(totalRef.current);
+        }
+        if (shown > 0) setAnnounce(newAtTopLine(shown));
+      }
+      const animations = add.filter((e) => read.stored[e.jobId]).map((e) => e.jobId);
+      void Promise.all(animations.map((jobId) => cleanedUrl(jobId)));
+      return 'ok';
+    } catch {
+      return 'failed';
+    }
+  }, [getToken, dropCards, cleanedUrl]);
+  useLayoutEffect(() => {
+    quietReadRef.current = quietRead;
+  }, [quietRead]);
 
   // A single Delete, whole, is deleteEntry (galleryPaging.ts): the card
   // waits, and leaves only when the server has deleted it.
@@ -724,10 +1133,7 @@ export default function GalleryPage() {
       // dropped, as it was when the card left at the yes.
       ask: () => {
         const yes = confirm('Delete this generation? This cannot be undone.');
-        if (yes && slicerJobRef.current === jobId) {
-          slicerJobRef.current = null;
-          ownership.slicer();
-        }
+        if (yes && slicerJobRef.current === jobId) setSlicerAside();
         return yes;
       },
       current: alive,
@@ -748,10 +1154,16 @@ export default function GalleryPage() {
     if (outcome === 'refused') {
       mark('failed');
       setAnnounce(DELETE_FAILED_LINE);
+      sendSlicerAgain();
     } else if (outcome === 'unknown') {
-      reload(clearUnconfirmedLine());
+      heldSlicerRef.current = null;
+      // A Clear on its way first gets its last answer (AUDIT r3, L3-1).
+      if (clearBusyRef.current) await clearEndRef.current;
+      if (alive()) reload(clearUnconfirmedLine());
+    } else {
+      sendSlicerAgain();
     }
-  }, [getToken, ownership, dropCards, reload]);
+  }, [getToken, dropCards, reload, setSlicerAside, sendSlicerAgain]);
 
   // "Clear" means what it says (HQ 2026-11-14-075). The whole of it is
   // clearGallery (galleryPaging.ts): it waits for a page on its way, reads
@@ -766,10 +1178,38 @@ export default function GalleryPage() {
     const visit = visitRef.current;
     const run = (clearRunRef.current += 1);
     const alive = () => visitRef.current === visit;
+    let ended: () => void = () => {};
+    clearEndRef.current = new Promise<void>((resolve) => { ended = resolve; });
+    deletedAllRef.current = null;
     setClearNote('');
+    setCleared('');
     // Busy from the press: the count may first wait for a page on its way.
-    if (passRef.current || cursorRef.current !== null) setClearing({ phase: 'reading', filter: kind, count: 0 });
+    if (passRef.current || cursorRef.current !== null || quietRef.current) setClearing({ phase: 'reading', filter: kind, count: 0 });
     try {
+      // After a return the count waits for the quiet read of the first
+      // page, and reads it itself if that failed: generations made while
+      // away are counted, and none is said to be made after the press
+      // (AUDIT keep-place r1, M3).
+      if (quietRef.current) {
+        let quiet = await quietRef.current;
+        if (quiet === 'failed' && alive()) {
+          const again = quietRead();
+          quietRef.current = again;
+          quiet = await again;
+        }
+        // Left, or dropped by a filter change while it waited.
+        if (!alive() || clearRunRef.current !== run) return;
+        if (quiet !== 'ok') {
+          setClearNote(clearFailedLine(kind));
+          // A gap reads the gallery again from the top, which starts with a
+          // clean line: the line is said after that read (AUDIT keep-place
+          // r2, N3).
+          if (quiet === 'gap') reloadNoteRef.current = clearFailedLine(kind);
+          return;
+        }
+      }
+      // Waiting new generations go in first, so the count is of all of them.
+      flushPending();
       const result = await clearGallery({
         filter: kind,
         settled: () => passEndRef.current,
@@ -784,12 +1224,11 @@ export default function GalleryPage() {
         // dropped if its own generation is among those about to go; one
         // waiting on a generation that stays still goes (DESIGN
         // 2026-11-14-126). The base dropped it by removing the cards.
+        // and comes back if its generation was not deleted (DESIGN
+        // 2026-11-14-230).
         ask: (question, ids) => {
           const yes = confirm(question);
-          if (yes && slicerJobRef.current !== null && ids.includes(slicerJobRef.current)) {
-            slicerJobRef.current = null;
-            ownership.slicer();
-          }
+          if (yes && slicerJobRef.current !== null && ids.includes(slicerJobRef.current)) setSlicerAside();
           return yes;
         },
         counted: (count) => {
@@ -803,6 +1242,13 @@ export default function GalleryPage() {
           const token = await getToken();
           if (!token) return 'refused';
           const resp = await fetch('/api/gallery', { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+          // How many it deleted: more than were counted when generations
+          // were made after the press (AUDIT r1, L1).
+          if (resp.ok) {
+            const body: unknown = await resp.json().catch(() => null);
+            const deleted = body && typeof body === 'object' ? (body as { deleted?: unknown }).deleted : undefined;
+            if (typeof deleted === 'number' && Number.isInteger(deleted) && deleted >= 0) deletedAllRef.current = deleted;
+          }
           return deleteOutcome({ ok: resp.ok, status: resp.status, body: null }, false);
         },
         deleteOne: async (jobId) => {
@@ -838,8 +1284,13 @@ export default function GalleryPage() {
       else if (result.state === 'partial' || result.state === 'failed') setClearNote(clearKeptLine(result.kept, result.asked, kind));
       // An answer was lost: "nothing was deleted" would be a guess. Read
       // the gallery again and show what is there.
-      else if (result.state === 'unconfirmed') reload(clearUnconfirmedLine());
-      else if (result.state === 'done' && kind !== 'all') {
+      else if (result.state === 'unconfirmed') {
+        heldSlicerRef.current = null;
+        reload(clearUnconfirmedLine());
+      } else if (result.state === 'done' && kind === 'all') {
+        const deleted = deletedAllRef.current ?? result.asked;
+        if (deleted > 0) setCleared(clearedLine(deleted, result.asked));
+      } else if (result.state === 'done' && kind !== 'all') {
         // The whole list was read for the count and every one of that kind
         // is deleted: no unread page holds one.
         emptiedRef.current = [...emptiedRef.current, kind];
@@ -854,8 +1305,21 @@ export default function GalleryPage() {
         clearDeletingRef.current = false;
         if (alive()) setClearing(null);
       }
+      ended();
+      if (alive()) sendSlicerAgain();
     }
-  }, [filter, getToken, ownership, dropCards, reload]);
+  }, [filter, getToken, dropCards, reload, setSlicerAside, sendSlicerAgain, quietRead, flushPending]);
+
+  // "Show 2 new": the new generations go in on top, the page goes to the
+  // top, and the first of them takes the focus, as on any press (DESIGN
+  // 2026-11-14-278, -134).
+  const showNew = useCallback(() => {
+    const add = flushPending();
+    const first = add.find((e) => matchesFilter(e, filterRef.current));
+    setAnnounce('');
+    toTopRef.current = true;
+    focusCardRef.current = first ? first.jobId : null;
+  }, [flushPending]);
 
   const filteredEntries = useMemo(() => {
     if (filter === 'all') return entries;
@@ -864,7 +1328,10 @@ export default function GalleryPage() {
 
   // Render: loading. Today's grid with skeleton cards, so the page shows its
   // shape at once; no animation.
-  if (loading) {
+  // A list read for another account is never drawn (AUDIT keep-place r1, C1).
+  // Not even for the one frame before a sign-out's effect runs (AUDIT
+  // keep-place r2, N1).
+  if (loading || (userId !== undefined && listOwner !== (userId ?? null) && !error)) {
     return (
       <div className="px-4 sm:px-6 py-6 max-w-7xl mx-auto">
         <div className="mb-6">
@@ -915,10 +1382,19 @@ export default function GalleryPage() {
         <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 px-4 text-center">
           <Images size={48} className="text-text-muted" />
           <div className="space-y-2">
-            <h2 className="text-xl font-semibold text-text-primary">No generations yet</h2>
-            <p className="text-sm text-text-secondary max-w-md">
-              Head to Generate to create your first sprite. Your gallery syncs across devices — sign in anywhere and your work is here.
-            </p>
+            {cleared ? (
+              <>
+                <h2 className="text-xl font-semibold text-text-primary">{CLEARED_HEADING}</h2>
+                <p role="status" className="text-sm text-text-secondary max-w-md">{cleared}</p>
+              </>
+            ) : (
+              <>
+                <h2 className="text-xl font-semibold text-text-primary">No generations yet</h2>
+                <p className="text-sm text-text-secondary max-w-md">
+                  Head to Generate to create your first sprite. Your gallery syncs across devices. Sign in anywhere and your work is here.
+                </p>
+              </>
+            )}
             {/* After a delete that could not be confirmed and a fresh read that
                 found nothing: the line that says why the gallery was read again. */}
             {clearNote && <p role="status" className="text-[13px] text-text-secondary max-w-md">{clearNote}</p>}
@@ -949,6 +1425,21 @@ export default function GalleryPage() {
   const offersMore = cursor !== null && !clearing && !(filter !== 'all' && emptied.includes(filter));
   const nothingToClear = filteredEntries.length === 0 && (cursor === null || emptied.includes(filter));
 
+  // "Show 2 new" in the app's top bar while new generations wait: it never
+  // covers a card and moves nothing when it appears (DESIGN 2026-11-14-278).
+  const waitingShown = listOwner === userId ? pending.filter((e) => matchesFilter(e, filter)).length : 0;
+  const showNewButton = waitingShown > 0 ? (
+    <Button
+      variant="secondary"
+      size="sm"
+      onClick={showNew}
+      aria-label={showNewName(waitingShown)}
+      className="whitespace-nowrap"
+    >
+      {showNewLabel(waitingShown)}
+    </Button>
+  ) : null;
+
   // Render: gallery grid
   return (
     <div className="px-4 sm:px-6 py-6 max-w-7xl mx-auto">
@@ -961,6 +1452,8 @@ export default function GalleryPage() {
             <p className="text-sm text-text-secondary mt-1">
               {countLine(entries.length, cursor !== null, total)}
             </p>
+            {/* In the top bar; here only if the bar has no slot. */}
+            {showNewButton && (headerSlot ? createPortal(showNewButton, headerSlot) : showNewButton)}
           </div>
           <Button
             variant="ghost"
@@ -994,9 +1487,13 @@ export default function GalleryPage() {
           <button
             key={mode}
             onClick={() => {
+              // A tab shows another list: the waiting new generations go in.
+              flushPending();
               setFilter(mode);
+              setLandingHeld(false);
               setCapped(false);
               setAnnounce('');
+              setNoneNext('');
               setClearNote('');
               // A Clear that is still counting is dropped, with its
               // question. One that is deleting goes on to its last answer.
@@ -1066,6 +1563,9 @@ export default function GalleryPage() {
         )}
         {noneLine && offersMore && (
           <p className="basis-full text-center text-[13px] text-text-secondary">{noneLine}</p>
+        )}
+        {!noneLine && noneNext && offersMore && paging === 'idle' && (
+          <p aria-hidden="true" className="basis-full text-center text-[13px] text-text-secondary">{noneNext}</p>
         )}
         {offersMore && (
           <Button

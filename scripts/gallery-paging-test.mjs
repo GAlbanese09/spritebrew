@@ -21,18 +21,26 @@ import { pathToFileURL } from 'node:url';
 
 const ROOT = process.cwd();
 const OUT = path.join(ROOT, 'local', '.gallery-paging-test', 'galleryPaging.mjs');
+const KEEP_OUT = path.join(ROOT, 'local', '.gallery-paging-test', 'galleryKeep.mjs');
 
 await build({
   entryPoints: [path.join(ROOT, 'src/lib/galleryPaging.ts')],
   bundle: true, platform: 'node', format: 'esm', outfile: OUT, logLevel: 'error',
 });
+await build({
+  entryPoints: [path.join(ROOT, 'src/lib/galleryKeep.ts')],
+  bundle: true, platform: 'node', format: 'esm', outfile: KEEP_OUT, logLevel: 'error',
+  alias: { '@': path.join(ROOT, 'src') },
+});
+const { KEEP_CAP, capKept, quietMerge, keepGallery, takeKept, dropKept } = await import(pathToFileURL(KEEP_OUT).href);
 const {
   GALLERY_PAGE_SIZE, PASS_MIN_CARDS, PASS_MAX_PAGES,
   matchesFilter, newEntries, passGoal, passContinues, countLine, loadedLine,
   readRest, clearQuestion, runGalleryPass,
   clearLabel, clearCountingLine, clearFailedLine, clearNoneLine, noneYetLine, noneAtEndLine,
-  clearGallery, clearDeletingLine, clearKeptLine, passEndLine, END_LINE, CLEAR_WORKERS,
+  clearGallery, clearDeletingLine, clearKeptLine, passEndLine, END_LINE, CLEAR_WORKERS, clearedLine, CLEARED_HEADING,
   deleteEntry, deleteOutcome, clearUnconfirmedLine, DELETE_FAILED_LINE,
+  noneNextLine, newAtTopLine, clearMoreLine, showNewLabel, showNewName, newWaitingLine,
 } = await import(pathToFileURL(OUT).href);
 
 let pass_ = 0, fail = 0;
@@ -318,6 +326,115 @@ check('a filter with no card says how far the list was read, and that there are 
   check('with nothing unread there is nothing to read', same(await readRest(async () => { throw new Error('no'); }, null, new Set()), []));
 }
 
+// ── 1a. Keep the place (HQ 2026-11-14-077; DESIGN -230) and the Lows ───────
+
+{
+  // AUDIT gallery-paging-r3, L3-2: a pass on its way reads no further once
+  // a Clear has emptied the kind shown, before the list page or its pictures.
+  const list = makeList(400, (i) => (i < 60 ? 'animate' : 'create'));
+  const p = page(list, 'animate');
+  await p.first();
+  let emptied = false;
+  const result = await runGalleryPass('more', { ...p.ports, stop: () => emptied, read: async (c) => { const got = await p.server.read(c); emptied = true; return got; } });
+  check('L3-2: a pass on its way stops once the kind shown is emptied: no pictures for that page, no further read, not capped',
+    result.state === 'done' && result.pagesRead === 0 && result.read === 0 && !result.capped && p.server.calls.length === 2 && p.state.pictureCalls.length === 0,
+    { result, calls: p.server.calls, pictures: p.state.pictureCalls.length });
+  const q = page(list, 'animate');
+  await q.first();
+  const none = await runGalleryPass('more', { ...q.ports, stop: () => true });
+  check('L3-2: a pass told to stop before it starts reads nothing', none.state === 'done' && q.server.calls.length === 1 && none.read === 0, none);
+  const r = page(makeList(300), 'all');
+  await r.first();
+  const plain = await runGalleryPass('more', r.ports);
+  check('a pass with no stop reads as before, and counts the entries it read', plain.state === 'done' && plain.read === 50 && plain.added === 50, plain);
+}
+
+check('L3, the logged case: cards of the kind show, the pass read some and found none of it, pages remain: said once, with the count read (DESIGN 2026-11-14-230)',
+  passEndLine({ added: 0, filter: 'animate', shown: 7, read: 250, more: true, readThisPass: 200 }) === 'None of the next 200 were Animated. Load more looks further.' &&
+  passEndLine({ added: 0, filter: 'create', shown: 3, read: 100, more: true, readThisPass: 50 }) === 'None of the next 50 were Created. Load more looks further.' &&
+  passEndLine({ added: 0, filter: 'animate', shown: 7, read: 250, more: true }) === '' &&
+  passEndLine({ added: 0, filter: 'all', shown: 7, read: 250, more: true, readThisPass: 50 }) === '' &&
+  passEndLine({ added: 0, filter: 'animate', shown: 7, read: 250, more: false, readThisPass: 50 }) === END_LINE &&
+  noneNextLine('animate', 1) === 'None of the next 1 were Animated. Load more looks further.');
+check('a return says once, hidden, how many new generations went on top (DESIGN 2026-11-14-230)',
+  newAtTopLine(1) === '1 new generation at the top.' && newAtTopLine(2) === '2 new generations at the top.');
+check('words: "Show 2 new", its name, and the line said when it appears (DESIGN 2026-11-14-278; HQ 2026-11-14-282)',
+  showNewLabel(1) === 'Show 1 new' && showNewLabel(2) === 'Show 2 new' &&
+  showNewName(1) === 'Show 1 new generation' && showNewName(2) === 'Show 2 new generations' &&
+  newWaitingLine(1) === '1 new generation. Press Show 1 new at the top of the page to see it.' &&
+  newWaitingLine(2) === '2 new generations. Press Show 2 new at the top of the page to see them.');
+check('L1: Clear all that deleted more than it counted says so, the total first; Clear all only (DESIGN 2026-11-14-230, HQ -232)',
+  clearMoreLine(180, 2) === 'Deleted 180 generations, including 2 made after you pressed Clear all.' && clearMoreLine.length === 2);
+
+{
+  const entries = makeList(260);
+  const ids = (from, to) => entries.slice(from, to).map((e) => e.jobId);
+  const pictures = Object.fromEntries(entries.map((e) => [e.jobId, `blob:${e.jobId}`]));
+  const top = makeList(3).map((e) => ({ ...e, jobId: `new${e.jobId}` }));
+  const state = {
+    userId: 'u1', entries: [...top, ...entries], pictures: { ...pictures, newjob0: 'blob:newjob0' }, cursor: '260', paged: true, total: null, filter: 'all', scrollTop: 9000,
+    pages: [0, 50, 100, 150, 200, 250].map((from) => ({ ids: ids(from, from + 50), cursor: from + 50 < 260 ? String(from + 50) : null })),
+  };
+  state.pages[5].cursor = '260';
+  const cut = capKept(state);
+  check('the cap: at most 200 kept, cut at a page boundary, with that page\'s cursor, so the next read starts at the first one let go',
+    KEEP_CAP === 200 && cut.entries.length === 3 + 150 && cut.cursor === '150' && cut.pages.length === 3 &&
+    same(cut.entries.slice(0, 3).map((e) => e.jobId), ['newjob0', 'newjob1', 'newjob2']) && cut.entries[cut.entries.length - 1].jobId === 'job149',
+    { kept: cut.entries.length, cursor: cut.cursor, pages: cut.pages.length });
+  check('the cap: pictures go with their entries; the place, the tab and the total are kept as they were',
+    Object.keys(cut.pictures).length === 151 && cut.pictures.job149 === 'blob:job149' && !cut.pictures.job150 && cut.pictures.newjob0 === 'blob:newjob0' &&
+    cut.scrollTop === 9000 && cut.filter === 'all' && cut.paged === true);
+  const small = { ...state, entries: entries.slice(0, 120), pages: state.pages.slice(0, 3), cursor: '150' };
+  check('under the cap nothing is cut', capKept(small) === small);
+  const deleted = { ...state, entries: [...entries.slice(0, 40), ...entries.slice(50, 260)] };
+  check('the cap counts the entries still there: a page with ten deleted keeps one more page in reach',
+    capKept(deleted).entries.length === 190 && capKept(deleted).cursor === '200', capKept(deleted).entries.length);
+  check('the cap keeps at least the first page, whatever its size', capKept(state, 10).entries.length === 53 && capKept(state, 10).cursor === '50');
+  const whole = { ...state, cursor: null, pages: state.pages.map((page, i) => (i === 5 ? { ...page, cursor: null } : page)) };
+  check('the cap: with every page read the whole count is known and kept, so the count line does not drop to "200+"; with pages unread it stays as it was',
+    capKept(whole).total === 263 && capKept(whole).cursor === '150' && capKept(state).total === null && capKept({ ...state, total: 400 }).total === 400 &&
+    countLine(capKept(whole).entries.length, capKept(whole).cursor !== null, capKept(whole).total) === '263 generations · synced to your account');
+
+  const kept = entries.slice(0, 100);
+  const merged = quietMerge(kept, [...top, ...entries.slice(0, 47)]);
+  check('the quiet read: new generations on top, newest first, none of the kept ones twice',
+    !merged.gap && same(merged.fresh.map((e) => e.jobId), ['newjob0', 'newjob1', 'newjob2']));
+  check('the quiet read: one deleted in this visit does not come back', same(quietMerge(kept, [...top, ...kept.slice(0, 47)], new Set(['newjob1'])).fresh.map((e) => e.jobId), ['newjob0', 'newjob2']));
+  check('the quiet read: a first page with nothing kept on it (more new ones than a page) is a gap: read from the top; an empty page is an empty list',
+    quietMerge(kept, makeList(50).map((e) => ({ ...e, jobId: `x${e.jobId}` }))).gap === true && quietMerge(kept, []).gap === false &&
+    quietMerge(kept, []).removed.length === 100 && quietMerge([], top).gap === false);
+  {
+    // AUDIT keep-place r1, M1: one page kept, its third deleted in the visit; the server's first page now
+    // starts with the kept ones and ends with generation 51, older than any kept: it is not new.
+    const one = entries.slice(0, 50).filter((e) => e.jobId !== 'job2');
+    const page = entries.slice(0, 51).filter((e) => e.jobId !== 'job2');
+    const m = quietMerge(one, page, new Set(['job2']));
+    check('M1: only what stands before the first kept generation is new; an older one further down the page comes with paging',
+      m.fresh.length === 0 && m.removed.length === 0 && !m.gap, m);
+    const m2 = quietMerge(one, [...top, ...page.slice(0, 47)]);
+    check('M1: new ones before the first kept generation go on top, newest first', same(m2.fresh.map((e) => e.jobId), ['newjob0', 'newjob1', 'newjob2']));
+    // AUDIT keep-place r1, M2: generations the server no longer has.
+    const away = quietMerge(one, one.filter((e) => e.jobId !== 'job10' && e.jobId !== 'job40'));
+    check('M2: kept generations the page covers but no longer holds are removed; those past the page\'s last kept one are not judged',
+      same(away.removed, ['job10', 'job40']) && same(quietMerge(entries.slice(0, 100), entries.slice(0, 50).filter((e) => e.jobId !== 'job7')).removed, ['job7']), away.removed);
+    const whole = quietMerge(entries.slice(0, 5), entries.slice(0, 3), new Set(), true);
+    check('M2: when the first page is the whole list, every kept generation not on it is removed',
+      same(whole.removed, ['job3', 'job4']) && same(quietMerge(entries.slice(0, 3), top, new Set(), true).removed, ['job0', 'job1', 'job2']) &&
+      same(quietMerge(entries.slice(0, 3), top, new Set(), true).fresh.map((e) => e.jobId), ['newjob0', 'newjob1', 'newjob2']));
+  }
+
+  dropKept();
+  keepGallery(state);
+  check('what is kept is cut to the cap', takeKept('u1').entries.length === 153);
+  check('a return reads it again for the same account (a second return too)', takeKept('u1') !== null && takeKept('u1').scrollTop === 9000);
+  check('another account, or none, drops it', takeKept('u2') === null && takeKept('u1') === null);
+  keepGallery(state);
+  check('a sign-out drops it', takeKept(null) === null && takeKept('u1') === null);
+  keepGallery(state);
+  dropKept();
+  check('dropKept drops it', takeKept('u1') === null);
+}
+
 // ── 1b. Clear, whole, on the stand-in server (AUDIT gallery-paging-r1) ─────
 
 /** A Gallery page and a server for Clear. The server holds `list`; every
@@ -575,6 +692,77 @@ const clear = fn('handleClearAll');
 const pass = fn('runPass');
 const single = fn('handleDelete');
 
+// Keep the place on return (HQ 2026-11-14-077; DESIGN 2026-11-14-074, -230).
+const between = (from, to) => { const a = gallery.indexOf(from); const b = gallery.indexOf(to, a + 1); return a < 0 || b < 0 ? '' : gallery.slice(a, b); };
+const restoreEffect = between('const restoredRef = useRef<KeptGallery | null>(null);', '}, [userId]);');
+const keptBranch = between('if (kept) {', 'setCursor(null);');
+check('keep: leaving the Gallery, or its account, keeps what is loaded, in memory, unless a Clear or a Delete is on its way or nothing is loaded',
+  /useLayoutEffect\(\(\) => \(\) => \{\s*if \(!userId \|\| listOwnerRef\.current !== userId \|\| loadingRef\.current \|\| errorRef\.current !== null\s*\|\| clearBusyRef\.current \|\| cardBusyRef\.current\.size > 0 \|\| entriesRef\.current\.length === 0\) \{\s*dropKept\(\);\s*return;\s*\}/.test(gallery) &&
+  /keepGallery\(\{\s*userId,\s*entries: entriesRef\.current,\s*pictures,\s*cursor: cursorRef\.current,\s*paged: pagesRef\.current\.length > 1,\s*total: totalRef\.current,\s*filter: filterRef\.current,\s*scrollTop: scrollTopRef\.current,\s*pages: pagesRef\.current,\s*gone: \[\.\.\.goneRef\.current\],\s*emptied: \[\.\.\.emptiedRef\.current\],\s*\}\);\s*\}, \[userId\]\);/.test(gallery) &&
+  !/localStorage\.setItem\([^)]*kept|sessionStorage/.test(gallery));
+check('keep: a sign-out drops it; a reload never restores it',
+  /if \(!userId\) \{\s*dropKept\(\);/.test(gallery) && /const kept = reloads === 0 \? restoredRef\.current : null;/.test(gallery) &&
+  gallery.match(/takeKept\(/g)?.length === 1);
+check('keep: a return puts the kept list on screen in a layout effect, before the browser paints: no skeleton, its tab, total and paging state, and no focus moves',
+  restoreEffect.length > 0 && /useLayoutEffect\(\(\) => \{\s*if \(!userId\) return;\s*const kept = takeKept\(userId\);\s*if \(!kept\) return;/.test(restoreEffect) &&
+  /setEntries\(kept\.entries\);\s*setImageUrls\(urls\);\s*setCursor\(kept\.cursor\);\s*setPaged\(kept\.paged\);\s*setTotal\(kept\.total\);\s*setFilter\(kept\.filter\);\s*setLoading\(false\);/.test(restoreEffect) &&
+  /restoreRef\.current = kept\.scrollTop;/.test(restoreEffect) && !/focus\(/.test(restoreEffect) && !/focus\(/.test(keptBranch) &&
+  /urls\[e\.jobId\] = URL\.createObjectURL\(blob\);/.test(restoreEffect) && /restoredRef\.current = kept;/.test(restoreEffect));
+const quietFn = between('const quietRead = useCallback(', '}, [getToken, dropCards, cleanedUrl]);');
+check('keep: then the first page, quietly: new ones before the first kept generation, what the server no longer has removed (M1, M2); scrolled down they wait behind "Show 2 new", at the very top or of no kind shown they go in (M4, DESIGN -278), said once (hidden); too many new ones read from the top after a running Clear (L4); a failure tried once more',
+  /const \{ fresh, removed, gap \} = quietMerge\(entriesRef\.current, first\.entries, goneRef\.current, first\.cursor === null\);\s*if \(gap\) return 'gap';\s*if \(removed\.length > 0\) dropCards\(removed\);/.test(quietFn) &&
+  /if \(scrollTopRef\.current > 0 && \(shown > 0 \|\| pendingRef\.current\.length > 0\)\) \{\s*pendingRef\.current = \[\.\.\.add, \.\.\.pendingRef\.current\];\s*setPending\(pendingRef\.current\);\s*setAnnounce\(newWaitingLine\(pendingRef\.current\.filter\(\(e\) => matchesFilter\(e, filterRef\.current\)\)\.length\)\);\s*\} else \{\s*entriesRef\.current = \[\.\.\.add, \.\.\.entriesRef\.current\];\s*setEntries\(\(prev\) => \[\.\.\.add, \.\.\.prev\]\);/.test(quietFn) && !/anchorRef|firstInView/.test(gallery) &&
+  /if \(shown > 0\) setAnnounce\(newAtTopLine\(shown\)\);/.test(quietFn) && /\} catch \{\s*return 'failed';\s*\}/.test(quietFn) &&
+  /if \(!alive\(\) \|\| clearDeletingRef\.current\) \{\s*Object\.values\(read\.urls\)\.forEach\(URL\.revokeObjectURL\);\s*return 'ok';\s*\}/.test(quietFn) &&
+  /if \(outcome === 'gap'\) \{[\s\S]*?if \(clearBusyRef\.current\) await clearEndRef\.current;\s*if \(!cancelled\) reload\(reloadNoteRef\.current\);/.test(keptBranch) &&
+  /if \(outcome === 'failed' && retry\) \{\s*await new Promise\(\(resolve\) => setTimeout\(resolve, 5000\)\);/.test(keptBranch) &&
+  /const quiet = quietReadRef\.current\(\);\s*quietRef\.current = quiet;\s*await afterQuiet\(await quiet, true\);/.test(keptBranch));
+check('N2, N3 (AUDIT keep-place r2): a first page that is the whole list leaves nothing to read; a Clear that met a gap says why after the read from the top',
+  /if \(first\.cursor === null && cursorRef\.current !== null\) \{\s*cursorRef\.current = null;\s*setCursor\(null\);\s*\}/.test(quietFn) &&
+  /if \(quiet === 'gap'\) reloadNoteRef\.current = clearFailedLine\(kind\);/.test(clear));
+check('M3: after a return a Clear waits for the quiet read, reads the first page itself if it failed, and deletes nothing if it cannot',
+  /if \(quietRef\.current\) \{\s*let quiet = await quietRef\.current;\s*if \(quiet === 'failed' && alive\(\)\) \{\s*const again = quietRead\(\);\s*quietRef\.current = again;\s*quiet = await again;\s*\}\s*if \(!alive\(\) \|\| clearRunRef\.current !== run\) return;\s*if \(quiet !== 'ok'\) \{\s*setClearNote\(clearFailedLine\(kind\)\);\s*if \(quiet === 'gap'\) reloadNoteRef\.current = clearFailedLine\(kind\);\s*return;\s*\}\s*\}/.test(clear));
+check('C1: a list is drawn and kept only for the account it was read for: the render waits for its own list, a new account or a sign-out empties the list, and the keep is stamped',
+  /if \(loading \|\| \(userId !== undefined && listOwner !== \(userId \?\? null\) && !error\)\) \{/.test(gallery) &&
+  /listOwnerRef\.current = null;\s*setListOwner\(null\);\s*quietRef\.current = null;\s*entriesRef\.current = \[\];\s*setEntries\(\[\]\);\s*pendingRef\.current = \[\];\s*setPending\(\[\]\);\s*setImageUrls\(\{\}\);/.test(gallery) &&
+  /if \(!userId\) \{\s*dropKept\(\);[\s\S]{0,120}listOwnerRef\.current = null;\s*setListOwner\(null\);\s*entriesRef\.current = \[\];\s*setEntries\(\[\]\);\s*pendingRef\.current = \[\];\s*setPending\(\[\]\);\s*setImageUrls\(\{\}\);/.test(gallery) &&
+  /const waitingShown = listOwner === userId \? pending\.filter/.test(gallery) &&
+  /listOwnerRef\.current = kept\.userId;\s*setListOwner\(kept\.userId\);\s*loadingRef\.current = false;\s*errorRef\.current = null;/.test(restoreEffect) && /goneRef\.current = new Set\(kept\.gone\);\s*emptiedRef\.current = kept\.emptied;\s*setEmptied\(kept\.emptied\);/.test(restoreEffect) &&
+  /loadingRef\.current = loading;\s*errorRef\.current = error;/.test(gallery));
+check('keep: the kept place is put back once the list is on screen, and once more on the next frame if the router moved it',
+  /const want = restoreRef\.current;\s*if \(want === null \|\| loading\) return;\s*const main = endRef\.current\?\.closest\('main'\);\s*if \(!main\) return;\s*restoreRef\.current = null;\s*main\.scrollTop = want;\s*requestAnimationFrame\(\(\) => \{\s*if \(main\.isConnected && Math\.abs\(main\.scrollTop - want\) > 1\) main\.scrollTop = want;\s*\}\);\s*\}, \[loading, entries\]\);/.test(gallery) &&
+  /const onScroll = \(\) => \{\s*scrollTopRef\.current = main\.scrollTop;/.test(gallery) && /main\.addEventListener\('scroll', onScroll, \{ passive: true \}\);/.test(gallery));
+const header = stripComments(fs.readFileSync(path.join(ROOT, 'src/components/layout/Header.tsx'), 'utf8'));
+check('keep: waiting new generations (DESIGN 2026-11-14-278): "Show 2 new" in the top bar\'s slot, never over a card; pressed, they go in on top, the page goes to the top and the first takes the focus; at the very top, on a tab and before a Clear counts they go in; counted only once in',
+  /<div id="header-actions" className="flex min-w-0 items-center" \/>/.test(header) &&
+  /setHeaderSlot\(document\.getElementById\?\.\('header-actions'\) \?\? null\);/.test(gallery) &&
+  /\{showNewButton && \(headerSlot \? createPortal\(showNewButton, headerSlot\) : showNewButton\)\}/.test(gallery) &&
+  /aria-label=\{showNewName\(waitingShown\)\}/.test(gallery) && /\{showNewLabel\(waitingShown\)\}/.test(gallery) &&
+  /const add = pendingRef\.current;\s*if \(add\.length === 0\) return add;\s*pendingRef\.current = \[\];\s*setPending\(\[\]\);\s*entriesRef\.current = \[\.\.\.add, \.\.\.entriesRef\.current\];\s*setEntries\(\(prev\) => \[\.\.\.add, \.\.\.prev\]\);\s*if \(totalRef\.current !== null\) \{\s*totalRef\.current \+= add\.length;/.test(gallery) &&
+  /const showNew = useCallback\(\(\) => \{\s*const add = flushPending\(\);\s*const first = add\.find\(\(e\) => matchesFilter\(e, filterRef\.current\)\);\s*setAnnounce\(''\);\s*toTopRef\.current = true;\s*focusCardRef\.current = first \? first\.jobId : null;/.test(gallery) &&
+  /if \(!toTopRef\.current\) return;\s*toTopRef\.current = false;\s*const main = endRef\.current\?\.closest\('main'\);\s*if \(main\) main\.scrollTop = 0;\s*\}, \[entries\]\);/.test(gallery) &&
+  gallery.indexOf('if (!toTopRef.current) return;') < gallery.indexOf('const jobId = focusCardRef.current;') &&
+  /if \(main\.scrollTop > 0 \|\| pendingRef\.current\.length === 0\) return;\s*const shown = flushPending\(\)\.filter/.test(gallery) &&
+  /onClick=\{\(\) => \{\s*flushPending\(\);\s*setFilter\(mode\);/.test(gallery) &&
+  /flushPending\(\);\s*const result = await clearGallery\(\{/.test(clear) &&
+  /lowerTotal\(ids\.filter\(\(id\) => !goneRef\.current\.has\(id\) && !waiting\.has\(id\)\)\.length\);/.test(gallery));
+check('keep: every picture\'s bytes and the pages read are tracked, and leave with a deleted entry or a reload',
+  /blobs\[e\.jobId\] = blob;/.test(gallery) && /return \{ urls, stored, blobs \};/.test(gallery) &&
+  /delete storedRef\.current\[id\];\s*delete blobsRef\.current\[id\];/.test(gallery) &&
+  /blobsRef\.current = \{\};\s*pagesRef\.current = \[\];\s*entriesRef\.current = \[\];\s*setEntries\(\[\]\);/.test(gallery) &&
+  /pagesRef\.current = \[\{ ids: fetched\.map\(\(e\) => e\.jobId\), cursor: first\.cursor \}\];/.test(gallery) &&
+  /pagesRef\.current = \[\.\.\.pagesRef\.current, \{ ids: read\.map\(\(e\) => e\.jobId\), cursor: next \}\];/.test(pass));
+check('L1: Clear all reads how many the server deleted, and says so when that is more than it counted',
+  /if \(resp\.ok\) \{\s*const body: unknown = await resp\.json\(\)\.catch\(\(\) => null\);\s*const deleted = body && typeof body === 'object' \? \(body as \{ deleted\?: unknown \}\)\.deleted : undefined;\s*if \(typeof deleted === 'number' && Number\.isInteger\(deleted\) && deleted >= 0\) deletedAllRef\.current = deleted;\s*\}/.test(clear) &&
+  /\} else if \(result\.state === 'done' && kind === 'all'\) \{\s*const deleted = deletedAllRef\.current \?\? result\.asked;\s*if \(deleted > 0\) setCleared\(clearedLine\(deleted, result\.asked\)\);/.test(clear) &&
+  /deletedAllRef\.current = null;/.test(clear));
+check('L3, the logged case: the line stands beside "Load more" until the next pass or tab, and is said once',
+  /setNoneNext\(endState\.filter !== 'all' && endState\.shown > 0 && endState\.more && endState\.added === 0 && result\.read > 0\s*\? noneNextLine\(endState\.filter, result\.read\) : ''\);/.test(pass) &&
+  /\{!noneLine && noneNext && offersMore && paging === 'idle' && \(\s*<p aria-hidden="true" className="basis-full text-center text-\[13px\] text-text-secondary">\{noneNext\}<\/p>\s*\)\}/.test(gallery) &&
+  /setNoneNext\(''\);\s*const result = await runGalleryPass</.test(pass));
+check('L3-1: a lost Delete answer during a running Clear waits for the Clear\'s last answer before the gallery is read again',
+  /clearEndRef\.current = new Promise<void>\(\(resolve\) => \{ ended = resolve; \}\);/.test(clear) && /if \(clearBusyRef\.current\) await clearEndRef\.current;/.test(single));
+
 check('the page reads the list through one function that follows the cursor',
   /const after = cursor === null \? '' : `&cursor=\$\{encodeURIComponent\(cursor\)\}`;/.test(gallery) &&
   /fetch\(`\/api\/gallery\?limit=\$\{GALLERY_PAGE_SIZE\}\$\{after\}`/.test(gallery) &&
@@ -582,11 +770,12 @@ check('the page reads the list through one function that follows the cursor',
   !/limit=50/.test(gallery) && gallery.match(/\/api\/gallery\?/g)?.length === 1);
 check('the first read keeps its cursor, its list and the ids it showed, together',
   /const first = await readListPage\(token, null\);/.test(gallery) &&
-  /knownRef\.current = new Set\(fetched\.map\(\(e\) => e\.jobId\)\);\s*cursorRef\.current = first\.cursor;\s*entriesRef\.current = fetched;\s*setEntries\(fetched\);/.test(gallery) &&
+  /knownRef\.current = new Set\(fetched\.map\(\(e\) => e\.jobId\)\);\s*cursorRef\.current = first\.cursor;\s*entriesRef\.current = fetched;\s*listOwnerRef\.current = userId;\s*setListOwner\(userId\);\s*loadingRef\.current = false;\s*setEntries\(fetched\);/.test(gallery) &&
   /setCursor\(first\.cursor\);/.test(gallery));
 check('a new account, a fresh read or a reload starts the paging, Clear and the cards\' own states over',
   /setCursor\(null\);\s*cursorRef\.current = null;\s*knownRef\.current = new Set\(\);\s*goneRef\.current = new Set\(\);/.test(gallery) &&
-  /setClearing\(null\);\s*setClearNote\(reloadNoteRef\.current\);\s*reloadNoteRef\.current = '';\s*setEmptied\(\[\]\);\s*emptiedRef\.current = \[\];\s*setTotal\(null\);\s*totalRef\.current = null;\s*setCardState\(\{\}\);\s*cardBusyRef\.current = new Set\(\);\s*clearBusyRef\.current = false;\s*clearDeletingRef\.current = false;\s*failedRef\.current = false;\s*setLoading\(true\);/.test(gallery) &&
+  /setClearing\(null\);\s*setClearNote\(reloadNoteRef\.current\);\s*reloadNoteRef\.current = '';\s*setCleared\(''\);\s*setLandingHeld\(false\);\s*setEmptied\(\[\]\);\s*emptiedRef\.current = \[\];\s*setTotal\(null\);\s*totalRef\.current = null;\s*setCardState\(\{\}\);\s*cardBusyRef\.current = new Set\(\);\s*clearBusyRef\.current = false;\s*clearDeletingRef\.current = false;\s*failedRef\.current = false;\s*setNoneNext\(''\);\s*blobsRef\.current = \{\};\s*pagesRef\.current = \[\];\s*setLoading\(true\);\s*setError\(null\);/.test(gallery) &&
+  /const kept = reloads === 0 \? restoredRef\.current : null;\s*restoredRef\.current = null;\s*if \(kept\) \{/.test(gallery) &&
   /\}, \[userId, reloads\]\);/.test(gallery));
 check('leaving the page or changing account ends the visit for every read and every count in flight, in the commit itself (a layout cleanup) as well as after it',
   /cancelled = true;\s*visitRef\.current \+= 1;\s*passRef\.current = false;\s*clearRunRef\.current \+= 1;/.test(gallery) &&
@@ -611,21 +800,22 @@ check('M1: a page goes in after the cards shown, and the list and its cursor mov
 check('after a failure nothing loads by itself: the end is watched only while idle, and a filter change does not read (L2)',
   /if \(result\.state === 'failed'\) \{\s*failedRef\.current = true;\s*setPaging\('failed'\);\s*return;\s*\}/.test(pass) &&
   /if \(trigger === 'filter' && failedRef\.current\) return;/.test(pass) && /failedRef\.current = false;\s*setCapped\(result\.capped\);/.test(pass) &&
-  /if \(!end \|\| loading \|\| cursor === null \|\| paging !== 'idle' \|\| clearing \|\| emptied\.includes\(filter\)\s*\|\| typeof IntersectionObserver === 'undefined'\) return;/.test(gallery));
+  /if \(!end \|\| loading \|\| landingHeld \|\| cursor === null \|\| paging !== 'idle' \|\| clearing \|\| emptied\.includes\(filter\)\s*\|\| typeof IntersectionObserver === 'undefined'\) return;/.test(gallery));
 check('the next page starts when the grid\'s end is about one screen away in the page\'s scroller',
   /\{ root: end\.closest\('main'\), rootMargin: '0px 0px 100% 0px' \}/.test(gallery) &&
   /let armed = !capped;/.test(gallery) && /if \(!record\.isIntersecting\) armed = true;\s*else if \(armed\) void runPass\('more'\);/.test(gallery));
 check('a filter that shows less than a screenful reads on; a new filter lifts the cap and clears what was said',
-  /if \(loading\) return;\s*void runPass\('filter'\);\s*\}, \[filter, loading, runPass\]\);/.test(gallery) &&
-  /setFilter\(mode\);\s*setCapped\(false\);\s*setAnnounce\(''\);\s*setClearNote\(''\);/.test(gallery));
+  /if \(loading \|\| landingHeld\) return;\s*void runPass\('filter'\);\s*\}, \[filter, loading, landingHeld, runPass\]\);/.test(gallery) &&
+  /setFilter\(mode\);\s*setLandingHeld\(false\);\s*setCapped\(false\);\s*setAnnounce\(''\);\s*setNoneNext\(''\);\s*setClearNote\(''\);/.test(gallery));
 check('L3: when a pass ends, the status says what came or the line now standing in its place; under a kind a Clear emptied that line is the end line (G2-6)',
-  /setAnnounce\(passEndLine\(\{\s*added: result\.added,\s*filter: filterRef\.current,\s*shown: shown\(\),\s*read: entriesRef\.current\.length,\s*more: cursorRef\.current !== null && !kindDone\(\),\s*\}\)\);/.test(pass) &&
+  /const endState = \{\s*added: result\.added,\s*filter: filterRef\.current,\s*shown: shown\(\),\s*read: entriesRef\.current\.length,\s*more: cursorRef\.current !== null && !kindDone\(\),\s*readThisPass: result\.read,\s*\};\s*const endLine = passEndLine\(endState\);\s*setAnnounce\(endLine\);/.test(pass) &&
+  /stop: kindDone,/.test(pass) &&
   /const kindDone = \(\) => emptiedRef\.current\.includes\(filterRef\.current\);/.test(pass) &&
   /shown: \(\) => \(kindDone\(\) \? Number\.MAX_SAFE_INTEGER : shown\(\)\),/.test(pass));
 check('the count line is the module\'s, with the total a Clear counted; each deleted generation lowers that total once (G2-5)',
   /\{countLine\(entries\.length, cursor !== null, total\)\}/.test(gallery) && !/synced to your account/.test(gallery) &&
   /counted: \(count\) => \{\s*if \(!alive\(\)\) return;\s*totalRef\.current = count;\s*setTotal\(count\);\s*\},/.test(clear) &&
-  /const gone = new Set\(ids\);\s*lowerTotal\(ids\.filter\(\(id\) => !goneRef\.current\.has\(id\)\)\.length\);\s*ids\.forEach\(\(id\) => \{\s*goneRef\.current\.add\(id\);/.test(gallery) &&
+  /const gone = new Set\(ids\);\s*const waiting = new Set\(pendingRef\.current\.filter\(\(e\) => gone\.has\(e\.jobId\)\)\.map\(\(e\) => e\.jobId\)\);\s*lowerTotal\(ids\.filter\(\(id\) => !goneRef\.current\.has\(id\) && !waiting\.has\(id\)\)\.length\);[\s\S]{0,200}ids\.forEach\(\(id\) => \{\s*goneRef\.current\.add\(id\);/.test(gallery) &&
   gallery.match(/lowerTotal\(/g)?.length === 1 &&
   /if \(totalRef\.current === null \|\| by === 0\) return;\s*totalRef\.current = Math\.max\(0, totalRef\.current - by\);\s*setTotal\(totalRef\.current\);/.test(gallery));
 check('the grid\'s end: one status line, "Load more" or "Try again" while more is offered, the failure line, the end line',
@@ -654,7 +844,7 @@ check('when the list ends under a focused "Load more", the end line takes the fo
   /\} else if \(next === null && focusCardRef\.current === null && document\.activeElement === moreRef\.current\) \{\s*focusEndRef\.current = true;\s*\}/.test(pass) &&
   /if \(cursor === null && focusEndRef\.current\) \{\s*focusEndRef\.current = false;\s*endLineRef\.current\?\.focus\(\);/.test(gallery));
 check('G2-2: the empty screen carries Clear\'s line when there is one (a reload that found nothing still says why it reloaded)',
-  /\{clearNote && <p role="status" className="text-\[13px\] text-text-secondary max-w-md">\{clearNote\}<\/p>\}/.test(gallery) && gallery.match(/role="status"/g)?.length === 4);
+  /\{clearNote && <p role="status" className="text-\[13px\] text-text-secondary max-w-md">\{clearNote\}<\/p>\}/.test(gallery) && gallery.match(/role="status"/g)?.length === 5);
 check('M4: the empty screen shows only when nothing is loaded and nothing is unread; a counted total of 0 is not trusted while pages remain (G2-5)',
   /if \(entries\.length === 0 && cursor === null\) \{/.test(gallery) && !/if \(entries\.length === 0\) \{/.test(gallery) && !/total === 0/.test(gallery));
 check('L5: a press of "Load more" or "Try again", or a page that arrives while the button holds the focus (G2-8), hands the focus to the first new card itself, never a control in it; loading by scrolling with the focus elsewhere never does (DESIGN 2026-11-14-126, -134, -147)',
@@ -666,21 +856,29 @@ check('L5: a press of "Load more" or "Try again", or a page that arrives while t
   /<div\s*data-gallery-card=\{entry\.jobId\}\s*tabIndex=\{-1\}\s*role="group"\s*aria-label=\{`\$\{entry\.prompt\}, \$\{entry\.mode === 'create' \? 'Created' : 'Animated'\}`\}/.test(gallery));
 check('a yes to Clear, or to a card\'s Delete, drops a waiting Send to Slicer only when its own generation is among those to delete',
   /onSendToSlicer=\{\(\) => \{\s*slicerJobRef\.current = entry\.jobId;\s*return handleSendToSlicer\(entry\);\s*\}\}/.test(gallery) &&
-  /ask: \(question, ids\) => \{\s*const yes = confirm\(question\);\s*if \(yes && slicerJobRef\.current !== null && ids\.includes\(slicerJobRef\.current\)\) \{\s*slicerJobRef\.current = null;\s*ownership\.slicer\(\);\s*\}\s*return yes;\s*\},/.test(clear) &&
-  /ask: \(\) => \{\s*const yes = confirm\('Delete this generation\? This cannot be undone\.'\);\s*if \(yes && slicerJobRef\.current === jobId\) \{\s*slicerJobRef\.current = null;\s*ownership\.slicer\(\);\s*\}\s*return yes;\s*\},/.test(single) &&
-  gallery.match(/ownership\.slicer\(\)/g)?.length === 2);
+  /ask: \(question, ids\) => \{\s*const yes = confirm\(question\);\s*if \(yes && slicerJobRef\.current !== null && ids\.includes\(slicerJobRef\.current\)\) setSlicerAside\(\);\s*return yes;\s*\},/.test(clear) &&
+  /ask: \(\) => \{\s*const yes = confirm\('Delete this generation\? This cannot be undone\.'\);\s*if \(yes && slicerJobRef\.current === jobId\) setSlicerAside\(\);\s*return yes;\s*\},/.test(single) &&
+  gallery.match(/ownership\.slicer\(\)/g)?.length === 1);
+// AUDIT gallery-paging-r2, G2-11 (the half logged): a Send to Slicer set
+// aside at a yes comes back when its generation was not deleted.
+check('G2-11: a Send to Slicer set aside at a yes is sent again when its generation was not deleted; never after an answer that was lost',
+  /const setSlicerAside = useCallback\(\(\) => \{\s*const id = slicerJobRef\.current;\s*heldSlicerRef\.current = id \? entriesRef\.current\.find\(\(e\) => e\.jobId === id\) \?\? null : null;\s*slicerJobRef\.current = null;\s*ownership\.slicer\(\);\s*\}, \[ownership\]\);/.test(gallery) &&
+  /const entry = heldSlicerRef\.current;\s*heldSlicerRef\.current = null;\s*if \(!entry \|\| goneRef\.current\.has\(entry\.jobId\) \|\| slicerJobRef\.current !== null\) return;\s*slicerJobRef\.current = entry\.jobId;\s*void handleSendToSlicer\(entry\);/.test(gallery) &&
+  /ended\(\);\s*if \(alive\(\)\) sendSlicerAgain\(\);/.test(clear) &&
+  /else if \(result\.state === 'unconfirmed'\) \{\s*heldSlicerRef\.current = null;\s*reload\(clearUnconfirmedLine\(\)\);/.test(clear) &&
+  /\} else if \(outcome === 'unknown'\) \{\s*heldSlicerRef\.current = null;/.test(single));
 // Clear in the page: the module does it; the page only hands it its calls.
 check('M6: Clear is the module\'s, whole: the page counts nothing, asks nothing and deletes nothing outside it',
   /const result = await clearGallery\(\{/.test(clear) && gallery.match(/clearGallery\(/g)?.length === 1 &&
   !/readRest\(|clearQuestion\(/.test(gallery) && gallery.match(/confirm\(/g)?.length === 2 && /ask: \(question, ids\) => \{\s*const yes = confirm\(question\);/.test(clear) &&
   gallery.match(/method: 'DELETE'/g)?.length === 3);
 check('GP-A: each delete fetches its sign-in token at the call, inside the port; its answer is read by the module\'s rule; ids are encoded and an empty id is never sent (G2-9)',
-  /deleteAll: async \(\) => \{\s*const token = await getToken\(\);\s*if \(!token\) return 'refused';\s*const resp = await fetch\('\/api\/gallery', \{ method: 'DELETE', headers: \{ Authorization: `Bearer \$\{token\}` \} \}\);\s*return deleteOutcome\(\{ ok: resp\.ok, status: resp\.status, body: null \}, false\);\s*\},/.test(clear) &&
+  /deleteAll: async \(\) => \{\s*const token = await getToken\(\);\s*if \(!token\) return 'refused';\s*const resp = await fetch\('\/api\/gallery', \{ method: 'DELETE', headers: \{ Authorization: `Bearer \$\{token\}` \} \}\);[\s\S]*?return deleteOutcome\(\{ ok: resp\.ok, status: resp\.status, body: null \}, false\);\s*\},/.test(clear) &&
   /deleteOne: async \(jobId\) => \{\s*if \(!jobId\) return 'refused';\s*const token = await getToken\(\);\s*if \(!token\) return 'refused';\s*const resp = await fetch\(`\/api\/gallery\/\$\{encodeURIComponent\(jobId\)\}`, \{ method: 'DELETE', headers: \{ Authorization: `Bearer \$\{token\}` \} \}\);\s*return deleteOutcome\(\{ ok: resp\.ok, status: resp\.status, body: resp\.ok \? null : await resp\.json\(\)\.catch\(\(\) => null\) \}, true\);\s*\},/.test(clear) &&
   clear.match(/await getToken\(\)/g)?.length === 3 && clear.indexOf('await getToken()') > clear.indexOf('const result = await clearGallery({') &&
   !/resp\.status === 404/.test(gallery));
 check('GP-A, G2-1: nothing leaves the page before the server has deleted it: cards go only through dropCards, called from the module\'s "removed" for Clear and for a single Delete',
-  gallery.match(/dropCards\(/g)?.length === 2 && /removed: \(ids, all\) => \{\s*if \(!alive\(\)\) return;\s*dropCards\(ids\);/.test(clear) && /removed: \(\) => dropCards\(\[jobId\]\),/.test(single) &&
+  gallery.match(/dropCards\(/g)?.length === 3 && /if \(removed\.length > 0\) dropCards\(removed\);/.test(gallery) && /removed: \(ids, all\) => \{\s*if \(!alive\(\)\) return;\s*dropCards\(ids\);/.test(clear) && /removed: \(\) => dropCards\(\[jobId\]\),/.test(single) &&
   !/setEntries\(/.test(clear) && !/setEntries\(/.test(single) && !/goneRef\.current\.add/.test(single) &&
   /entriesRef\.current = entriesRef\.current\.filter\(\(e\) => !gone\.has\(e\.jobId\)\);\s*setEntries\(\(prev\) => prev\.filter\(\(e\) => !gone\.has\(e\.jobId\)\)\);/.test(gallery));
 check('an entry deleted in this visit never comes back: later pages skip it, and a page on its way drops it and frees its picture',
@@ -694,12 +892,12 @@ check('M5, G2-3: one Clear at a time, by a ref; a filter change drops one that i
   /const run = \(clearRunRef\.current \+= 1\);/.test(clear) && /current: \(\) => alive\(\) && clearRunRef\.current === run,/.test(clear) &&
   /if \(clearBusyRef\.current && !clearDeletingRef\.current\) \{\s*clearRunRef\.current \+= 1;\s*clearBusyRef\.current = false;\s*setClearing\(null\);\s*\}/.test(gallery) &&
   /clearDeletingRef\.current = phase === 'deleting';/.test(clear) &&
-  /\} finally \{\s*if \(clearRunRef\.current === run\) \{\s*clearBusyRef\.current = false;\s*clearDeletingRef\.current = false;\s*if \(alive\(\)\) setClearing\(null\);\s*\}\s*\}/.test(clear));
+  /\} finally \{\s*if \(clearRunRef\.current === run\) \{\s*clearBusyRef\.current = false;\s*clearDeletingRef\.current = false;\s*if \(alive\(\)\) setClearing\(null\);\s*\}\s*ended\(\);/.test(clear));
 check('M3, G2-2: the button is busy from the press to the last answer; what the server kept is said; an answer that could not be confirmed reads the gallery again and says so',
-  /if \(passRef\.current \|\| cursorRef\.current !== null\) setClearing\(\{ phase: 'reading', filter: kind, count: 0 \}\);/.test(clear) &&
+  /if \(passRef\.current \|\| cursorRef\.current !== null \|\| quietRef\.current\) setClearing\(\{ phase: 'reading', filter: kind, count: 0 \}\);/.test(clear) &&
   /aria-disabled=\{clearing \|\| nothingToClear \? true : undefined\}\s*aria-busy=\{clearing \? true : undefined\}/.test(gallery) &&
   /else if \(result\.state === 'partial' \|\| result\.state === 'failed'\) setClearNote\(clearKeptLine\(result\.kept, result\.asked, kind\)\);/.test(clear) &&
-  /else if \(result\.state === 'unconfirmed'\) reload\(clearUnconfirmedLine\(\)\);/.test(clear) &&
+  /else if \(result\.state === 'unconfirmed'\) \{\s*heldSlicerRef\.current = null;\s*reload\(clearUnconfirmedLine\(\)\);/.test(clear) &&
   /if \(result\.state === 'count-failed'\) setClearNote\(clearFailedLine\(kind\)\);\s*else if \(result\.state === 'none'\) setClearNote\(clearNoneLine\(kind\)\);/.test(clear) &&
   /const reload = useCallback\(\(note: string\) => \{\s*reloadNoteRef\.current = note;/.test(gallery) && /setReloads\(\(n\) => n \+ 1\);/.test(gallery));
 check('G2-10: with nothing of that kind to clear, shown or unread, the Clear button is dimmed and does nothing, and keeps the focus: aria-disabled, never the disabled attribute',
@@ -710,7 +908,7 @@ check('G2-1: a single Delete is the module\'s, whole: it asks first, its token i
   /if \(!jobId \|\| cardBusyRef\.current\.has\(jobId\)\) return;/.test(single) && /const outcome = await deleteEntry\(\{/.test(single) && gallery.match(/deleteEntry\(/g)?.length === 1 &&
   /send: async \(\) => \{\s*const token = await getToken\(\);\s*if \(!token\) return 'refused';\s*const resp = await fetch\(`\/api\/gallery\/\$\{encodeURIComponent\(jobId\)\}`, \{ method: 'DELETE', headers: \{ Authorization: `Bearer \$\{token\}` \} \}\);\s*return deleteOutcome\(\{ ok: resp\.ok, status: resp\.status, body: resp\.ok \? null : await resp\.json\(\)\.catch\(\(\) => null\) \}, true\);\s*\},/.test(single) &&
   single.indexOf("confirm('Delete this generation?") < single.indexOf('await getToken()') &&
-  /if \(outcome === 'refused'\) \{\s*mark\('failed'\);\s*setAnnounce\(DELETE_FAILED_LINE\);\s*\} else if \(outcome === 'unknown'\) \{\s*reload\(clearUnconfirmedLine\(\)\);\s*\}/.test(single) &&
+  /if \(outcome === 'refused'\) \{\s*mark\('failed'\);\s*setAnnounce\(DELETE_FAILED_LINE\);\s*sendSlicerAgain\(\);\s*\} else if \(outcome === 'unknown'\) \{\s*heldSlicerRef\.current = null;\s*if \(clearBusyRef\.current\) await clearEndRef\.current;\s*if \(alive\(\)\) reload\(clearUnconfirmedLine\(\)\);\s*\} else \{\s*sendSlicerAgain\(\);\s*\}/.test(single) &&
   /state=\{cardState\[entry\.jobId\]\}/.test(gallery) && /const busy = state === 'busy';/.test(gallery) &&
   /onClick=\{busy \? undefined : onDelete\}\s*aria-disabled=\{busy \|\| undefined\}/.test(gallery) &&
   /\{state === 'failed'\s*\? <p className="text-xs text-accent-amber">\{DELETE_FAILED_LINE\}<\/p>\s*: <p className="text-xs text-text-muted">\{relativeTime\(entry\.createdAt\)\}<\/p>\}/.test(gallery) &&
@@ -722,7 +920,18 @@ check('Clear\'s label never wraps, under 640 px the button has its own row under
 check('Clear\'s lines are the module\'s, for the filter the Clear was pressed on, said once in a row of their own under the title',
   /const clearLine = clearing \? \(clearing\.phase === 'reading' \? clearCountingLine\(clearing\.filter\) : clearDeletingLine\(clearing\.filter, clearing\.count\)\) : clearNote;/.test(gallery) &&
   /<p role="status" className=\{`text-\[13px\] text-text-secondary sm:text-right \$\{clearLine \? 'mt-1 sm:mt-2' : ''\}`\}>\s*\{clearLine\}\s*<\/p>/.test(gallery) &&
-  gallery.match(/role="status"/g)?.length === 4);
+  gallery.match(/role="status"/g)?.length === 5);
+check('Clear all that empties the Gallery: "Gallery cleared" and the deleted line in place of the usual words, the more line when the server deleted more (DESIGN 2026-11-14-243)',
+  CLEARED_HEADING === 'Gallery cleared' && clearedLine(178, 178) === 'Deleted 178 generations.' && clearedLine(1, 1) === 'Deleted 1 generation.' &&
+  clearedLine(180, 178) === 'Deleted 180 generations, including 2 made after you pressed Clear all.' && clearedLine(176, 178) === 'Deleted 176 generations.' &&
+  /\{cleared \? \(\s*<>\s*<h2 className="text-xl font-semibold text-text-primary">\{CLEARED_HEADING\}<\/h2>\s*<p role="status" className="text-sm text-text-secondary max-w-md">\{cleared\}<\/p>\s*<\/>\s*\) : \(/.test(gallery) &&
+  /setClearNote\(''\);\s*setCleared\(''\);/.test(gallery) && !gallery.includes('clearMoreLine('));
+check('the usual empty words carry no em dash: two sentences (DESIGN 2026-11-14-243, HQ -245)',
+  gallery.includes('Your gallery syncs across devices. Sign in anywhere and your work is here.') && !source.split('\n').some((line) => /syncs across devices/.test(line) && line.includes(String.fromCharCode(0x2014))));
+check('a return lands without reading on: the scroll-in read and a filter reading on wait for the person\'s own first scroll or a tab; "Load more" works as ever (DESIGN 2026-11-14-243)',
+  /restoredRef\.current = kept;\s*setLandingHeld\(true\);/.test(gallery) &&
+  /if \(!landingHeld\) return;[\s\S]{0,200}const keys = new Set\(\['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '\]\);\s*const release = \(\) => setLandingHeld\(false\);\s*const onKey = \(e: KeyboardEvent\) => \{ if \(keys\.has\(e\.key\)\) release\(\); \};\s*const onPointer = \(e: PointerEvent\) => \{ if \(e\.target === main\) release\(\); \};\s*main\.addEventListener\('wheel', release, \{ passive: true \}\);\s*main\.addEventListener\('touchmove', release, \{ passive: true \}\);\s*window\.addEventListener\('keydown', onKey\);\s*main\.addEventListener\('pointerdown', onPointer\);/.test(gallery) &&
+  !/addEventListener\('scroll', release/.test(gallery) && gallery.match(/runPass\('more', true\)/g)?.length === 1);
 check('the module has no React and no DOM calls', !/from 'react'|document\.|window\.|fetch\(|confirm\(/.test(lib));
 check('no em dashes in the new file or the lines this change wrote', !lib.includes(String.fromCharCode(0x2014)) && !source.split('\n').some((line) => /readPictures|Filtered scope/.test(line) && line.includes(String.fromCharCode(0x2014))));
 

@@ -39,6 +39,7 @@ function check(name, ok, detail) {
 }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const throws = (fn) => { try { fn(); return false; } catch (e) { return e instanceof RangeError; } };
+const runs = (fn) => { try { fn(); return true; } catch { return false; } };
 
 // A test image: every pixel tells where it came from. R = x, G = y, B = a
 // mark, A = 255 unless the cell is chosen to be see-through.
@@ -121,6 +122,20 @@ const equalImages = (a, b) => a.width === b.width && a.height === b.height && a.
   check('B8: a 1 px image grows and a big one shrinks to 1 px', px(resizeImage(marked(1, 1), 5, 3), 4, 2).join() === '0,0,7,255' && px(resizeImage(marked(9, 9), 1, 1), 0, 0).slice(0, 2).join() === '4,4');
   check('B9: it refuses a size under 1 or not whole, and an image whose data is the wrong length, with a RangeError', throws(() => resizeImage(img, 0, 4)) && throws(() => resizeImage(img, 4, 2.5)) && throws(() => resizeImage(img, -1, 4)) && throws(() => resizeImage({ width: 2, height: 2, data: new Uint8ClampedArray(15) }, 4, 4)) && throws(() => resizeImage({ width: 0, height: 2, data: new Uint8ClampedArray(0) }, 4, 4)));
   check('B10: it checks no cap: 5000 px a side is made when asked (the caller checks the cap)', resizeImage(marked(2, 2), 5000, 1).width === 5000);
+  // REV-L1: the image check, through every function that takes an image.
+  const one = { frameWidth: 2, frameHeight: 2, columns: 1, rows: 1 };
+  const everyDoor = (image) => [
+    () => resizeImage(image, 4, 4), () => resizeSheet(image, one, 4, 4), () => resizeCanvas(image, 4, 4, 'center'),
+    () => resizeCanvasSheet(image, one, 4, 4, 'center'), () => trimCuts(image, 1, 1, 'center'),
+  ];
+  const tooLong = [17, 19, 20, 32].map((n) => ({ width: 2, height: 2, data: new Uint8ClampedArray(n) }));
+  check('B13: data longer than the image needs (one byte more, three bytes more, one pixel more, and twice as long) is refused with a RangeError, by every function that takes an image', tooLong.every((image) => everyDoor(image).every(throws)));
+  const wrongKind = [new Uint8Array(16), Buffer.alloc(16), new Int8Array(16), new Uint16Array(16), new Float32Array(16), new Array(16).fill(0), new ArrayBuffer(16), { length: 16 }];
+  check('B14: data of the right length that is not a Uint8ClampedArray (a Uint8Array, a Buffer, another typed array, a plain array, an ArrayBuffer, an object with a length) is refused with a RangeError, by every function that takes an image; a Uint8ClampedArray passes them all', wrongKind.every((data) => everyDoor({ width: 2, height: 2, data }).every(throws)) && everyDoor({ width: 2, height: 2, data: new Uint8ClampedArray(16) }).every(runs));
+  // AUDIT pixel-resize-l1 r1, L6: what each function hands back is what new ImageData takes.
+  const sheet84 = { frameWidth: 4, frameHeight: 4, columns: 2, rows: 1 };
+  const made = [resizeImage(marked(4, 4), 3, 5), resizeSheet(marked(8, 4), sheet84, 3, 5), resizeCanvas(marked(4, 4), 6, 3, 'center'), resizeCanvasSheet(marked(8, 4), sheet84, 6, 3, 'bottom')];
+  check('B15: every function that makes an image returns its data as a Uint8ClampedArray (what new ImageData needs), of exactly width by height by 4 bytes', made.every((o) => o.data instanceof Uint8ClampedArray && o.data.length === o.width * o.height * 4));
   const t0 = performance.now(); resizeImage(marked(1024, 1024), 4096, 4096); resizeImage(marked(4096, 1024), 512, 128);
   const ms = performance.now() - t0;
   const big = [];
@@ -179,6 +194,7 @@ const equalImages = (a, b) => a.width === b.width && a.height === b.height && a.
   check('D5: 97 px has no clean smaller size; 16 px offers half (8 px) only; 7 px none', !hasCleanSmaller(97, 97) && same(sizeChoices(16, 16, 4096).filter((c) => c.direction === 'down').map((c) => c.width), [8]) && !hasCleanSmaller(7, 7) && hasCleanSmaller(396, 396));
   check('D6: a frame that is not square: only factors that divide both sides', same(sizeChoices(30, 42, 4096).filter((c) => c.direction === 'down').map((c) => c.factor), [2, 3]));
   check('D7: the cap counts the whole image: a 4 by 1 sheet of 256 px frames cannot go 8x under 4096, can go 4x (4096 exactly is allowed)', (() => { const c = sizeChoices(256, 256, 4096, 4, 1); return c.find((x) => x.factor === 4 && x.direction === 'up').overCap === false && c.find((x) => x.factor === 8 && x.direction === 'up').overCap === true && c.find((x) => x.factor === 8 && x.direction === 'down').overCap === false; })());
+  check('D14: rows count toward the cap as columns do: a 1 by 4 sheet of 256 px frames cannot go 8x under 4096, can go 4x; a 2 by 3 sheet of 500 px frames can go 2x only (4x is 4000 wide but 6000 tall; AUDIT pixel-resize-l1 r2, R2-L2)', same(sizeChoices(256, 256, 4096, 1, 4).filter((c) => c.direction === 'up').map((c) => [c.factor, c.overCap]), [[2, false], [4, false], [8, true]]) && same(sizeChoices(500, 500, 4096, 2, 3).filter((c) => c.direction === 'up').map((c) => [c.factor, c.overCap]), [[2, false], [4, true], [8, true]]));
   check('D8: passesCap: a side equal to the cap fits, one pixel more does not; columns and rows multiply', passesCap(4096, 4096, 4096) && !passesCap(4097, 1, 4096) && passesCap(1024, 512, 4096, 4, 8) && !passesCap(1024, 513, 4096, 4, 8));
   check('D9: every fraction has its word, a fifth to an eighth', same([5, 6, 7, 8].map((k) => sizeChoiceLabel({ width: 10, height: 10, direction: 'down', factor: k, overCap: false })), ['10 px, a fifth', '10 px, a sixth', '10 px, a seventh', '10 px, an eighth']));
   check('D10: sizeText: "64 px" when square, "24 by 32 px" when not', sizeText(64, 64) === '64 px' && sizeText(24, 32) === '24 by 32 px' && sizeChoiceLabel(sizeChoices(24, 32, 4096)[0], 'download') === 'As made (24 by 32 px)');
@@ -208,6 +224,23 @@ const equalImages = (a, b) => a.width === b.width && a.height === b.height && a.
   check('E5: between the start and 2x, the start itself is the nearest smaller', nearestCleanSizes(64, 64, 100, 100, 4096).smaller.direction === 'same' && nearestCleanSizes(64, 64, 100, 100, 4096).larger.width === 128);
   check('E6: one side each way: the largest choice that fits inside it and the smallest that covers it', (() => { const n = nearestCleanSizes(64, 64, 32, 128, 4096); return n.smaller.width === 32 && n.larger.width === 128; })() && same(nearestCleanSizes(64, 64, 4, 9000, 4096), { smaller: null, larger: null }));
   check('E7: a choice over the cap is never offered as the nearest', nearestCleanSizes(396, 396, 900, 900, 1024).larger === null);
+  // REV-L1: "inside" and "covers" hold on both sides, for a size of another shape than the start.
+  check('E11: a choice that fits on one side only is not inside: 64 px to 40 by 20 and to 20 by 40 gives 16 px smaller (32 px is too tall, then too wide) and 64 px as is larger; 30 by 42 to 16 by 12 has no smaller (15 by 21 fits the width only)', (() => { const a = nearestCleanSizes(64, 64, 40, 20, 4096); const t = nearestCleanSizes(64, 64, 20, 40, 4096); const b = nearestCleanSizes(30, 42, 16, 12, 4096); return [a, t].every((n) => n.smaller !== null && n.smaller.width === 16 && n.smaller.height === 16 && n.larger !== null && n.larger.direction === 'same') && b.smaller === null && b.larger !== null && b.larger.direction === 'same'; })());
+  // The comment read plainly: of the offered choices under the cap, other than the size itself, the widest that fits inside on both sides and the narrowest that covers it on both sides.
+  const plainNearest = (sw, sh, w, h, cap, columns, rows) => {
+    const offered = sizeChoices(sw, sh, cap, columns, rows).filter((c) => !c.overCap && !(c.width === w && c.height === h));
+    const inside = offered.filter((c) => c.width <= w && c.height <= h).sort((p, q) => q.width - p.width);
+    const covers = offered.filter((c) => c.width >= w && c.height >= h).sort((p, q) => p.width - q.width);
+    return { smaller: inside[0] ?? null, larger: covers[0] ?? null };
+  };
+  const nearWrong = [];
+  const sides = [1, 5, 8, 12, 16, 20, 31, 40, 48, 64, 100, 130, 200, 400, 800, 1600];
+  for (const [sw, sh] of [[64, 64], [30, 42], [24, 32], [96, 48], [48, 96], [396, 396], [128, 64], [13, 13], [56, 56]]) for (const cap of [1024, 4096]) for (const [columns, rows] of [[1, 1], [4, 1], [1, 4], [2, 3]]) for (const w of sides) for (const h of sides) {
+    const got = nearestCleanSizes(sw, sh, w, h, cap, columns, rows); const want = plainNearest(sw, sh, w, h, cap, columns, rows);
+    if (!same(got, want)) nearWrong.push({ sw, sh, w, h, cap, columns, rows, got, want });
+  }
+  check('E12: nearestCleanSizes is the comment read plainly, for 9 starts, square and not, 2 caps, 4 sheet shapes (one image, 4 by 1, 1 by 4, 2 by 3) and 256 sizes of every shape each (18,432 cases)', nearWrong.length === 0, nearWrong.slice(0, 2));
+  check('E13: on a sheet the cap counts the whole sheet: 4 columns of 256 px frames, Other size 1500, cap 4096: 1024 px smaller and no larger (2048 px frames would make an 8192 px sheet); one image of 256 px gets 2048 px larger', (() => { const s4 = nearestCleanSizes(256, 256, 1500, 1500, 4096, 4, 1); const one = nearestCleanSizes(256, 256, 1500, 1500, 4096); return s4.smaller !== null && s4.smaller.width === 1024 && s4.larger === null && one.larger !== null && one.larger.width === 2048; })());
 }
 
 // ---- F. Canvas size ----
@@ -243,6 +276,72 @@ const equalImages = (a, b) => a.width === b.width && a.height === b.height && a.
   check('F15: Canvas size on a sheet at the same size gives a new image with the same pixels, and the sheet given is never changed', equalImages(canvasSame, sheet) && canvasSame.data !== sheet.data && equalImages(sheet, sheetB) && (() => { resizeCanvasSheet(sheet, grid, 7, 2, 'bottom-right'); return equalImages(sheet, sheetB); })());
   check('F16: Canvas size and trimCuts refuse a size under 1 or not whole, on an image and on a sheet', throws(() => resizeCanvas(img, 0, 3, 'center')) && throws(() => resizeCanvas(img, 3, 2.5, 'center')) && throws(() => resizeCanvasSheet(sheet, grid, 0, 4, 'center')) && throws(() => resizeCanvasSheet(sheet, grid, 4, 1.5, 'center')) && throws(() => trimCuts(img, 0, 2, 'center')) && throws(() => trimCuts(img, 2, -1, 'center')) && throws(() => trimCuts(sheet, 2, 2.5, 'center', grid)));
   check('F10: the image given is never changed, and a bad grid is refused', (() => { const b = freeze(img); resizeCanvas(img, 9, 9, 'center'); trimCuts(img, 2, 2, 'center'); return equalImages(b, img) && throws(() => resizeCanvasSheet(sheet, { frameWidth: 3, frameHeight: 4, columns: 2, rows: 1 }, 5, 5, 'center')); })());
+
+  // REV-L1: sheets of two rows and more, every anchor, against a plain placement written here
+  // (its own anchor table and its own rule for the odd pixel, not the library's helpers).
+  const AXES = { 'top-left': ['s', 's'], top: ['c', 's'], 'top-right': ['e', 's'], left: ['s', 'c'], center: ['c', 'c'], right: ['e', 'c'], 'bottom-left': ['s', 'e'], bottom: ['c', 'e'], 'bottom-right': ['e', 'e'] };
+  const offsetOf = (oldSize, newSize, at) => { const d = newSize - oldSize; return at === 's' ? 0 : at === 'e' ? d : Math.sign(d) * Math.floor(Math.abs(d) / 2); };
+  // Every pixel opaque and its own (index + 1 in red, green and blue), so a clear pixel is never mistaken for art.
+  // With `varied`, alpha runs through every value, 0 included, so Canvas size is seen to copy alpha and the colour under alpha 0 (AUDIT pixel-resize-l1 r1 L6, r2 R2-L3). Red, green and blue are never all 0, so no source pixel looks like added space.
+  const tagged = (w, h, varied = false) => { const d = new Uint8ClampedArray(w * h * 4); for (let i = 0; i < w * h; i++) { const v = i + 1; d[i * 4] = v & 255; d[i * 4 + 1] = (v >>> 8) & 255; d[i * 4 + 2] = (v >>> 16) & 255; d[i * 4 + 3] = varied ? (i * 37) % 256 : 255; } return { width: w, height: h, data: d }; };
+  function plainCanvasSheet(image, g, fw, fh, anchor) {
+    const [ax, ay] = AXES[anchor]; const ox = offsetOf(g.frameWidth, fw, ax), oy = offsetOf(g.frameHeight, fh, ay);
+    const out = { width: fw * g.columns, height: fh * g.rows, data: new Uint8ClampedArray(fw * g.columns * fh * g.rows * 4) };
+    for (let r = 0; r < g.rows; r++) for (let c = 0; c < g.columns; c++) for (let y = 0; y < fh; y++) for (let x = 0; x < fw; x++) {
+      const sx = x - ox, sy = y - oy;
+      if (sx < 0 || sy < 0 || sx >= g.frameWidth || sy >= g.frameHeight) continue;
+      const s = ((r * g.frameHeight + sy) * image.width + c * g.frameWidth + sx) * 4, o = ((r * fh + y) * out.width + c * fw + x) * 4;
+      for (let k = 0; k < 4; k++) out.data[o + k] = image.data[s + k];
+    }
+    return out;
+  }
+  const placeWrong = []; let placed = 0;
+  for (const [frameWidth, frameHeight] of [[5, 4], [4, 7]]) for (let columns = 1; columns <= 3; columns++) for (let rows = 1; rows <= 4; rows++) {
+    const g = { frameWidth, frameHeight, columns, rows }; const src = tagged(frameWidth * columns, frameHeight * rows, true);
+    for (const anchor of ANCHORS) for (let dw = -3; dw <= 3; dw++) for (let dh = -3; dh <= 3; dh++) {
+      placed++;
+      if (!equalImages(resizeCanvasSheet(src, g, frameWidth + dw, frameHeight + dh, anchor), plainCanvasSheet(src, g, frameWidth + dw, frameHeight + dh, anchor))) placeWrong.push({ g, anchor, fw: frameWidth + dw, fh: frameHeight + dh });
+    }
+  }
+  check(`F17: Canvas size on sheets of 1 to 4 rows and 1 to 3 columns (a strip and a single frame included), at all nine anchors, each side grown or trimmed by up to 3 px (${placed} sheets): every frame is placed by its own anchor and takes nothing from the frame below or beside, as a plain placement does it`, placeWrong.length === 0, placeWrong.slice(0, 2));
+  const tall = resizeCanvasSheet(tagged(2, 4), { frameWidth: 2, frameHeight: 2, columns: 1, rows: 2 }, 2, 4, 'top');
+  const low = resizeCanvasSheet(tagged(2, 4), { frameWidth: 2, frameHeight: 2, columns: 1, rows: 2 }, 3, 3, 'bottom-right');
+  check('F18: a frame made taller at the top gets clear space below it, not the frame under it; at the bottom right the art sits at the bottom right of each frame', [2, 3, 6, 7].every((y) => px(tall, 0, y)[3] === 0 && px(tall, 1, y)[3] === 0) && px(tall, 0, 4).join() === '5,0,0,255' && px(low, 0, 0)[3] === 0 && px(low, 1, 1).join() === '1,0,0,255' && px(low, 2, 2).join() === '4,0,0,255' && px(low, 1, 4).join() === '5,0,0,255' && px(low, 0, 3)[3] === 0);
+  // trimCuts read plainly: a pixel that is not fully clear is cut on a side if it lands past that side of the new frame.
+  function plainCuts(image, w, h, anchor, g) {
+    const [ax, ay] = AXES[anchor]; const ox = offsetOf(g.frameWidth, w, ax), oy = offsetOf(g.frameHeight, h, ay); const cut = new Set();
+    for (let r = 0; r < g.rows; r++) for (let c = 0; c < g.columns; c++) for (let y = 0; y < g.frameHeight; y++) for (let x = 0; x < g.frameWidth; x++) {
+      if (image.data[((r * g.frameHeight + y) * image.width + c * g.frameWidth + x) * 4 + 3] === 0) continue;
+      if (x + ox < 0) cut.add('left'); if (x + ox >= w) cut.add('right'); if (y + oy < 0) cut.add('top'); if (y + oy >= h) cut.add('bottom');
+    }
+    return ['left', 'right', 'top', 'bottom'].filter((s) => cut.has(s));
+  }
+  // A 32-bit generator (Math.imul keeps every bit; AUDIT pixel-resize-l1 r1, L3), the high bits taken for the pick.
+  let seed = 20261115; const rnd = (n) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return Math.floor((seed / 4294967296) * n); };
+  const cutWrong = []; let cutCases = 0;
+  for (let columns = 1; columns <= 3; columns++) for (let rows = 1; rows <= 4; rows++) for (let fill = 0; fill < 10; fill++) {
+    const g = { frameWidth: 6, frameHeight: 5, columns, rows }; const sparse = marked(6 * columns, 5 * rows, { clearIf: () => true });
+    // One to three marks, each in a frame picked at random, at any alpha above 0.
+    for (let n = 1 + rnd(3); n > 0; n--) sparse.data[(rnd(5 * rows) * sparse.width + rnd(6 * columns)) * 4 + 3] = 1 + rnd(255);
+    for (const anchor of ANCHORS) for (let w = 3; w <= 7; w++) for (let h = 2; h <= 6; h++) {
+      cutCases++;
+      if (!same(trimCuts(sparse, w, h, anchor, g), plainCuts(sparse, w, h, anchor, g))) cutWrong.push({ g, anchor, w, h, got: trimCuts(sparse, w, h, anchor, g), want: plainCuts(sparse, w, h, anchor, g) });
+    }
+  }
+  check(`F19: trimCuts on sparse sheets of 1 to 4 rows and 1 to 3 columns, at all nine anchors, trimming and growing (${cutCases} cases): the sides named are exactly those where art would be cut, in any frame of any row`, cutWrong.length === 0, cutWrong.slice(0, 2));
+  const lastRow = marked(20, 30, { clearIf: (x, y) => !(x === 13 && y === 29) });
+  check('F20: art in a frame of the last row only, at its bottom edge, is still found; trimmed from the top instead, nothing is cut', same(trimCuts(lastRow, 10, 8, 'top', { frameWidth: 10, frameHeight: 10, columns: 2, rows: 3 }), ['bottom']) && same(trimCuts(lastRow, 10, 8, 'bottom', { frameWidth: 10, frameHeight: 10, columns: 2, rows: 3 }), []));
+  // AUDIT pixel-resize-l1 r1, M1: one image through resizeCanvas, at every anchor, against the same plain placement.
+  const oneWrong = []; let oneCases = 0;
+  for (const [w, h] of [[5, 4], [4, 7], [1, 1], [6, 6], [3, 2]]) {
+    const src = tagged(w, h, true); const g = { frameWidth: w, frameHeight: h, columns: 1, rows: 1 };
+    for (const anchor of ANCHORS) for (let dw = -3; dw <= 3; dw++) for (let dh = -3; dh <= 3; dh++) {
+      if (w + dw < 1 || h + dh < 1) continue;
+      oneCases++;
+      if (!equalImages(resizeCanvas(src, w + dw, h + dh, anchor), plainCanvasSheet(src, g, w + dw, h + dh, anchor))) oneWrong.push({ w, h, anchor, nw: w + dw, nh: h + dh });
+    }
+  }
+  check(`F21: Canvas size on one image, at all nine anchors, each side grown or trimmed by up to 3 px (${oneCases} cases): placed as a plain placement does it, alpha and all`, oneWrong.length === 0, oneWrong.slice(0, 2));
 }
 
 // ---- G. the rows and columns picker ----
@@ -262,13 +361,23 @@ const equalImages = (a, b) => a.width === b.width && a.height === b.height && a.
   check('H2: it keeps no state between calls: no top-level let, var or class, and every top-level const is a number, a frozen table or a function', topLevel.length === 0 && consts.length === 0, [...topLevel, ...consts]);
   check('H3: its patterns have no look-behind and it uses no floating-point rounding in the mapping', !/\(\?<[=!]/.test(lib) && /Math\.floor\(\(a \+ b - 1\) \/ b\) - 1/.test(lib));
   const message = (fn) => { try { fn(); return null; } catch (e) { return `${e.constructor.name}: ${e.message}`; } };
-  const mCount = message(() => resizeSheet(marked(4, 4), { frameWidth: 4, frameHeight: 4, columns: 1.5, rows: 1 }, 2, 2));
+  // The keys in another order, so this bad grid does not share H7's object shape (shared, it slows H7's copy several times over; AUDIT pixel-resize-l1 r1, L4).
+  const mCount = message(() => resizeSheet(marked(4, 4), { columns: 1.5, rows: 1, frameWidth: 4, frameHeight: 4 }, 2, 2));
   const mString = message(() => resizeImage(marked(2, 2), '64', 4));
   const mNull = message(() => resizeImage(null, 4, 4));
   const mNoData = message(() => resizeImage({ width: 2, height: 2 }, 4, 4));
   check('H6: the errors say what is wrong: a count is "a whole number", not pixels; a string is shown quoted; a missing image or data is a RangeError, as the doc says', /columns must be a whole number, at least 1/.test(mCount) && !/columns[^)]*pixels/.test(mCount) && /\(got "64"\)/.test(mString) && /^RangeError/.test(mNull ?? '') && /^RangeError/.test(mNoData ?? ''), [mCount, mString, mNull, mNoData]);
-  const t1 = performance.now(); resizeSheet(marked(2048, 2048), { frameWidth: 1, frameHeight: 1, columns: 2048, rows: 2048 }, 1, 1); const sheetMs = performance.now() - t1;
-  check('H7: a sheet of 1 px frames is as quick as one image: 2048 by 2048 frames in under a second', sheetMs < 1000, Math.round(sheetMs));
+  // Both paths warmed, then sheet and image in turn, best of five each, so load and the JIT slow both alike.
+  const bigSheet = marked(2048, 2048);
+  const sheetRun = () => resizeSheet(bigSheet, { frameWidth: 1, frameHeight: 1, columns: 2048, rows: 2048 }, 1, 1);
+  const imageRun = () => resizeImage(bigSheet, 2048, 2048);
+  sheetRun(); imageRun();
+  let sheetMs = Infinity, imageMs = Infinity;
+  for (let k = 0; k < 5; k++) {
+    let t = performance.now(); sheetRun(); sheetMs = Math.min(sheetMs, performance.now() - t);
+    t = performance.now(); imageRun(); imageMs = Math.min(imageMs, performance.now() - t);
+  }
+  check('H7: a sheet of 1 px frames is as quick as one image: 2048 by 2048 frames, warmed, best of five taken in turn, within 3 times one 2048 px image plus 40 ms, and under a second', sheetMs < 3 * imageMs + 40 && sheetMs < 1000, [Math.round(sheetMs), Math.round(imageMs)]);
   check('H4: no em dash in the library', !fs.readFileSync(path.join(ROOT, 'src/lib/pixelResize.ts'), 'utf8').includes(String.fromCharCode(0x2014)));
   check('H5: every export is a function, a number or a frozen list', Object.entries(R).every(([, v]) => typeof v === 'function' || typeof v === 'number' || (Array.isArray(v) && Object.isFrozen(v))));
 }

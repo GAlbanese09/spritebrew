@@ -359,7 +359,7 @@ export function mount(component) {
   const files = {
     'fake-react.mjs': FAKE_REACT,
     'jsx-runtime.mjs': lines('export function jsx(type, props) { return { type, props }; }', 'export const jsxs = jsx;', "export const Fragment = 'Fragment';"),
-    'clerk-stub.mjs': lines("export function useAuth() { const u = globalThis.__galleryUser; return { userId: u, getToken: async () => (u ? 'tok-' + u : null) }; }"),
+    'clerk-stub.mjs': lines("export function useAuth() { const u = globalThis.__galleryUser; return { userId: u, getToken: async () => { globalThis.__galleryTokens = (globalThis.__galleryTokens || 0) + 1; return u ? 'tok-' + u + '#' + globalThis.__galleryTokens : null; } }; }"),
     'next-navigation-stub.mjs': lines('export function useRouter() { return globalThis.__galleryRouter; }'),
     'next-link-stub.mjs': lines('export default function Link() { return null; }'),
     'clean-stub.mjs': lines('export function cleanGallerySheet(blob) { return globalThis.__galleryClean(blob); }'),
@@ -406,8 +406,14 @@ export function mount(component) {
   ];
   globalThis.fetch = async (url, init = {}) => {
     const u = String(url);
-    const user = String((init.headers && init.headers.Authorization) || '').replace('Bearer tok-', '');
-    if (init.method === 'DELETE') return { ok: true, status: 200, json: async () => ({}) };
+    // Each token carries its number, so a case can tell a fresh one from a
+    // kept one.
+    const [user, tokenNo] = String((init.headers && init.headers.Authorization) || '').replace('Bearer tok-', '').split('#');
+    if (init.method === 'DELETE') {
+      world.deletes.push({ url: u, method: init.method, user, token: Number(tokenNo) });
+      const status = world.deleteStatus;
+      return { ok: status === 200, status, json: async () => (status === 200 ? { deleted: true } : { error: 'refused' }) };
+    }
     if (u.startsWith('/api/gallery?')) return { ok: true, status: 200, json: async () => ({ entries: entriesFor(user) }) };
     if (u.startsWith('/api/gallery/image/')) {
       const jobId = u.slice('/api/gallery/image/'.length);
@@ -468,7 +474,7 @@ export function mount(component) {
   // A fresh store and world, the Gallery open for an account, its three
   // cards shown and the two animations' clean copies started and waiting.
   const open = async (user) => {
-    world = { pushes: [], saved: [], revoked: new Set(), cleaning: {} };
+    world = { pushes: [], saved: [], revoked: new Set(), cleaning: {}, deletes: [], deleteStatus: 200 };
     useSpriteStore.setState({ generatedImageUrl: null, generatedImageDataUrl: null, generationStyle: null, currentSheetMetadata: null });
     globalThis.__galleryUser = user;
     const page = mount(GalleryPage);
@@ -604,6 +610,60 @@ export function mount(component) {
     check('page: Delete, or Clear all, while a Send to Slicer waits: no handoff or navigation',
       afterDelete && !!clear && nothing(), { clear: !!clear, handedOver: handedOver(), pushes: world.pushes });
     page2.unmountLayout(); page2.unmountPassive();
+  });
+
+  await pageCase('page: what the deletes send', async () => {
+    // AUDIT gallery-paging-r2, G2-7: the page's own calls, driven: the
+    // address, the method and the sign-in header of every delete, with a
+    // token fetched for each.
+    const page = await open('user_a');
+    const before = globalThis.__galleryTokens;
+    card(page, 'user_a-C').onDelete();
+    await drain();
+    const single = [...world.deletes];
+    const cLeft = !card(page, 'user_a-C') && !!card(page, 'user_a-A') && !!card(page, 'user_a-B');
+    world.deleteStatus = 401;
+    card(page, 'user_a-B').onDelete();
+    await drain();
+    const refused = world.deletes[1];
+    const bStays = !!card(page, 'user_a-B') && find(page.value, (p) => p.entry && p.entry.jobId === 'user_a-B' && p.state === 'failed').length === 1;
+    world.deleteStatus = 200;
+    const clear = find(page.value, (p) => typeof p.onClick === 'function' && textOf(p.children).includes('Clear all'))[0];
+    if (clear) clear.onClick();
+    await drain();
+    const all = world.deletes[2];
+    check("page: a card's Delete sends one DELETE for that card, with a token fetched for it, and the card leaves on the answer",
+      single.length === 1 && single[0].url === '/api/gallery/user_a-C' && single[0].method === 'DELETE' && single[0].user === 'user_a' &&
+      single[0].token > before && cLeft, { single, before, cLeft });
+    check('page: a refused Delete leaves its card, marked as not deleted',
+      !!refused && refused.url === '/api/gallery/user_a-B' && refused.token > single[0].token && bStays, { refused, bStays });
+    check('page: Clear all sends one "delete everything" with its own fresh token, and the cards leave on the answer',
+      !!clear && !!all && all.url === '/api/gallery' && all.method === 'DELETE' && all.user === 'user_a' && all.token > refused.token &&
+      world.deletes.length === 3 && !card(page, 'user_a-A') && !card(page, 'user_a-B'), { all, count: world.deletes.length });
+    page.unmountLayout(); page.unmountPassive();
+  });
+
+  await pageCase('page: a Clear of another kind', async () => {
+    // A Send to Slicer waits on an Animated sheet; the person clears the
+    // Created ones and says yes. The send's own sheet stays, so it still goes
+    // (DESIGN 2026-11-14-126). The same send is dropped when its sheet is
+    // among those cleared (the case above).
+    const page = await open('user_a');
+    card(page, 'user_a-A').onSendToSlicer();
+    const tab = find(page.value, (p) => typeof p.onClick === 'function' && textOf(p.children) === 'Created')[0];
+    if (tab) tab.onClick();
+    await drain();
+    const clear = find(page.value, (p) => typeof p.onClick === 'function' && textOf(p.children).includes('Clear Created'))[0];
+    if (clear) clear.onClick();
+    await drain();
+    const createdLeft = find(page.value, (p) => p.entry && p.entry.mode === 'create' && p.onSendToSlicer).length;
+    world.cleaning['user_a-A']();
+    await drain();
+    const h = handedOver();
+    check('page: a yes to Clear Created leaves a Send to Slicer that waits on an Animated sheet: it is handed over',
+      !!tab && !!clear && createdLeft === 0 && !!h && h.style === 'any_animation_walking' && world.pushes.length === 1,
+      { tab: !!tab, clear: !!clear, createdLeft, h, pushes: world.pushes });
+    page.unmountLayout(); page.unmountPassive();
   });
 
   await pageCase('page: URL survival', async () => {

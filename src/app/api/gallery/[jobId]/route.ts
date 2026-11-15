@@ -18,7 +18,8 @@ interface KV {
 }
 
 interface R2Bucket {
-  delete(key: string): Promise<void>;
+  // R2's binding deletes up to 1,000 keys in one call.
+  delete(keys: string | string[]): Promise<void>;
 }
 
 function getKV(): KV | null {
@@ -38,16 +39,18 @@ function getR2(): R2Bucket | null {
 /**
  * DELETE /api/gallery/[jobId]
  *
- * Deletes one gallery entry: KV index entry first (immediately invisible to
- * GET /api/gallery), then R2 blob.
+ * Deletes one gallery entry: its picture and job status copy first, in one
+ * R2 call, then its KV index entry. So the picture never outlives the entry:
+ * if the R2 call fails, the entry is still listed and the delete can be
+ * tried again.
  *
  * Ownership is implicit: the R2 key is constructed from the authenticated
  * userId, so the caller can only delete blobs they own.
  *
  * To find the matching KV key we list the user's gen: prefix and filter for
- * the jobId in metadata. This is O(n) over the user's entries (cap 50), so
- * acceptable. If the user ever exceeds a few hundred entries we'd want a
- * secondary index — out of scope for Phase 3.
+ * the jobId in metadata: one list call per 1,000 entries, up to 10 pages.
+ * Accounts have more than a few hundred entries now; a secondary index would
+ * make this one read.
  */
 export async function DELETE(
   request: Request,
@@ -72,7 +75,7 @@ export async function DELETE(
     return Response.json({ error: 'Storage unavailable.' }, { status: 503 });
   }
 
-  // 1. Find and delete the matching KV index entry.
+  // 1. Find the matching KV index entry.
   let foundKvKey: string | null = null;
   let cursor: string | undefined = undefined;
   let listComplete = false;
@@ -96,24 +99,35 @@ export async function DELETE(
     safetyCounter++;
   }
 
-  if (foundKvKey) {
-    await kv.delete(foundKvKey);
-  }
-  // If no KV key found, fall through and still try R2 delete — might be a
-  // stale blob from a partial write. R2 delete is idempotent.
-
-  // 2. Delete the R2 blob.
-  await bucket.delete(galleryR2Key(userId, jobId));
-
-  // 3. The job's status record mirror (jobs/{jobId}.json, which carries the
-  //    result too). Only once the caller's own gallery entry was found: the
-  //    key is not scoped by userId, so an unmatched jobId must not reach it.
-  if (foundKvKey) {
-    await bucket.delete(jobStateR2Key(jobId));
-  }
-
   if (!foundKvKey) {
+    // No entry: still delete the caller's own picture key (a stale blob from
+    // a partial write; R2 delete is idempotent). Never the job status copy:
+    // jobs/{jobId}.json is not scoped by userId, so an unmatched jobId must
+    // not reach it.
+    await bucket.delete(galleryR2Key(userId, jobId));
     return Response.json({ deleted: false, reason: 'Entry not found.' }, { status: 404 });
+  }
+
+  // 2. The picture and the job's status record mirror (jobs/{jobId}.json,
+  //    which carries the result too), in one call, before the entry.
+  try {
+    await bucket.delete([galleryR2Key(userId, jobId), jobStateR2Key(jobId)]);
+  } catch {
+    return Response.json(
+      { deleted: false, error: 'Could not delete this generation. Try again.' },
+      { status: 503 }
+    );
+  }
+
+  // 3. Then the index entry. If this fails, the entry stays listed with its
+  //    picture gone; trying again finishes it.
+  try {
+    await kv.delete(foundKvKey);
+  } catch {
+    return Response.json(
+      { deleted: false, error: 'Could not delete this generation. Try again.' },
+      { status: 503 }
+    );
   }
   return Response.json({ deleted: true });
 }

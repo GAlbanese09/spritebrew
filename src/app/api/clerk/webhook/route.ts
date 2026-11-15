@@ -141,7 +141,7 @@ export async function POST(request: Request) {
 
     if (userId && email && isDisposableEmail(email)) {
       await setDisposableBlocked(userId);
-      console.warn(`[Clerk Webhook] Flagged disposable email signup: ${userId} (${email})`);
+      console.warn('[Clerk Webhook] Flagged disposable email signup');
     }
   }
 

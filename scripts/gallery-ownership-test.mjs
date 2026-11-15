@@ -362,11 +362,14 @@ export function mount(component) {
     'clerk-stub.mjs': lines("export function useAuth() { const u = globalThis.__galleryUser; return { userId: u, getToken: async () => { globalThis.__galleryTokens = (globalThis.__galleryTokens || 0) + 1; return u ? 'tok-' + u + '#' + globalThis.__galleryTokens : null; } }; }"),
     'next-navigation-stub.mjs': lines('export function useRouter() { return globalThis.__galleryRouter; }'),
     'next-link-stub.mjs': lines('export default function Link() { return null; }'),
+    // A portal renders in place here, so a case finds the top bar's button in the tree.
+    'react-dom-stub.mjs': lines('export function createPortal(node) { return node; }'),
     'clean-stub.mjs': lines('export function cleanGallerySheet(blob) { return globalThis.__galleryClean(blob); }'),
     'page-entry.mjs': lines(
       `export { default as GalleryPage } from ${JSON.stringify(path.join(ROOT, 'src/app/gallery/page.tsx'))};`,
       `export { useSpriteStore } from ${JSON.stringify(path.join(ROOT, 'src/stores/spriteStore.ts'))};`,
       `export { mount } from ${JSON.stringify(path.join(DIR, 'fake-react.mjs'))};`,
+      `export { dropKept, takeKept, keepGallery } from ${JSON.stringify(path.join(ROOT, 'src/lib/galleryKeep.ts'))};`,
     ),
   };
   for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(DIR, name), text);
@@ -376,6 +379,7 @@ export function mount(component) {
     'react/jsx-dev-runtime': path.join(DIR, 'jsx-runtime.mjs'),
     '@clerk/react': path.join(DIR, 'clerk-stub.mjs'),
     'next/navigation': path.join(DIR, 'next-navigation-stub.mjs'),
+    'react-dom': path.join(DIR, 'react-dom-stub.mjs'),
     'next/link': path.join(DIR, 'next-link-stub.mjs'),
   };
 
@@ -392,7 +396,7 @@ export function mount(component) {
     value: { getItem: (k) => (storage.has(k) ? storage.get(k) : null), setItem: (k, v) => { storage.set(k, String(v)); }, removeItem: (k) => { storage.delete(k); }, key: () => null, length: 0 },
     configurable: true, writable: true,
   });
-  globalThis.confirm = () => true;
+  globalThis.confirm = (question) => { if (world) (world.asked = world.asked || []).push(question); return true; };
   globalThis.document = {
     createElement: () => ({ click() { world.saved.push(this.download); } }),
     body: { appendChild() {}, removeChild() {} },
@@ -412,10 +416,22 @@ export function mount(component) {
     if (init.method === 'DELETE') {
       world.deletes.push({ url: u, method: init.method, user, token: Number(tokenNo) });
       const status = world.deleteStatus;
-      return { ok: status === 200, status, json: async () => (status === 200 ? { deleted: true } : { error: 'refused' }) };
+      const answer = u === '/api/gallery' && typeof world.deletedAll === 'number' ? { deleted: world.deletedAll } : { deleted: true };
+      return { ok: status === 200, status, json: async () => (status === 200 ? answer : { error: 'refused' }) };
     }
-    if (u.startsWith('/api/gallery?')) return { ok: true, status: 200, json: async () => ({ entries: entriesFor(user) }) };
+    if (u.startsWith('/api/gallery?')) {
+      world.lists = (world.lists || 0) + 1;
+      // A case can fail an account's list read, hold it until it releases
+      // it, or take generations away as another device would.
+      if (world.listFail && world.listFail.has(user)) return { ok: false, status: 500, json: async () => ({ error: 'x' }) };
+      if (world.listHold) await new Promise((resolve) => { world.releaseList = resolve; });
+      const gone = world.deletedIds || new Set();
+      // A case can answer with one page only, more after it.
+      if (world.pageOnly) return { ok: true, status: 200, json: async () => ({ entries: world.pageOnly, cursor: 'c-next' }) };
+      return { ok: true, status: 200, json: async () => ({ entries: [...(world.newer || []), ...entriesFor(user)].filter((e) => !gone.has(e.jobId)) }) };
+    }
     if (u.startsWith('/api/gallery/image/')) {
+      world.images = (world.images || 0) + 1;
       const jobId = u.slice('/api/gallery/image/'.length);
       const blob = new Blob([`stored ${jobId}`], { type: 'image/png' });
       blobJob.set(blob, jobId);
@@ -441,7 +457,7 @@ export function mount(component) {
       },
     }],
   });
-  const { GalleryPage, useSpriteStore, mount } = await import(pathToFileURL(OUT).href);
+  const { GalleryPage, useSpriteStore, mount, dropKept, takeKept, keepGallery } = await import(pathToFileURL(OUT).href);
 
   const tick = () => new Promise((r) => setTimeout(r, 0));
   const drain = async () => { for (let i = 0; i < 20; i++) await tick(); };
@@ -473,7 +489,10 @@ export function mount(component) {
   };
   // A fresh store and world, the Gallery open for an account, its three
   // cards shown and the two animations' clean copies started and waiting.
-  const open = async (user) => {
+  // Each case starts with nothing kept from the one before (galleryKeep.ts),
+  // unless it keeps on purpose.
+  const open = async (user, { keep = false } = {}) => {
+    if (!keep) dropKept();
     world = { pushes: [], saved: [], revoked: new Set(), cleaning: {}, deletes: [], deleteStatus: 200 };
     useSpriteStore.setState({ generatedImageUrl: null, generatedImageDataUrl: null, generationStyle: null, currentSheetMetadata: null });
     globalThis.__galleryUser = user;
@@ -664,6 +683,270 @@ export function mount(component) {
       !!tab && !!clear && createdLeft === 0 && !!h && h.style === 'any_animation_walking' && world.pushes.length === 1,
       { tab: !!tab, clear: !!clear, createdLeft, h, pushes: world.pushes });
     page.unmountLayout(); page.unmountPassive();
+  });
+
+  await pageCase('page: keep the place', async () => {
+    // Leaving keeps the list in memory; a return shows it at once and reads
+    // only the first list page, quietly. A new generation goes on top and is
+    // said once; its picture is the only one read again.
+    const page = await open('user_a');
+    page.unmountLayout(); page.unmountPassive();
+    await drain();
+    const kept = takeKept('user_a');
+    check('page: leaving the Gallery keeps the loaded list and every picture, for that account',
+      !!kept && kept.entries.length === 3 && Object.keys(kept.pictures).length === 3 && kept.filter === 'all' && takeKept('user_b') === null && takeKept('user_a') === null,
+      { kept: kept && kept.entries.map((e) => e.jobId) });
+    // Keep again (the line above dropped it on purpose), then come back.
+    const again = await open('user_a');
+    again.unmountLayout(); again.unmountPassive();
+    await drain();
+    world = { pushes: [], saved: [], revoked: new Set(), cleaning: {}, deletes: [], deleteStatus: 200, lists: 0, images: 0,
+      newer: [{ jobId: 'user_a-N', prompt: 'N', style: 'rd_fast__default', mode: 'create', createdAt: 4, v: 1 }] };
+    globalThis.__galleryUser = 'user_a';
+    const back = mount(GalleryPage);
+    // This stand-in re-renders a task later, so "before the browser paints"
+    // is checked in the real app; here, what is read.
+    await until(() => ['A', 'B', 'C'].every((k) => card(back, `user_a-${k}`)), 'the kept cards');
+    await until(() => card(back, 'user_a-N'), 'the new generation on top');
+    const order = find(back.value, (p) => p.entry && p.onSendToSlicer).map((p) => p.entry.jobId);
+    const said = find(back.value, (p) => p.role === 'status').map((p) => textOf(p.children)).join('|');
+    check('page: a return shows the kept cards, reads the first list page once, and only the new picture',
+      world.lists === 1 && world.images === 1, { lists: world.lists, images: world.images });
+    check('page: the new generation goes on top and is said once, hidden',
+      order[0] === 'user_a-N' && order.length === 4 && said.includes('1 new generation at the top.'), { order, said });
+    back.unmountLayout(); back.unmountPassive();
+    await drain();
+    // Another account sees none of it.
+    const other = await open('user_b', { keep: true });
+    check('page: another account reads its own list, and nothing kept for the first is shown',
+      !card(other, 'user_a-A') && !!card(other, 'user_b-A') && takeKept('user_a') === null);
+    other.unmountLayout(); other.unmountPassive();
+    await drain();
+  });
+
+  await pageCase('page: an account change on the Gallery hands nothing of the first account to the next (AUDIT keep-place r1, C1)', async () => {
+    // A is on the Gallery; the account changes there to B, whose first read
+    // fails, then the person leaves and comes back as B.
+    const page = await open('user_a');
+    world.listFail = new Set(['user_b']);
+    commitAccount(page, 'user_b');
+    const atChange = ['A', 'B', 'C'].some((k) => card(page, `user_a-${k}`));
+    await passiveThenRelease(page);
+    const afterFail = ['A', 'B', 'C'].some((k) => card(page, `user_a-${k}`));
+    page.unmountLayout(); page.unmountPassive();
+    await drain();
+    const keptB = takeKept('user_b');
+    world.listFail = new Set();
+    globalThis.__galleryUser = 'user_b';
+    const back = mount(GalleryPage);
+    await until(() => card(back, 'user_b-A'), "B's own cards");
+    const leakB = ['A', 'B', 'C'].some((k) => card(back, `user_a-${k}`));
+    back.unmountLayout(); back.unmountPassive();
+    await drain();
+    // C, a new account whose first read is still on its way when the person leaves.
+    const page2 = await open('user_a');
+    world.listHold = true;
+    commitAccount(page2, 'user_c');
+    await passiveThenRelease(page2);
+    const whileLoading = ['A', 'B', 'C'].some((k) => card(page2, `user_a-${k}`));
+    page2.unmountLayout(); page2.unmountPassive();
+    if (world.releaseList) world.releaseList();
+    await drain();
+    const keptC = takeKept('user_c');
+    check('page: after an account change on the Gallery, nothing of the first account shows, while its read fails or is on its way, and nothing is kept for the next account',
+      !atChange && !afterFail && !leakB && !whileLoading && keptB === null && keptC === null, { atChange, afterFail, leakB, whileLoading, keptB: !!keptB, keptC: !!keptC });
+    // A sign-out on the page shows nothing of the account either.
+    const page3 = await open('user_a');
+    commitAccount(page3, null);
+    const atSignOut = ['A', 'B', 'C'].some((k) => card(page3, `user_a-${k}`));
+    await passiveThenRelease(page3);
+    check('page: not even the frame of a sign-out, before its effects, shows the account\'s list (AUDIT keep-place r2, N1)', !atSignOut);
+    check('page: a sign-out on the Gallery leaves nothing of the account on the page, and nothing kept',
+      !['A', 'B', 'C'].some((k) => card(page3, `user_a-${k}`)) && takeKept('user_a') === null);
+    page3.unmountLayout(); page3.unmountPassive();
+    await drain();
+  });
+
+  await pageCase('page: a return lets go of what the server no longer has (AUDIT keep-place r1, M2)', async () => {
+    const page = await open('user_a');
+    page.unmountLayout(); page.unmountPassive();
+    await drain();
+    world = { pushes: [], saved: [], revoked: new Set(), cleaning: {}, deletes: [], deleteStatus: 200, lists: 0, images: 0, deletedIds: new Set(['user_a-B']) };
+    globalThis.__galleryUser = 'user_a';
+    const back = mount(GalleryPage);
+    await until(() => card(back, 'user_a-A'), 'the kept cards');
+    await until(() => !card(back, 'user_a-B'), 'the one deleted elsewhere gone');
+    const order = find(back.value, (p) => p.entry && p.onSendToSlicer).map((p) => p.entry.jobId);
+    check('page: a generation deleted on another device while away leaves on the return, and nothing is called new',
+      order.join(',') === 'user_a-A,user_a-C' && !find(back.value, (p) => p.role === 'status').map((p) => textOf(p.children)).join('|').includes('new generation'), { order });
+    back.unmountLayout(); back.unmountPassive();
+    await drain();
+    // Everything deleted elsewhere: the empty first page is an empty list.
+    const page2 = await open('user_a');
+    page2.unmountLayout(); page2.unmountPassive();
+    await drain();
+    world = { pushes: [], saved: [], revoked: new Set(), cleaning: {}, deletes: [], deleteStatus: 200, lists: 0, images: 0, deletedIds: new Set(['user_a-A', 'user_a-B', 'user_a-C']) };
+    const back2 = mount(GalleryPage);
+    await until(() => textOf(back2.value).includes('No generations yet'), 'an empty Gallery');
+    check('page: everything deleted elsewhere: the return ends on an empty Gallery', textOf(back2.value).includes('No generations yet'));
+    back2.unmountLayout(); back2.unmountPassive();
+    await drain();
+  });
+
+  await pageCase('page: a Clear right after a return waits for the first page and counts what was made while away (AUDIT keep-place r1, M3)', async () => {
+    const page = await open('user_a');
+    page.unmountLayout(); page.unmountPassive();
+    await drain();
+    world = { pushes: [], saved: [], revoked: new Set(), cleaning: {}, deletes: [], deleteStatus: 200, lists: 0, images: 0, deletedAll: 5, listHold: true,
+      newer: [{ jobId: 'user_a-N', prompt: 'N', style: 'rd_fast__default', mode: 'create', createdAt: 4, v: 1 }, { jobId: 'user_a-M', prompt: 'M', style: 'rd_fast__default', mode: 'create', createdAt: 5, v: 1 }] };
+    const back = mount(GalleryPage);
+    await until(() => card(back, 'user_a-A'), 'the kept cards');
+    const clear = find(back.value, (p) => typeof p.onClick === 'function' && textOf(p.children).includes('Clear all'))[0];
+    if (clear) clear.onClick();
+    await drain();
+    const askedBefore = (world.asked || []).length;
+    world.listHold = false;
+    if (world.releaseList) world.releaseList();
+    await drain();
+    const said = find(back.value, (p) => p.role === 'status').map((p) => textOf(p.children)).join('|');
+    check('page: Clear asks only once the first page is in, counting the 2 made while away, and says no generation was made after the press',
+      !!clear && askedBefore === 0 && (world.asked || []).join('|') === 'Delete all 5 generations? This cannot be undone.' && said.includes('Deleted 5 generations.') && !said.includes('made after'),
+      { asked: world.asked, said });
+    back.unmountLayout(); back.unmountPassive();
+    await drain();
+  });
+
+  await pageCase('page: a return scrolled down holds new generations behind "Show 2 new" until pressed (DESIGN 2026-11-14-278; AUDIT keep-place r1, M4)', async () => {
+    const page = await open('user_a');
+    page.unmountLayout(); page.unmountPassive();
+    await drain();
+    // Kept as if scrolled down: the return lands there.
+    const kept = takeKept('user_a');
+    if (kept) keepGallery({ ...kept, scrollTop: 600 });
+    const newer = [{ jobId: 'user_a-N', prompt: 'N', style: 'rd_fast__default', mode: 'create', createdAt: 5, v: 1 }, { jobId: 'user_a-M', prompt: 'M', style: 'rd_fast__default', mode: 'create', createdAt: 4, v: 1 }];
+    world = { pushes: [], saved: [], revoked: new Set(), cleaning: {}, deletes: [], deleteStatus: 200, lists: 0, images: 0, newer };
+    const back = mount(GalleryPage);
+    await until(() => card(back, 'user_a-A'), 'the kept cards');
+    const button = () => find(back.value, (p) => typeof p.onClick === 'function' && textOf(p.children) === 'Show 2 new')[0];
+    await until(() => button(), 'the Show 2 new button');
+    const order = () => find(back.value, (p) => p.entry && p.onSendToSlicer).map((p) => p.entry.jobId).join(',');
+    const said = () => find(back.value, (p) => p.role === 'status').map((p) => textOf(p.children)).join('|');
+    check('page: scrolled down, the two new wait: the cards on screen do not change, the count line counts only them, and the button and its line say so',
+      !!kept && order() === 'user_a-A,user_a-B,user_a-C' && textOf(back.value).includes('3 generations ·') &&
+      button()['aria-label'] === 'Show 2 new generations' && said().includes('2 new generations. Press Show 2 new at the top of the page to see them.'),
+      { order: order(), said: said() });
+    button().onClick();
+    await drain();
+    check('page: pressed, the two new go in on top, newest first, the count line counts them, and the button goes',
+      order() === 'user_a-N,user_a-M,user_a-A,user_a-B,user_a-C' && textOf(back.value).includes('5 generations ·') && !button(),
+      { order: order() });
+    back.unmountLayout(); back.unmountPassive();
+    await drain();
+    // At the very top they go straight in.
+    const page2 = await open('user_a');
+    page2.unmountLayout(); page2.unmountPassive();
+    await drain();
+    world = { pushes: [], saved: [], revoked: new Set(), cleaning: {}, deletes: [], deleteStatus: 200, lists: 0, images: 0, newer };
+    const top = mount(GalleryPage);
+    await until(() => card(top, 'user_a-N'), 'the new cards at the top');
+    check('page: at the very top the two new go straight in, with no button',
+      find(top.value, (p) => p.entry && p.onSendToSlicer).map((p) => p.entry.jobId).join(',') === 'user_a-N,user_a-M,user_a-A,user_a-B,user_a-C' &&
+      !find(top.value, (p) => typeof p.onClick === 'function' && /^Show \d+ new$/.test(textOf(p.children)))[0]);
+    top.unmountLayout(); top.unmountPassive();
+    await drain();
+    // Waiting ones are counted by a Clear.
+    const page3 = await open('user_a');
+    page3.unmountLayout(); page3.unmountPassive();
+    await drain();
+    const kept3 = takeKept('user_a');
+    if (kept3) keepGallery({ ...kept3, scrollTop: 600 });
+    world = { pushes: [], saved: [], revoked: new Set(), cleaning: {}, deletes: [], deleteStatus: 200, lists: 0, images: 0, newer, deletedAll: 5 };
+    const away = mount(GalleryPage);
+    await until(() => find(away.value, (p) => typeof p.onClick === 'function' && textOf(p.children) === 'Show 2 new')[0], 'the Show 2 new button');
+    const clear = find(away.value, (p) => typeof p.onClick === 'function' && textOf(p.children).includes('Clear all'))[0];
+    if (clear) clear.onClick();
+    await drain();
+    const said3 = find(away.value, (p) => p.role === 'status').map((p) => textOf(p.children)).join('|');
+    check('page: a Clear while two new wait counts them: it asks for 5 and says 5 were deleted, none made after the press',
+      !!clear && (world.asked || []).join('|') === 'Delete all 5 generations? This cannot be undone.' && said3.includes('Deleted 5 generations.') && !said3.includes('made after'),
+      { asked: world.asked, said: said3 });
+    away.unmountLayout(); away.unmountPassive();
+    await drain();
+  });
+
+  await pageCase('page: AUDIT keep-place r2, N2 and N3', async () => {
+    // N2: kept with pages unread; everything deleted while away.
+    const page = await open('user_a');
+    page.unmountLayout(); page.unmountPassive();
+    await drain();
+    const kept = takeKept('user_a');
+    if (kept) keepGallery({ ...kept, cursor: 'c1', paged: true });
+    world = { pushes: [], saved: [], revoked: new Set(), cleaning: {}, deletes: [], deleteStatus: 200, lists: 0, images: 0, deletedIds: new Set(['user_a-A', 'user_a-B', 'user_a-C']) };
+    const back = mount(GalleryPage);
+    await until(() => textOf(back.value).includes('No generations yet'), 'an empty Gallery');
+    check('page: a gallery emptied while away, with pages unread when kept, ends on the empty Gallery with no "Load more" (N2)',
+      !!kept && textOf(back.value).includes('No generations yet') && !textOf(back.value).includes('Not all loaded yet') && !textOf(back.value).includes('Load more'));
+    back.unmountLayout(); back.unmountPassive();
+    await drain();
+    // N3: more new ones than a page while away, and a Clear pressed while the quiet read is on its way.
+    const page2 = await open('user_a');
+    page2.unmountLayout(); page2.unmountPassive();
+    await drain();
+    const fresh = ['X', 'Y', 'Z'].map((k, i) => ({ jobId: `user_a-${k}`, prompt: k, style: 'rd_fast__default', mode: 'create', createdAt: 10 + i, v: 1 }));
+    world = { pushes: [], saved: [], revoked: new Set(), cleaning: {}, deletes: [], deleteStatus: 200, lists: 0, images: 0, listHold: true, pageOnly: fresh };
+    const gap = mount(GalleryPage);
+    await until(() => card(gap, 'user_a-A'), 'the kept cards');
+    const clear = find(gap.value, (p) => typeof p.onClick === 'function' && textOf(p.children).includes('Clear all'))[0];
+    if (clear) clear.onClick();
+    await drain();
+    world.listHold = false;
+    if (world.releaseList) world.releaseList();
+    await until(() => card(gap, 'user_a-X'), 'the gallery read from the top');
+    await drain();
+    const said = find(gap.value, (p) => p.role === 'status').map((p) => textOf(p.children)).join('|');
+    check('page: a Clear pressed as the return finds more new ones than a page deletes nothing and, after the read from the top, says why (N3)',
+      !!clear && world.deletes.length === 0 && (world.asked || []).length === 0 && said.includes('Nothing was deleted'), { said, deletes: world.deletes.length });
+    gap.unmountLayout(); gap.unmountPassive();
+    await drain();
+  });
+
+  await pageCase('page: Clear all deleted more than it counted', async () => {
+    const page = await open('user_a');
+    world.deletedAll = 5;
+    const clear = find(page.value, (p) => typeof p.onClick === 'function' && textOf(p.children).includes('Clear all'))[0];
+    if (clear) clear.onClick();
+    await drain();
+    const said = find(page.value, (p) => p.role === 'status').map((p) => textOf(p.children)).join('|');
+    check('page: Clear all that deleted 5 where it counted 3 says so',
+      !!clear && said.includes('Deleted 5 generations, including 2 made after you pressed Clear all.'), { said });
+    page.unmountLayout(); page.unmountPassive();
+  });
+
+  await pageCase('page: a refused Clear keeps a Send to Slicer', async () => {
+    // The send waits on A; Clear all is refused: nothing was deleted, so the
+    // send goes ahead (DESIGN 2026-11-14-230). When the Clear goes through,
+    // it does not.
+    const page = await open('user_a');
+    card(page, 'user_a-A').onSendToSlicer();
+    world.deleteStatus = 401;
+    const clear = find(page.value, (p) => typeof p.onClick === 'function' && textOf(p.children).includes('Clear all'))[0];
+    if (clear) clear.onClick();
+    await drain();
+    if (world.cleaning['user_a-A']) world.cleaning['user_a-A']();
+    await drain();
+    const h = handedOver();
+    check('page: a refused Clear sends the set-aside Send to Slicer again, once',
+      !!clear && !!h && h.style === 'any_animation_walking' && world.pushes.length === 1 && !!card(page, 'user_a-A'), { h, pushes: world.pushes });
+    page.unmountLayout(); page.unmountPassive();
+    const done = await open('user_a');
+    card(done, 'user_a-A').onSendToSlicer();
+    const clear2 = find(done.value, (p) => typeof p.onClick === 'function' && textOf(p.children).includes('Clear all'))[0];
+    if (clear2) clear2.onClick();
+    await drain();
+    if (world.cleaning['user_a-A']) world.cleaning['user_a-A']();
+    await drain();
+    check('page: a Clear that went through does not send it', handedOver() === null && world.pushes.length === 0, { pushes: world.pushes });
+    done.unmountLayout(); done.unmountPassive();
   });
 
   await pageCase('page: URL survival', async () => {

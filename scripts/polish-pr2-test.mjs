@@ -247,7 +247,8 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     && !/setSheetReadySrc/.test(read('src/components/sprites/GenerationResult.tsx')));
 
   const gallery = stripComments(read('src/app/gallery/page.tsx'));
-  const loadingAt = gallery.indexOf('if (loading) {');
+  // The loading branch also waits while the list on the page was read for another account (keep the place, AUDIT r1 C1).
+  const loadingAt = gallery.indexOf('if (loading || (userId !== undefined && listOwner !== (userId ?? null) && !error)) {');
   const emptyAt = gallery.indexOf('No generations yet');
   const loadingBlock = loadingAt < 0 ? '' : gallery.slice(loadingAt, gallery.indexOf('if (error) {', loadingAt));
   check('4: the Gallery shows "No generations yet" only when not loading',

@@ -79,6 +79,9 @@ export interface PassPorts<Pictures> {
   commit: (page: { fresh: GalleryEntryV1[]; cursor: string | null; pictures: Pictures }) => void;
   /** Pictures read for a visit that ended meanwhile: release them. */
   drop: (pictures: Pictures) => void;
+  /** True: stop before the next read (a kind a Clear has emptied). Never
+   *  stops when absent. */
+  stop?: () => boolean;
 }
 
 export interface PassResult {
@@ -87,6 +90,8 @@ export interface PassResult {
   state: 'none' | 'done' | 'failed' | 'ended';
   /** Cards the pass put in view under the filter. */
   added: number;
+  /** Entries the pass read and put in the list, of any kind. */
+  read: number;
   pagesRead: number;
   /** Stopped at the page cap with more to read and its goal unmet. */
   capped: boolean;
@@ -104,27 +109,34 @@ export async function runGalleryPass<Pictures>(
 ): Promise<PassResult> {
   const goal = ports.cursor() === null ? 0 : passGoal(trigger, ports.shown());
   let added = 0;
+  let read = 0;
   let pagesRead = 0;
-  if (goal === 0) return { state: 'none', added, pagesRead, capped: false };
+  const stop = ports.stop ?? (() => false);
+  if (goal === 0) return { state: 'none', added, read, pagesRead, capped: false };
   try {
-    while (passContinues({ added, goal, pagesRead, more: ports.cursor() !== null })) {
+    // A stop (a Clear has emptied the kind shown) is read before each list
+    // page and before its pictures, so a pass on its way reads no further
+    // (AUDIT gallery-paging-r3, L3-2).
+    while (!stop() && passContinues({ added, goal, pagesRead, more: ports.cursor() !== null })) {
       const page = await ports.read(ports.cursor());
-      if (!ports.current()) return { state: 'ended', added, pagesRead, capped: false };
+      if (!ports.current()) return { state: 'ended', added, read, pagesRead, capped: false };
+      if (stop()) break;
       const fresh = newEntries(ports.known(), page.entries);
       const pictures = await ports.pictures(fresh);
       if (!ports.current()) {
         ports.drop(pictures);
-        return { state: 'ended', added, pagesRead, capped: false };
+        return { state: 'ended', added, read, pagesRead, capped: false };
       }
       ports.commit({ fresh, cursor: page.cursor, pictures });
       pagesRead += 1;
+      read += fresh.length;
       added += fresh.filter(ports.matches).length;
     }
   } catch {
-    return { state: ports.current() ? 'failed' : 'ended', added, pagesRead, capped: false };
+    return { state: ports.current() ? 'failed' : 'ended', added, read, pagesRead, capped: false };
   }
-  const capped = ports.cursor() !== null && added < goal && pagesRead >= PASS_MAX_PAGES;
-  return { state: 'done', added, pagesRead, capped };
+  const capped = !stop() && ports.cursor() !== null && added < goal && pagesRead >= PASS_MAX_PAGES;
+  return { state: 'done', added, read, pagesRead, capped };
 }
 
 /** The line under the title. With pages unread the total is not known, so
@@ -162,12 +174,48 @@ export function passEndLine(state: {
   read: number;
   /** Pages are still unread. */
   more: boolean;
+  /** Entries this pass read, of any kind (0 when absent). */
+  readThisPass?: number;
 }): string {
   if (state.added > 0) return loadedLine(state.added);
   if (state.filter !== 'all' && state.shown === 0) {
     return state.more ? noneYetLine(state.filter, state.read) : noneAtEndLine(state.filter);
   }
+  // Cards of the kind show, the pass read some and found none of it, and
+  // pages remain (AUDIT gallery-paging-r1, L3, the case logged).
+  if (state.filter !== 'all' && state.more && (state.readThisPass ?? 0) > 0) return noneNextLine(state.filter, state.readThisPass!);
   return !state.more && state.shown > 0 ? END_LINE : '';
+}
+
+/** Under a filter with cards showing: a pass read `read` more and found
+ *  none of the kind, and pages remain. Shown beside "Load more" and said
+ *  once (DESIGN 2026-11-14-230). */
+export function noneNextLine(filter: JobMode, read: number): string {
+  return `None of the next ${read} were ${kindOf(filter)}. Load more looks further.`;
+}
+
+/** What a return to the Gallery says once, hidden, when its quiet read found
+ *  new generations of the kind shown (DESIGN 2026-11-14-230). */
+export function newAtTopLine(count: number): string {
+  return count === 1 ? '1 new generation at the top.' : `${count} new generations at the top.`;
+}
+
+/**
+ * Scrolled down, new generations a return found wait behind a button in the
+ * app's top bar, so nothing on screen moves (DESIGN 2026-11-14-278; words HQ
+ * 2026-11-14-282): its label, its accessible name, and the hidden line said
+ * once when it appears.
+ */
+export function showNewLabel(count: number): string {
+  return `Show ${count} new`;
+}
+export function showNewName(count: number): string {
+  return count === 1 ? 'Show 1 new generation' : `Show ${count} new generations`;
+}
+export function newWaitingLine(count: number): string {
+  return count === 1
+    ? '1 new generation. Press Show 1 new at the top of the page to see it.'
+    : `${count} new generations. Press Show ${count} new at the top of the page to see them.`;
 }
 
 /**
@@ -245,6 +293,24 @@ export function noneYetLine(filter: JobMode, read: number): string {
 /** Under a filter, a list that ended with no card of that kind. */
 export function noneAtEndLine(filter: JobMode): string {
   return `No ${kindOf(filter)} generations.`;
+}
+
+/** What Clear all says when the server deleted more than it counted: the
+ *  generations made after the press went too (AUDIT gallery-paging-r1, L1;
+ *  DESIGN 2026-11-14-230). Clear all only: a kind's Clear deletes only what
+ *  it counted (HQ 2026-11-14-232). */
+export function clearMoreLine(deleted: number, extra: number): string {
+  return `Deleted ${deleted} generations, including ${extra} made after you pressed ${clearLabel('all')}.`;
+}
+
+/** An emptied Gallery after Clear all, this visit: its heading, and the
+ *  line under it in place of the usual words (DESIGN 2026-11-14-243). The
+ *  total is the server's own count; the more line when it deleted more than
+ *  the press counted. */
+export const CLEARED_HEADING = 'Gallery cleared';
+export function clearedLine(deleted: number, asked: number): string {
+  if (deleted > asked) return clearMoreLine(deleted, deleted - asked);
+  return `Deleted ${deleted} generation${deleted === 1 ? '' : 's'}.`;
 }
 
 /** What Clear says while the server deletes. */

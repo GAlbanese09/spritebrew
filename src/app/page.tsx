@@ -279,7 +279,11 @@ export default function LandingPage() {
             <p>SpriteBrew is built by an indie developer who got tired of frame-by-frame animation.</p>
             <p>AI assists your workflow — you stay the creative director.</p>
             <p>Your creations are yours. Full commercial rights, no strings.</p>
-            <p>Free tools (slicer, editor, exporter) work without AI and without an account.</p>
+            <p>
+              Free tools (slicer, editor, exporter,{' '}
+              <Link href="/resize" className="text-[#d4871c] underline underline-offset-2 hover:text-[#e8991f]">resizer</Link>
+              ) work without AI and without an account.
+            </p>
           </div>
           <a
             href="https://github.com/GAlbanese09/spritebrew"

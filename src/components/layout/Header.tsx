@@ -9,6 +9,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/preview': 'Preview & Play',
   '/export': 'Export',
   '/gallery': 'Gallery',
+  '/resize': 'Resize',
   '/generate': 'AI Generate',
   '/buy-tokens': 'Buy Tokens',
   '/refund-policy': 'Refund Policy',

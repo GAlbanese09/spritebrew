@@ -13,6 +13,7 @@ import {
   Coins,
   MessageCircle,
   Pencil,
+  Scaling,
   X,
   LogIn,
 } from 'lucide-react';
@@ -32,6 +33,7 @@ const NAV_ITEMS = [
   { href: '/export', label: 'Export', icon: Download, soon: false },
   { href: '/gallery', label: 'Gallery', icon: Images, soon: false },
   { href: '/editor', label: 'Edit', icon: Pencil, soon: false },
+  { href: '/resize', label: 'Resize', icon: Scaling, soon: false },
   { href: '/generate', label: 'Generate', icon: Sparkles, soon: false },
   { href: '/buy-tokens', label: 'Buy Tokens', icon: Coins, soon: false },
 ];
@@ -57,6 +59,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
       <aside
         className={`
           fixed top-0 left-0 z-50 flex h-full w-[var(--sidebar-width)] flex-col
+          overflow-y-auto overscroll-contain
           border-r border-border-default bg-bg-secondary
           transition-transform duration-200 ease-in-out
           lg:translate-x-0

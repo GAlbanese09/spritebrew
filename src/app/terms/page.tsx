@@ -4,7 +4,7 @@ export default function TermsPage() {
   return (
     <div className="max-w-2xl mx-auto px-6 py-12">
       <h1 className="text-lg font-display text-accent-amber mb-1">Terms of Service</h1>
-      <p className="text-xs font-mono text-text-muted mb-8">Last updated: May 3, 2026</p>
+      <p className="text-xs font-mono text-text-muted mb-8">Last updated: November 17, 2026</p>
 
       <div className="space-y-6 text-sm font-mono text-text-secondary leading-relaxed">
         <p>By using SpriteBrew, you agree to these terms.</p>
@@ -116,7 +116,7 @@ export default function TermsPage() {
         <section>
           <h2 className="text-sm font-display text-text-primary mb-3">Open Source</h2>
           <p>
-            SpriteBrew&apos;s source code is available under the AGPL-3.0 license at{' '}
+            The source code of the SpriteBrew web app is available under the AGPL-3.0 license at{' '}
             <a
               href="https://github.com/GAlbanese09/spritebrew"
               target="_blank"
@@ -126,7 +126,7 @@ export default function TermsPage() {
               github.com/GAlbanese09/spritebrew
             </a>
             . If you deploy a modified version as a service, you must release your changes under the
-            same license.
+            same license. The service that runs generations behind the app is not open source.
           </p>
         </section>
 

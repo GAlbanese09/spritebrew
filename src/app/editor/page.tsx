@@ -145,7 +145,7 @@ export default function EditorPage() {
       // catching here keeps the user on the landing with a clear message
       // instead of bouncing through the body's error UI.
       if (!dimsWithinEditorLimits(img.naturalWidth, img.naturalHeight)) {
-        setHandoffError(editorDimsRejectionMessage(img.naturalWidth, img.naturalHeight));
+        setHandoffError(editorDimsRejectionMessage(img.naturalWidth, img.naturalHeight, 'card'));
         setIsLoadingHandoff(false);
         return;
       }
@@ -349,6 +349,7 @@ export default function EditorPage() {
             onSave={() => {}}
             onDismiss={() => dismissDraft(pending.draftKey)}
             layout="page"
+            refusalPlace="page"
             source={pending.source}
             draftKey={pending.draftKey}
           />
@@ -361,6 +362,7 @@ export default function EditorPage() {
             onSave={() => {}}
             onDismiss={() => dismissDraft(pending.draftKey)}
             layout="page"
+            refusalPlace="page"
             source={pending.envelope.source}
             restore={{ envelope: pending.envelope, bytes: pending.bytes }}
             draftKey={pending.draftKey}

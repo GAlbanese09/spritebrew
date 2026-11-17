@@ -1178,6 +1178,7 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
           onSave={handleEditorSave}
           onClose={() => setEditorSnapshot(null)}
           source={{ kind: 'generation' }}
+          refusalPlace="card"
         />
       )}
     </div>

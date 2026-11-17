@@ -212,6 +212,7 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
           onClose={() => setEditingFrameId(null)}
           source={{ kind: 'sheet-import' }}
           onion={editingOnion}
+          refusalPlace="plain"
         />
       )}
     </div>

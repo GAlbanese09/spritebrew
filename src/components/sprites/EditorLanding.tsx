@@ -108,7 +108,7 @@ export default function EditorLanding({
     if (!dimsWithinEditorLimits(w, h)) {
       // Revoke the blob URL we won't be using.
       URL.revokeObjectURL(blobUrl);
-      setUploadError(editorDimsRejectionMessage(w, h));
+      setUploadError(editorDimsRejectionMessage(w, h, 'page'));
       return;
     }
     setUploadError(null);

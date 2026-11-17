@@ -15,7 +15,7 @@
  * Pure module — no React, no Zustand. Safe to call from any context.
  */
 
-import { EDITOR_MAX_DIMENSION, EDITOR_MAX_PIXELS } from '@/lib/editorConstants';
+import { EDITOR_MAX_DIMENSION, EDITOR_MAX_PIXELS, editorSizeRefusal } from '@/lib/editorConstants';
 import { hexToRgb } from '@/lib/colorUtils';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -367,21 +367,12 @@ export function validateProject(input: unknown): ValidateProjectResult {
     return { ok: false, error: 'Project canvas is missing.' };
   }
   if (!isFinitePositiveInt(canvas.width) || !isFinitePositiveInt(canvas.height)) {
-    return { ok: false, error: 'Canvas width/height must be positive integers.' };
+    return { ok: false, error: editorSizeRefusal(typeof canvas.width === 'number' ? canvas.width : Number.NaN, typeof canvas.height === 'number' ? canvas.height : Number.NaN, 'project') };
   }
   const cw = canvas.width as number;
   const ch = canvas.height as number;
-  if (cw > EDITOR_MAX_DIMENSION || ch > EDITOR_MAX_DIMENSION) {
-    return {
-      ok: false,
-      error: `Canvas ${cw}×${ch} exceeds the editor's ${EDITOR_MAX_DIMENSION}-per-side limit.`,
-    };
-  }
-  if (cw * ch > EDITOR_MAX_PIXELS) {
-    return {
-      ok: false,
-      error: `Canvas ${cw}×${ch} exceeds the editor's ${EDITOR_MAX_PIXELS.toLocaleString()}-total-pixel limit.`,
-    };
+  if (cw > EDITOR_MAX_DIMENSION || ch > EDITOR_MAX_DIMENSION || cw * ch > EDITOR_MAX_PIXELS) {
+    return { ok: false, error: editorSizeRefusal(cw, ch, 'project') };
   }
   if (typeof canvas.transparent !== 'boolean') {
     return { ok: false, error: 'Canvas transparent flag must be a boolean.' };

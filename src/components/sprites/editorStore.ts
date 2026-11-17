@@ -14,6 +14,8 @@ import { cleanResidue as cleanResiduePixels } from '@/lib/residueCleanup';
 import {
   EDITOR_MAX_DIMENSION,
   EDITOR_MAX_PIXELS,
+  editorSizeRefusal,
+  type EditorRefusalPlace,
 } from '@/lib/editorConstants';
 import {
   ACTIVE_FRAME_MEMORY_KEY,
@@ -34,9 +36,10 @@ const MAX_HISTORY = 50;
 // importers of editorStore see no surface change.
 export { EDITOR_MAX_DIMENSION, EDITOR_MAX_PIXELS };
 
-/** Friendly message for the over-limit error path. */
-export function editorDimsRejectionMessage(w: number, h: number): string {
-  return `Image is too large for the editor (${w}×${h}). Max ${EDITOR_MAX_DIMENSION}×${EDITOR_MAX_DIMENSION} per side, up to ${EDITOR_MAX_PIXELS.toLocaleString()} total pixels.`;
+/** The refusal for an image over the caps, in DESIGN's words: `place` says
+ *  whether the editor was opened from a result card or on /editor itself. */
+export function editorDimsRejectionMessage(w: number, h: number, place: EditorRefusalPlace = 'page'): string {
+  return editorSizeRefusal(w, h, place);
 }
 
 /** True when (w, h) fit the editor's load caps. */
@@ -643,7 +646,7 @@ export const useEditorStore = create<PixelEditorState>()(
       if (!originalPixels || !pixels) return;
       if (originalPixels.length !== pixels.length) return; // defensive
       // Byte-equal check, early-exit on first diff. Cheap at editor sizes
-      // (≤ EDITOR_MAX_PIXELS × 4 bytes = ~4 MB worst case at 1024×1024).
+      // (≤ EDITOR_MAX_PIXELS × 4 bytes = ~4 MB worst case at the total cap).
       let equal = true;
       for (let i = 0; i < originalPixels.length; i++) {
         if (originalPixels[i] !== pixels[i]) { equal = false; break; }

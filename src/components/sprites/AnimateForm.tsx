@@ -1548,7 +1548,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
               <X size={12} />
             </button>
           </div>
-          {generationError.includes('top up') && (
+          {/* Case-blind, as on Create: the free-tier cap's message reads "Top up" (REV 2026-11-17-006, H1; REV-M1, 2026-11-17-012). */}
+          {/top up/i.test(generationError) && (
             <a
               href="/buy-tokens"
               className="inline-block mt-2 ml-6 px-3 py-1.5 rounded text-[10px] font-mono

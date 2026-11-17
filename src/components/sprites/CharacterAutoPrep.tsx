@@ -372,7 +372,7 @@ export default function CharacterAutoPrep({
           <h3 className="text-xs font-mono font-semibold text-text-primary uppercase tracking-wider mb-1">
             Auto-prep Character
           </h3>
-          <p className="text-[10px] font-mono text-text-muted leading-relaxed">
+          <p className="text-[10px] font-mono text-text-secondary leading-relaxed">
             Detecting your character, cropping, removing the background, and
             resizing to {targetSize}x{targetSize}. Adjust the tolerance or
             use the pixel editor to fix details.
@@ -402,7 +402,7 @@ export default function CharacterAutoPrep({
           <div className="flex items-center gap-6 justify-center py-2">
             {/* Original */}
             <div className="text-center">
-              <p className="text-[9px] font-mono text-text-muted mb-1.5 uppercase tracking-wider">
+              <p className="text-[9px] font-mono text-text-secondary mb-1.5 uppercase tracking-wider">
                 Original ({sourceWidth}x{sourceHeight})
               </p>
               <div
@@ -423,7 +423,7 @@ export default function CharacterAutoPrep({
               </div>
             </div>
 
-            <span className="text-text-muted text-lg font-mono">&rarr;</span>
+            <span className="text-text-secondary text-lg font-mono">&rarr;</span>
 
             {/* Prepared */}
             <div className="text-center">
@@ -482,12 +482,12 @@ export default function CharacterAutoPrep({
                 <span className="text-[11px] font-mono font-semibold text-text-primary">
                   Skip background removal (keep original background)
                 </span>
-                <Info size={11} className="text-text-muted" />
+                <Info size={11} className="text-text-secondary" />
               </label>
               {!skipBgRemoval && (
                 <>
                   <div className="flex items-center gap-3">
-                    <label className="text-[10px] font-mono text-text-muted w-20 flex-shrink-0">
+                    <label className="text-[10px] font-mono text-text-secondary w-20 flex-shrink-0">
                       BG Removal
                     </label>
                     <input
@@ -502,7 +502,7 @@ export default function CharacterAutoPrep({
                       {tolerance}
                     </span>
                   </div>
-                  <p className="text-[9px] font-mono text-text-muted">
+                  <p className="text-[9px] font-mono text-text-secondary">
                     Increase if background pixels remain. Decrease if character pixels are being removed.
                     {editedBaseDataUrl && (
                       <span className="text-amber-400 ml-1">(changing will reset manual edits)</span>
@@ -562,20 +562,20 @@ export default function CharacterAutoPrep({
                 <span className="text-[11px] font-mono font-semibold text-text-primary">
                   Animation Padding
                 </span>
-                <Info size={11} className="text-text-muted" />
+                <Info size={11} className="text-text-secondary" />
               </label>
               {paddingEnabled && (
                 <span className="text-[10px] font-mono text-accent-amber">{characterSizePct}%</span>
               )}
             </div>
-            <p className="text-[9px] font-mono text-text-muted leading-relaxed">
+            <p className="text-[9px] font-mono text-text-secondary leading-relaxed">
               Shrinks character to leave room for weapon swings and motion effects.
               Recommended for attack, jump, and destroy animations.
             </p>
             {paddingEnabled && (
               <div className="space-y-1">
                 <div className="flex items-center gap-3">
-                  <span className="text-[9px] font-mono text-text-muted w-16">Character Size</span>
+                  <span className="text-[9px] font-mono text-text-secondary w-16">Character Size</span>
                   <input
                     type="range" min={50} max={95} step={5}
                     value={characterSizePct}
@@ -638,7 +638,7 @@ export default function CharacterAutoPrep({
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-start justify-between gap-3">
-      <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider flex-shrink-0">
+      <span className="text-[10px] font-mono text-text-secondary uppercase tracking-wider flex-shrink-0">
         {label}
       </span>
       <span className="text-[11px] font-mono text-text-primary text-right">{value}</span>

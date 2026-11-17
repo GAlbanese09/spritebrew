@@ -629,6 +629,7 @@ export default function CharacterAutoPrep({
           onSave={handleEditorSave}
           onClose={() => setEditorOpen(false)}
           source={{ kind: 'upload' }}
+          refusalPlace="plain"
         />
       )}
     </div>

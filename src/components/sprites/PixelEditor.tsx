@@ -10,6 +10,7 @@ import { useEditorStore, selectIsDirty, selectHasPixelChanges } from './editorSt
 import { closeEditorDraft, discardEditorDraft } from './useEditorRecovery';
 import { useEditorHistoryGuard } from './useEditorHistoryGuard';
 import type { SpriteProjectSource } from '@/lib/spriteProject';
+import type { EditorRefusalPlace } from '@/lib/editorConstants';
 import { pixelsToPngDataUrl } from '@/lib/editorImage';
 import { newDraftKey } from '@/lib/editorRecovery';
 import { unsavedEditsText } from '@/lib/editorCopy';
@@ -34,6 +35,9 @@ interface PixelEditorProps {
    *  its animation, nearest first (null where a frame has no image). Only
    *  FrameGrid on /upload knows them today. */
   onion?: OnionSources;
+  /** Picks the last sentence of a too-large refusal: 'card' from a result
+   *  card, 'plain' where no way out exists (see PixelEditorBody). */
+  refusalPlace: EditorRefusalPlace;
 }
 
 export default function PixelEditor({
@@ -44,6 +48,7 @@ export default function PixelEditor({
   onClose,
   source,
   onion,
+  refusalPlace,
 }: PixelEditorProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   // This session's own draft: its edits are saved under it as the user
@@ -134,6 +139,7 @@ export default function PixelEditor({
               onDismiss={attemptDismiss}
               onSaveClose={onClose}
               layout="modal"
+              refusalPlace={refusalPlace}
               source={source}
               draftKey={draftKey}
               onion={onion}

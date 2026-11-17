@@ -19,6 +19,7 @@ import {
   selectHasPixelChanges,
 } from './editorStore';
 import type { SpriteProjectSource, SpriteProjectV1 } from '@/lib/spriteProject';
+import type { EditorRefusalPlace } from '@/lib/editorConstants';
 import { scanResidue, residueOverlay } from '@/lib/residueCleanup';
 import {
   fitZoom,
@@ -47,7 +48,7 @@ import {
 } from '@/lib/onionSkin';
 
 /** How long after the last stroke change "Show residue" scans again. A
- *  scan at the editor's 1024 x 1024 cap takes about 5 to 25 ms (up to about
+ *  scan at the editor's total cap (1,048,576 pixels) takes about 5 to 25 ms (up to about
  *  110 ms on synthetic worst cases), so it never runs per stroke event, only
  *  once the edits pause. A wholesale change (flip, undo, redo, revert, clean,
  *  a new image) rescans at once, so old marks never sit on moved pixels. */
@@ -143,6 +144,12 @@ interface PixelEditorBodyProps {
   onSave: (newDataUrl: string) => void;
   onDismiss: () => void;
   layout: 'modal' | 'page';
+  /** Where a too-large image came from, which picks the refusal's last
+   *  sentence: 'page' on /editor, 'card' from a result card, 'plain' where
+   *  neither way out exists (/upload's frames, the Animate character). From
+   *  the caller, not the layout: the modal opens from all three (AUDIT,
+   *  editor size r1, M1). */
+  refusalPlace: EditorRefusalPlace;
   /**
    * Origin lineage for the loaded image (Wave 1b). Threaded into the
    * SpriteProjectV1 document via loadFrame so the editor's document model
@@ -197,6 +204,7 @@ export default function PixelEditorBody({
   onSave,
   onDismiss,
   layout,
+  refusalPlace,
   source,
   restore,
   onDiscardDraft,
@@ -463,7 +471,7 @@ export default function PixelEditorBody({
 
     // Pre-flight check on the props' declared dimensions.
     if (!dimsWithinEditorLimits(frameWidth, frameHeight)) {
-      setLoadError(editorDimsRejectionMessage(frameWidth, frameHeight));
+      setLoadError(editorDimsRejectionMessage(frameWidth, frameHeight, refusalPlace));
       return () => { reset(); };
     }
 
@@ -473,7 +481,7 @@ export default function PixelEditorBody({
       if (cancelled) return;
       // Double-check against the decoded natural dims in case the props lied.
       if (!dimsWithinEditorLimits(img.naturalWidth, img.naturalHeight)) {
-        setLoadError(editorDimsRejectionMessage(img.naturalWidth, img.naturalHeight));
+        setLoadError(editorDimsRejectionMessage(img.naturalWidth, img.naturalHeight, refusalPlace));
         return;
       }
       const tmp = document.createElement('canvas');

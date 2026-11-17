@@ -565,7 +565,7 @@ export default function SpriteDetector({
                 </p>
               ) : (
                 <p className="text-[9px] font-mono text-text-muted">
-                  Frames padded to the largest detected sprite&apos;s dimensions — no scaling applied.
+                  Frames padded to the largest detected sprite&apos;s dimensions, with no scaling applied.
                 </p>
               )}
             </div>

@@ -113,8 +113,9 @@ function Notice() {
 
   if (!generationError) return null;
 
+  // Case-blind for "top up": the free-tier cap's message reads "Top up" (REV 2026-11-17-006, H1).
   const showBuyLink =
-    generationError.includes('buy more tokens') || generationError.includes('top up');
+    generationError.includes('buy more tokens') || /top up/i.test(generationError);
 
   return (
     <AboveBar>

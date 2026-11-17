@@ -33,7 +33,7 @@ export default function TermsPage() {
           <p>
             Free accounts receive a one-time signup bonus of tokens and can earn additional tokens
             through daily login rewards, streak bonuses, and newsletter signup. Different AI styles cost different token
-            amounts&nbsp;&mdash; simpler styles cost fewer tokens, premium styles cost more. Tokens do
+            amounts: simpler styles cost fewer tokens, premium styles cost more. Tokens do
             not expire. We reserve the right to adjust token grants and costs at any time to manage
             costs. Abuse of the free tier (including creating multiple accounts to earn multiple
             signup bonuses) may result in account suspension.
@@ -82,7 +82,7 @@ export default function TermsPage() {
           <h2 className="text-sm font-display text-text-primary mb-3">Service Availability</h2>
           <p>
             SpriteBrew is provided &ldquo;as is&rdquo; without warranties. We&apos;re a solo
-            developer project&nbsp;&mdash; downtime happens, bugs exist, and features may change. We
+            developer project: downtime happens, bugs exist, and features may change. We
             do our best to keep the service running but cannot guarantee 100% uptime.
           </p>
           <p className="mt-3">

@@ -62,8 +62,7 @@ function LimitNoticeBanner() {
         Need more?{' '}
         <a href="/buy-tokens" className="text-accent-amber hover:underline">
           Purchase token packs
-        </a>{' '}
-        — they never expire.
+        </a>. They never expire.
       </p>
       <button
         onClick={handleDismiss}
@@ -312,14 +311,14 @@ export default function GeneratePage() {
             Create a free account to start generating AI pixel art sprite sheets.
           </p>
           <p className="text-xs font-mono text-text-muted mb-6">
-            Upload, slice, preview, and export are always free — no login needed.
+            Upload, slice, preview, and export are always free, with no login needed.
           </p>
           <SignInButton mode="modal">
             <button className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-md
               bg-accent-amber text-bg-primary text-sm font-mono font-semibold
               hover:bg-accent-amber-strong cursor-pointer transition-colors animate-pulse">
               <LogIn size={16} />
-              Sign In — It&apos;s Free
+              Sign In for Free
             </button>
           </SignInButton>
           <p className="mt-4 text-[10px] font-mono text-text-muted">

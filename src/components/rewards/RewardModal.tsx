@@ -126,7 +126,7 @@ function getRewardCopy(r: PendingReward): RewardCopy {
     case 'email_list':
       return {
         headline: 'Newsletter signup confirmed!',
-        body: `+${r.amount} tokens. Updates inbound — we don't spam. 📬`,
+        body: `+${r.amount} tokens. Updates inbound. We don't spam. 📬`,
       };
     case 'daily_login':
       return {

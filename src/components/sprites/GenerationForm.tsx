@@ -281,7 +281,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       const data = await consumeSSEStream(result.response);
 
       if (!data.success) {
-        setGenerationError(String(data.error ?? 'Generation failed — try a different prompt.'));
+        setGenerationError(String(data.error ?? 'Generation failed. Try a different prompt.'));
         return;
       }
 
@@ -305,7 +305,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       if (errObj.code === 'free_tier_cap_reached') {
         const tierLabel = errObj.tier === 'fast' ? 'Fast' : 'Pro';
         setGenerationError(
-          `You've used all free ${tierLabel} generations on this account. Token packs start at $4.99 — top up to keep brewing.`
+          `You've used all free ${tierLabel} generations on this account. Token packs start at $4.99. Top up to keep brewing.`
         );
         return;
       }
@@ -650,7 +650,8 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
               <X size={12} />
             </button>
           </div>
-          {generationError.includes('top up') && (
+          {/* Case-blind: the free-tier cap's message reads "Top up" (REV 2026-11-17-006, H1). */}
+          {/top up/i.test(generationError) && (
             <a
               href="/buy-tokens"
               className="inline-block mt-2 ml-6 px-3 py-1.5 rounded text-xs font-mono

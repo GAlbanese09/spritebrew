@@ -151,7 +151,7 @@ export default function EmailListPanel({ variant = 'full' }: EmailListPanelProps
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="text-sm font-mono font-semibold text-accent-amber">
-            Join the SpriteBrew newsletter — get {EMAIL_LIST_BONUS_TOKENS} tokens
+            Join the SpriteBrew newsletter and get {EMAIL_LIST_BONUS_TOKENS} tokens
           </h3>
           <p className="text-xs font-mono text-text-secondary mt-0.5">
             Product updates, new styles, launch news. We don&apos;t spam.
@@ -171,7 +171,7 @@ export default function EmailListPanel({ variant = 'full' }: EmailListPanelProps
                   text-xs font-mono text-text-primary cursor-not-allowed"
               />
               <p className="text-[10px] font-mono text-text-muted mt-1">
-                Locked to your account email — bonus credits this address only.
+                Locked to your account email. Bonus credits go to this address only.
               </p>
             </div>
           )}

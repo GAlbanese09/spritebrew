@@ -192,6 +192,11 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
   // shrink, so the three cards stay on a phone's screen (REV 2026-11-15-003, HQ -038).
   check('4: the landing page\'s pricing cards sit in one shrinkable column below 640 px',
     /<section id="pricing"[\s\S]{0,400}<div className="grid grid-cols-1 gap-4 sm:grid-cols-3">/.test(landing));
+  // In three columns the waitlist button goes under the email field, so the
+  // field keeps its width (AUDIT landing-pricing-r1, M1; HQ -066; W1, HQ -154).
+  check('4: the Pixel Pass waitlist puts Notify Me under the email field wherever the cards are in three columns (640 px and up)',
+    /<div className="flex gap-1\.5 sm:flex-col">\s*<input\s+type="email"/.test(landing) &&
+    /flex items-center justify-center gap-1\.5 flex-shrink-0"\s*>[\s{}]*\{submitting \? <span className="inline-flex h-4 items-center"><Loader2 size=\{12\} className="animate-spin" \/><\/span> : 'Notify Me'\}/.test(landing));
   const constImport = landing.match(/import \{([^}]*)\} from '@\/lib\/constants';/)?.[1] ?? '';
   const names = ['SIGNUP_BONUS_TOKENS', 'DAILY_LOGIN_TOKENS', 'STREAK_WEEKLY_BONUS_TOKENS', 'STREAK_INTERVAL_DAYS', 'EMAIL_LIST_BONUS_TOKENS'];
   check('4: the landing page imports the streak and bonus constants and uses them in the Free list',

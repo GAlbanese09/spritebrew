@@ -531,7 +531,11 @@ function PixelPassWaitlist() {
 
   return (
     <div className="space-y-2">
-      <div className="flex gap-1.5">
+      {/* Wherever the cards sit in three columns (640 px and up) the card is
+          too narrow for the field and the button side by side, so the button
+          goes under the field (AUDIT landing-pricing-r1, M1; HQ -066; AUDIT
+          waitlist-field-r1, W1, ruled by HQ -154). */}
+      <div className="flex gap-1.5 sm:flex-col">
         <input
           type="email"
           value={email}
@@ -549,9 +553,11 @@ function PixelPassWaitlist() {
           className="px-3 py-2 rounded-lg text-xs font-mono font-semibold
             border border-[#d4871c]/30 text-[#d4871c] hover:bg-[#d4871c]/10
             cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed
-            flex items-center gap-1.5 flex-shrink-0"
+            flex items-center justify-center gap-1.5 flex-shrink-0"
         >
-          {submitting ? <Loader2 size={12} className="animate-spin" /> : 'Notify Me'}
+          {/* The spinner keeps the line's height, so the button does not
+              shrink while it spins (AUDIT waitlist-field-r1, W3). */}
+          {submitting ? <span className="inline-flex h-4 items-center"><Loader2 size={12} className="animate-spin" /></span> : 'Notify Me'}
         </button>
       </div>
       {error && <p className="text-[10px] font-mono text-red-400">{error}</p>}

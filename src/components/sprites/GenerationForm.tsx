@@ -650,7 +650,8 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
               <X size={12} />
             </button>
           </div>
-          {generationError.includes('top up') && (
+          {/* Case-blind: the free-tier cap's message reads "Top up" (REV 2026-11-17-006, H1). */}
+          {/top up/i.test(generationError) && (
             <a
               href="/buy-tokens"
               className="inline-block mt-2 ml-6 px-3 py-1.5 rounded text-xs font-mono

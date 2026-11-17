@@ -1160,7 +1160,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
               </div>
               <div className="flex-1 min-w-0 max-[480px]:order-last max-[480px]:basis-full">
                 <p className="text-xs font-mono text-text-primary">Character ready</p>
-                <p className="text-xs font-mono text-text-muted mt-1">
+                <p className="text-xs font-mono text-text-secondary mt-1">
                   {charWidth}x{charHeight} · transparent background
                 </p>
                 {sizeWarning ? (
@@ -1177,7 +1177,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
                 type="button"
                 onClick={handleRemoveChar}
                 aria-label="Remove character"
-                className="ml-auto flex-shrink-0 p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"
+                className="ml-auto flex-shrink-0 p-1.5 rounded text-text-secondary hover:text-text-primary hover:bg-bg-hover cursor-pointer"
               >
                 <X size={16} />
               </button>
@@ -1204,7 +1204,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
               hover:border-border-strong hover:bg-bg-elevated"
           >
             <div className="flex items-center justify-center w-14 h-14 rounded-lg bg-bg-elevated mb-4">
-              <UploadCloud size={28} className="text-text-muted" />
+              <UploadCloud size={28} className="text-text-secondary" />
             </div>
             <p className="text-sm font-mono text-text-secondary text-center mb-1">
               Drop your pixel art character here
@@ -1212,7 +1212,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             <p className="text-xs font-mono text-text-secondary text-center text-balance mb-1">
               Works best on a plain background in a color your character doesn&apos;t use.
             </p>
-            <p className="text-xs font-mono text-text-muted text-center mb-3">
+            <p className="text-xs font-mono text-text-secondary text-center mb-3">
               PNG, JPG, or WebP &middot; any size, we&apos;ll auto-crop and resize
             </p>
             <Button
@@ -1247,9 +1247,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         </label>
         {currentMode.kind === 'locked' ? (
           <div className="inline-flex items-center gap-2 px-3 py-2 rounded bg-bg-elevated border border-border-default text-xs font-mono text-text-secondary">
-            <Lock size={12} className="text-text-muted" />
+            <Lock size={12} className="text-text-secondary" />
             {currentMode.size}&times;{currentMode.size}
-            <span className="text-[10px] text-text-muted">(locked for this style by Retro Diffusion)</span>
+            <span className="text-[10px] text-text-secondary">(locked for this style by Retro Diffusion)</span>
           </div>
         ) : (
           <div className="flex gap-1.5">
@@ -1271,16 +1271,16 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             ))}
           </div>
         )}
-        <p className="text-[9px] font-mono text-text-muted/70 mt-1">
+        <p className="text-[9px] font-mono text-text-secondary mt-1">
           {currentMode.kind === 'locked'
             ? 'Retro Diffusion locks this style at this resolution. For higher resolutions, choose a Walking/Idle/Attack style instead.'
-            : 'Larger = more detail. Cost is flat per generation — no resolution surcharge.'}
+            : 'Larger = more detail. Cost is flat per generation. No resolution surcharge.'}
         </p>
         {/* Fallback promise, static copy. Only the true part stays: a large
             animation that fails is redone at 64px (see the RescueInfo notice
             in GenerationResult). */}
         {currentMode.kind !== 'locked' && (selectedResolution === 128 || selectedResolution === 256) && (
-          <p className="text-[9px] font-mono text-text-muted/70 mt-1">
+          <p className="text-[9px] font-mono text-text-secondary mt-1">
             If a large animation doesn&apos;t finish, we&apos;ll automatically make a 64px version so you still get one.
           </p>
         )}
@@ -1327,7 +1327,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         </label>
 
         {templates.length === 0 ? (
-          <p className="text-[10px] font-mono text-text-muted/70 mb-2">
+          <p className="text-[10px] font-mono text-text-secondary mb-2">
             No saved templates yet. Save the current config below to start a library.
           </p>
         ) : (
@@ -1346,7 +1346,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
                 </button>
                 <button
                   onClick={() => handleDeleteTemplate(tpl.id)}
-                  className="px-1.5 py-1 text-text-muted hover:text-red-400 cursor-pointer border-l border-border-subtle"
+                  className="px-1.5 py-1 text-text-secondary hover:text-red-400 cursor-pointer border-l border-border-subtle"
                   title={`Delete "${tpl.name}"`}
                   aria-label={`Delete template ${tpl.name}`}
                 >
@@ -1379,7 +1379,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
               maxLength={MAX_TEMPLATE_NAME_LEN}
               placeholder="Template name…"
               className="flex-1 min-w-0 rounded bg-bg-elevated border border-border-default px-2.5 py-1
-                text-[11px] font-mono text-text-primary placeholder:text-text-muted
+                text-[11px] font-mono text-text-primary placeholder:text-text-secondary
                 focus:outline-none focus:border-accent-amber"
             />
             <button
@@ -1392,7 +1392,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             </button>
             <button
               onClick={handleCancelSaveInput}
-              className="p-1 text-text-muted hover:text-text-primary cursor-pointer"
+              className="p-1 text-text-secondary hover:text-text-primary cursor-pointer"
               aria-label="Cancel"
             >
               <X size={14} />
@@ -1445,9 +1445,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
                     {action.name}
                   </h3>
                   {active && <Check size={12} className="text-accent-amber" />}
-                  <span className="ml-auto text-[9px] font-mono text-text-muted">{actionCost} 🪙</span>
+                  <span className={`ml-auto text-[9px] font-mono ${active ? 'text-text-primary' : 'text-text-secondary'}`}>{actionCost} 🪙</span>
                 </div>
-                <p className="text-[10px] font-mono text-text-muted">{action.desc}</p>
+                <p className={`text-[10px] font-mono ${active ? 'text-text-primary' : 'text-text-secondary'}`}>{action.desc}</p>
               </button>
             );
           })}
@@ -1456,7 +1456,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
       {/* Frame count */}
       <div>
-        <label className="block text-[10px] font-mono text-text-muted mb-2">
+        <label className="block text-[10px] font-mono text-text-secondary mb-2">
           Frame count
         </label>
         <div className="flex gap-1.5">
@@ -1474,7 +1474,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
             </button>
           ))}
         </div>
-        <p className="text-[9px] font-mono text-text-muted mt-1">
+        <p className="text-[9px] font-mono text-text-secondary mt-1">
           More frames = smoother animation, longer generation time
         </p>
       </div>
@@ -1575,7 +1575,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     >
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
-          <p className="text-[10px] font-mono text-text-muted">
+          <p className="text-[10px] font-mono text-text-secondary">
             {charWidth > 0 ? `${selectedResolution}x${selectedResolution} · ${frameCount} frames · ${tokenCost} tokens` : `Upload a character to begin (${selectedResolution}x${selectedResolution})`}
             {userId && (
               <span className={`ml-2 ${insufficientTokens ? 'text-red-400' : 'text-accent-amber'}`}>

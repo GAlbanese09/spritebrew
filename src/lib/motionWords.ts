@@ -42,7 +42,25 @@ const LOOSE_DIRECTIONS_PATTERNS: readonly RegExp[] = [
   /\b(?:2|two|4|four|8|eight|16|sixteen)[ -]?angles?\b/,
   /\bturn-?arounds?\b/,
   /\b(?:side|front|back)[ -]?views\b/,
+  // "in two directions", "several directions": a number word, as ruled (DESIGN, room 2026-11-14-320).
+  /\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|several)[ -]directions\b/,
+  // "{n} views", "{n} angles", any n; never the "4" of "3/4 views".
+  /(?:^|[^/\d.])\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|several|multiple|[2-9]|[1-9]\d+)[ -]?(?:views|angles)\b/,
 ];
+
+/** A list of views: three or more of front, side, back, left and right
+ *  ("front, side, back"), or two with "views" or "angles" after them
+ *  ("front and side views"). Two alone are already ruled (a pair, a body
+ *  side, legs), and "sides" does not count (DESIGN, room 2026-11-15-021).
+ *  "side to side", "back and forth" and "to and fro" are motions and are
+ *  set aside first. */
+const VIEW_WORD = '(?:front|side|back|left|right)';
+const VIEW_JOIN = '(?:, (?:and )?|,| and )';
+const VIEW_LISTS: readonly RegExp[] = [
+  new RegExp(`\\b${VIEW_WORD}(?:${VIEW_JOIN}${VIEW_WORD}\\b){2,}`),
+  new RegExp(`\\b${VIEW_WORD}${VIEW_JOIN}${VIEW_WORD}[ -]?(?:views|angles)\\b`),
+];
+const MOTION_PHRASES = /\b(?:side[ -]to[ -]side|back[ -]and[ -]forth|to[ -]and[ -]fro)\b/g;
 
 /** A pair of sides is a motion, not a way to face: "slash from left to
  *  right", "sways left and right". On these actions the pair is set aside
@@ -76,35 +94,94 @@ const TRAVEL_VERBS: readonly string[] = [
   'slide', 'slides', 'slid', 'sliding', 'roll', 'rolls', 'rolled', 'rolling', 'dodge', 'dodges', 'dodged', 'dodging',
   'strafe', 'strafes', 'strafed', 'strafing', 'float', 'floats', 'floated', 'floating',
   'fly', 'flies', 'flew', 'flying', 'swim', 'swims', 'swam', 'swum', 'swimming',
+  'pace', 'paces', 'paced', 'pacing', 'jog', 'jogs', 'jogged', 'jogging',
+  'wander', 'wanders', 'wandered', 'wandering', 'trot', 'trots', 'trotted', 'trotting',
 ];
 const afterTravel = (before: string): boolean => before.split(' ').some((word) => TRAVEL_VERBS.includes(word));
 
-/** On Walk, a verb of travel and then "up", "down" or "away" (up to two
- *  words between) is a direction too: up and down are two of the four ways
- *  a top-down walk goes. Walk only: "jump up" on Jump is the jump itself
- *  (DESIGN, room 2026-11-14-169). */
-const TRAVEL_UP_DOWN = new RegExp(`\\b(?:${TRAVEL_VERBS.join('|')})(?: [a-z]+){0,2} (?:up|down|away|upwards?|downwards?)\\b`);
-
-/** Where the character is seen from. On Walk and Idle that is a way to
- *  face; on Attack "strike from the side" is the motion. */
-export const SEEN_FROM_ACTIONS: readonly string[] = ['walking', 'idle'];
-const SEEN_FROM_PATTERNS: readonly RegExp[] = [
-  /\bfrom behind\b/,
-  /\bfrom (?:the|one|either|a) side\b/,
-  /\bside[ -]?profile\b/,
+/** Verbs of the body. Up or down right after one is the motion ("sits
+ *  down", "bobbing up and down"), even with a verb of travel before it
+ *  (DESIGN, room 2026-11-14-320). */
+const BODY_VERBS: readonly string[] = [
+  'sit', 'sits', 'sat', 'sitting', 'bob', 'bobs', 'bobbed', 'bobbing', 'bounce', 'bounces', 'bounced', 'bouncing',
+  'crouch', 'crouches', 'crouched', 'crouching', 'look', 'looks', 'looked', 'looking',
+  'kneel', 'kneels', 'knelt', 'kneeled', 'kneeling', 'duck', 'ducks', 'ducked', 'ducking',
 ];
 
-/** Direction words and phrases, whole words only. */
+/** On Walk, a verb of travel and then (up to two words between) "up",
+ *  "down" or "away", a compass word, "diagonally", or a way of pacing
+ *  ("back and forth", "side to side") is a direction too: up and down are
+ *  two of the four ways a top-down walk goes. Walk only: "jump up" on Jump
+ *  is the jump itself (DESIGN, rooms 2026-11-14-169 and -320). */
+const COMPASS = '(?:north|south|east|west|northeast|northwest|southeast|southwest|north-east|north-west|south-east|south-west)(?:wards?)?';
+const TRAVEL_AT = new RegExp(`\\b(?:${TRAVEL_VERBS.join('|')})(?= )`, 'g');
+// After the verb, none, one or two words, then the way it goes. Each count is
+// tried at each verb, so "walks up looking down" is caught by "walks up"
+// even though "walks up looking down" itself is the body's (AUDIT, v1a step 3 r1, M1).
+const TRAVEL_WAYS = [0, 1, 2].map((words) => new RegExp(`((?: [a-z]+){${words}}) (up|down|away|upwards?|downwards?|${COMPASS}|diagonal(?:ly)?|back[ -]and[ -]forth|to[ -]and[ -]fro|side[ -]to[ -]side)\\b`, 'y'));
+function travelsOnWalk(t: string): boolean {
+  for (const verb of t.matchAll(TRAVEL_AT)) {
+    for (const way of TRAVEL_WAYS) {
+      way.lastIndex = (verb.index ?? 0) + verb[0].length;
+      const m = way.exec(t);
+      if (!m) continue;
+      const last = m[1].split(' ').pop() ?? '';
+      if (/^(?:up|down)/.test(m[2]) && BODY_VERBS.includes(last)) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+/** More ways to go on Walk, with or without a verb of travel: slopes and
+ *  stairs (the generator draws flat ground), a mirrored walk, the other way
+ *  (DESIGN, room 2026-11-14-320). */
+const WALK_ONLY_PATTERNS: readonly RegExp[] = [
+  /\b(?:uphill|downhill|upstairs|downstairs)\b/,
+  /\b(?:up|down) (?:the stairs|stairs|a hill|the hill|a slope|the slope)\b/,
+  /\bmirrored\b/,
+  /\bopposite[ -]directions?\b/,
+  /\bthe other way\b/,
+  // Table B's row for "from behind" names Idle only: on Walk it still counts alone, as on main
+  // (DESIGN, room 2026-11-14-320; AUDIT, v1a step 3 r1, M2).
+  /\bfrom behind\b/,
+];
+
+/** Where the character is seen from. On Walk and Idle that is a way to
+ *  face; on Attack "strike from the side" is the motion. Here "from behind"
+ *  counts only beside a word for seeing: "wind from behind" is the motion on
+ *  Idle (DESIGN, room 2026-11-14-320). On Walk it counts alone (WALK_ONLY_PATTERNS). */
+export const SEEN_FROM_ACTIONS: readonly string[] = ['walking', 'idle'];
+const SEEN_FROM_PATTERNS: readonly RegExp[] = [
+  /\b(?:seen|viewed|shown|views?) from behind\b/,
+  /\bfrom behind[ -]views?\b/,
+  /\bfrom (?:the|one|either|a) side\b/,
+  /\bside[ -]?profile\b/,
+  /\btop[ -]?down\b/,
+  /\bisometric\b/,
+  /\b(?:3\/4|three[ -]quarters?)[ -]?views?\b/,
+  /\bprofile[ -]?views?\b/,
+];
+
+/** Direction words and phrases, whole words only, on all four actions. */
 const DIRECTION_PATTERNS: readonly RegExp[] = [
   /\b(?:left|right)(?:wards?)?\b/,
   /\bsideways?\b/,
   /\bto (?:the|one|either|a) side\b/,
   /\b(?:side|front|back)[ -]?views?\b/,
   /\btowards?\b/,
-  /\b(?:forward|backward)s?\b/,
-  /\bturn(?:s|ed|ing)?\b/,
   /\bfacing\b/,
 ];
+
+/** "Forward" and "backward" are a way to go on Walk and Idle; on Attack and
+ *  Jump they are the motion ("thrust forward", "forward flip"). A turn with
+ *  no side is a motion on Walk and Idle ("head turns"; a side, "turns left",
+ *  is caught by its side); on Attack and Jump it still counts (DESIGN, room
+ *  2026-11-14-320). */
+export const FORWARD_ACTIONS: readonly string[] = ['walking', 'idle'];
+const FORWARD_PATTERN = /\b(?:forward|backward)s?\b/;
+export const TURN_ACTIONS: readonly string[] = ['attack', 'jump'];
+const TURN_PATTERN = /\bturn(?:s|ed|ing)?\b/;
 
 /**
  * What to say about a motion text for an action: 'directions' when it asks
@@ -117,14 +194,20 @@ export function motionCatch(text: string, action: string): MotionCatch {
   // is caught however its words are spaced.
   const t = text.toLowerCase().replace(/[\s_]+/g, ' ').replace(/ ?- ?/g, '-');
   if (DIRECTIONS_PATTERNS.some((p) => p.test(t))) return 'directions';
-  if (LOOSE_DIRECTIONS_ACTIONS.includes(action) && LOOSE_DIRECTIONS_PATTERNS.some((p) => p.test(t))) return 'directions';
+  if (LOOSE_DIRECTIONS_ACTIONS.includes(action)) {
+    if (LOOSE_DIRECTIONS_PATTERNS.some((p) => p.test(t))) return 'directions';
+    const withoutMotions = t.replace(MOTION_PHRASES, ' ');
+    if (VIEW_LISTS.some((p) => p.test(withoutMotions))) return 'directions';
+  }
   if (!DIRECTION_ACTIONS.includes(action)) return null;
   const withoutPairs = PAIR_QUIET_ACTIONS.includes(action) ? t.replace(SIDE_PAIRS, ' ') : t;
   const withoutBodySides = withoutPairs.replace(BODY_SIDE, (side: string, before: string) =>
     afterTravel(before) ? side : `${before} `,
   );
   if (DIRECTION_PATTERNS.some((p) => p.test(withoutBodySides))) return 'direction';
-  if (action === 'walking' && TRAVEL_UP_DOWN.test(t)) return 'direction';
+  if (FORWARD_ACTIONS.includes(action) && FORWARD_PATTERN.test(withoutBodySides)) return 'direction';
+  if (TURN_ACTIONS.includes(action) && TURN_PATTERN.test(withoutBodySides)) return 'direction';
+  if (action === 'walking' && (travelsOnWalk(t) || WALK_ONLY_PATTERNS.some((p) => p.test(t)))) return 'direction';
   if (SEEN_FROM_ACTIONS.includes(action) && SEEN_FROM_PATTERNS.some((p) => p.test(t))) return 'direction';
   return null;
 }

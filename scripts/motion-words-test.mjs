@@ -540,6 +540,15 @@ const all = (texts, action, want) => { const got = caught(texts, action); return
         "            : 'Larger = more detail. Cost is flat per generation \u2014 no resolution surcharge.'}",
       ],
     },
+    {
+      // HQ 2026-11-17-172, -194 (REV-M1): the Buy Tokens button under the form's error shows on "top up" in any case, as on Create.
+      start: "          {/* Case-blind, as on Create: the free-tier cap's message reads \"Top up\" (REV 2026-11-17-006, H1; REV-M1, 2026-11-17-012). */}",
+      end: "          {/top up/i.test(generationError) && (",
+      sha256: '91c5cb0a445be4547bd8877e9c210216f1ad7b18abed98b6f964bc853187a9f6',
+      was: [
+        "          {generationError.includes('top up') && (",
+      ],
+    },
   ];
   const sha256 = (t) => createHash('sha256').update(t).digest('hex');
   const gitBlob = (t) => { const b = Buffer.from(t, 'utf8'); return createHash('sha1').update(`blob ${b.length}\0`).update(b).digest('hex'); };

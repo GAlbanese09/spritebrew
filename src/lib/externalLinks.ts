@@ -4,4 +4,4 @@
  */
 export const FEEDBACK_URL = 'https://tally.so/r/Y5oGp6';
 
-export const BETA_TOOLTIP = 'SpriteBrew is in early beta — click to send feedback';
+export const BETA_TOOLTIP = 'SpriteBrew is in early beta. Click to send feedback';

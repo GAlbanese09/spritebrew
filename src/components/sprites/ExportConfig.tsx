@@ -612,7 +612,7 @@ export default function ExportConfig() {
                       className="flex-1 min-w-0 max-w-xs rounded bg-bg-elevated border border-border-default px-2 py-1
                         text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber cursor-pointer"
                     >
-                      <option value="">— none —</option>
+                      <option value="">(none)</option>
                       {animations.filter((a) => a.frames.length > 0).map((a) => (
                         <option key={a.id} value={a.id}>{a.name}</option>
                       ))}

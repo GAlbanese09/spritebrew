@@ -195,7 +195,9 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
     addedAt.length === 1 && fetchLines[addedAt[0] - 1] === '        setTokenBalance(data.balance);'
     && sha256(withoutAdded) === '031e99d7234fa746b5d8fad330a4dfcea2b8e42b7600c466cdde3a82e631006a'
     && (formSrc.match(/setServerBalanceKnown\(/g) ?? []).length === 1);
-  check('1d: handleGenerate, the poll effects and the size effect are byte-identical to main', sha256(logicPart ?? '') === 'ddca238a98c415fd88049639672eba2854bbc8a07897d2a0a4ecac6d97be5f8e');
+  // Re-pinned for the em dash change (HQ 2026-11-15-111, rows 16 and 17): the block
+  // differs from main only in two error strings, a dash made a full stop.
+  check('1d: handleGenerate, the poll effects and the size effect are byte-identical to main', sha256(logicPart ?? '') === '0eb0e0a68994e07778bda98f43b6d92209222976d1a08637f827081acfeaba91');
 }
 
 // ── 2. ENG condition 2: the purchase banner ──

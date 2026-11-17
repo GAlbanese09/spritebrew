@@ -539,7 +539,7 @@ export default function SlicerConfig({
       <div className="flex flex-wrap items-center justify-between gap-2">
         {totalFrames === 0 ? (
           <p className="text-xs font-mono text-amber-400">
-            0 frames &mdash; frame size doesn&apos;t fit your image
+            0 frames: frame size doesn&apos;t fit your image
           </p>
         ) : (
           <p className="text-xs font-mono text-text-muted">

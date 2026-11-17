@@ -281,7 +281,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       const data = await consumeSSEStream(result.response);
 
       if (!data.success) {
-        setGenerationError(String(data.error ?? 'Generation failed — try a different prompt.'));
+        setGenerationError(String(data.error ?? 'Generation failed. Try a different prompt.'));
         return;
       }
 
@@ -305,7 +305,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       if (errObj.code === 'free_tier_cap_reached') {
         const tierLabel = errObj.tier === 'fast' ? 'Fast' : 'Pro';
         setGenerationError(
-          `You've used all free ${tierLabel} generations on this account. Token packs start at $4.99 — top up to keep brewing.`
+          `You've used all free ${tierLabel} generations on this account. Token packs start at $4.99. Top up to keep brewing.`
         );
         return;
       }

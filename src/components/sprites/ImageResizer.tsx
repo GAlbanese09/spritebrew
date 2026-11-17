@@ -255,7 +255,7 @@ export default function ImageResizer({
         </div>
         <button
           onClick={() => setLockAspect((v) => !v)}
-          title={lockAspect ? 'Aspect ratio locked — click to unlock' : 'Aspect ratio unlocked — click to lock'}
+          title={lockAspect ? 'Aspect ratio locked. Click to unlock' : 'Aspect ratio unlocked. Click to lock'}
           className={`mb-1 p-1.5 rounded border cursor-pointer transition-colors
             ${lockAspect
               ? 'border-accent-amber/40 bg-accent-amber-glow text-accent-amber'

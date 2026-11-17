@@ -63,7 +63,7 @@ const FEATURES = [
   {
     icon: Scan,
     title: 'Smart Sprite Detection',
-    desc: 'Auto-detect characters on any sprite sheet, regardless of layout. No grid required — contour detection finds each sprite.',
+    desc: 'Auto-detect characters on any sprite sheet, regardless of layout. No grid required: contour detection finds each sprite.',
     span: '',
   },
   {
@@ -95,12 +95,12 @@ const STEPS = [
   {
     num: 2,
     title: 'Generate & Refine',
-    desc: 'Pick an action — walk, attack, idle, jump. AI generates the frames. Adjust with the built-in pixel editor.',
+    desc: 'Pick an action: walk, attack, idle, jump. AI generates the frames. Adjust with the built-in pixel editor.',
   },
   {
     num: 3,
     title: 'Export & Ship',
-    desc: 'Download game-ready sprite sheets for your engine. Unity, Godot, GameMaker, RPG Maker — all supported.',
+    desc: 'Download game-ready sprite sheets for your engine. Unity, Godot, GameMaker and RPG Maker are all supported.',
   },
 ] as const;
 
@@ -192,7 +192,7 @@ export default function LandingPage() {
               bg-[#d4871c] text-[#0a0a0a] hover:bg-[#e8991f] transition-colors
               shadow-[0_0_20px_rgba(212,135,28,0.3)]"
           >
-            Start Creating — Free
+            Start Creating for Free
           </Link>
           <a
             href="#how-it-works"
@@ -277,7 +277,7 @@ export default function LandingPage() {
           <h2 className="text-sm font-semibold">Built for game developers, by game developers.</h2>
           <div className="space-y-2 text-xs text-[#9a918a] leading-relaxed">
             <p>SpriteBrew is built by an indie developer who got tired of frame-by-frame animation.</p>
-            <p>AI assists your workflow — you stay the creative director.</p>
+            <p>AI assists your workflow. You stay the creative director.</p>
             <p>Your creations are yours. Full commercial rights, no strings.</p>
             <p>
               Free tools (slicer, editor, exporter,{' '}
@@ -397,7 +397,7 @@ export default function LandingPage() {
                 'Monthly token allowance',
                 'Daily bonus tokens when you generate',
                 'Priority support',
-                'Pricing TBD — join the waitlist',
+                'Pricing TBD: join the waitlist',
               ].map((item) => (
                 <li key={item} className="flex items-start gap-2">
                   <span className="w-1 h-1 rounded-full bg-[#5c5550] mt-1.5 flex-shrink-0" />
@@ -424,7 +424,7 @@ export default function LandingPage() {
             bg-[#d4871c] text-[#0a0a0a] hover:bg-[#e8991f] transition-colors
             shadow-[0_0_20px_rgba(212,135,28,0.3)]"
         >
-          Start Creating — Free <ArrowRight size={16} />
+          Start Creating for Free <ArrowRight size={16} />
         </Link>
       </section>
 

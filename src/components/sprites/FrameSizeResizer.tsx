@@ -372,7 +372,7 @@ export default function FrameSizeResizer({
             <AlertCircle size={11} className="text-amber-400 flex-shrink-0 mt-0.5" />
             <p className="text-[10px] font-mono text-amber-400">
               {sourceWidth}x{sourceHeight} doesn&apos;t divide evenly into {cols}x{rows}.
-              The grid overlay approximates the layout — consider a different grid or auto-detect.
+              The grid overlay approximates the layout. Consider a different grid or auto-detect.
             </p>
           </div>
         )}
@@ -389,7 +389,7 @@ export default function FrameSizeResizer({
             {currentFrameW}x{currentFrameH}
           </span>
           {alreadyStandardSize && (
-            <span className="ml-2 text-green-400">— already at a standard size</span>
+            <span className="ml-2 text-green-400">(already at a standard size)</span>
           )}
         </p>
 

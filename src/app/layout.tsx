@@ -23,7 +23,7 @@ export const metadata: Metadata = {
   // points here. './' resolves to each page's own path, with no query string.
   metadataBase: new URL('https://spritebrew.com'),
   alternates: { canonical: './' },
-  title: 'SpriteBrew — AI-Powered Pixel Art Sprite Sheets',
+  title: 'SpriteBrew: AI-Powered Pixel Art Sprite Sheets',
   description: 'Describe a character, pick a moveset, and let AI generate game-ready animations. Upload your own art or create from scratch. Export to Unity, Godot, or GameMaker in one click.',
 };
 

@@ -11,7 +11,7 @@
 //
 // Single source of truth for RD wire format on the producer side. If you
 // change RD's API contract, update both this file and the consumer's
-// equivalent shapes at github.com/GAlbanese09/spritebrew-rd-consumer/src/rdClient.ts.
+// equivalent shapes in the consumer's `rdClient.ts`.
 
 import type { GenerateBody } from '@/app/api/generate/route';
 

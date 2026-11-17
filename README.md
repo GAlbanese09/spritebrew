@@ -142,7 +142,7 @@ Open [http://localhost:3000](http://localhost:3000) to see the app.
 
 **Note on local dev:** The full app stack (queue-and-poll, Stripe webhooks, KV bindings) requires a Cloudflare Pages preview deployment to fully exercise. Local `npm run dev` is best for UI iteration; for end-to-end testing, push to a dev branch and let Cloudflare deploy a preview.
 
-The consumer Worker that processes the queue lives in a sibling repo: [spritebrew-rd-consumer](https://github.com/GAlbanese09/spritebrew-rd-consumer).
+Generations run in a separate private service that processes the queue. It is not part of this repository.
 
 ---
 
@@ -196,7 +196,7 @@ Built by [George Albanese](https://github.com/GAlbanese09) — an endpoint autom
 
 ## License
 
-[AGPL-3.0](LICENSE) — Open source with SaaS protection. You can use, modify, and distribute SpriteBrew, but if you deploy a modified version as a service, you must release your changes under the same license.
+[AGPL-3.0](LICENSE): open source with SaaS protection. You can use, modify, and distribute this web app, but if you deploy a modified version as a service, you must release your changes under the same license. The generation service it calls is private and is not covered here.
 
 ---
 

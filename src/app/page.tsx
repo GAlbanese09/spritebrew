@@ -292,7 +292,7 @@ export default function LandingPage() {
             className="inline-flex items-center gap-2 text-xs text-[#d4871c] hover:text-[#e8991f] transition-colors mt-2"
           >
             <GithubIcon size={14} />
-            SpriteBrew is open source (AGPL-3.0)
+            The SpriteBrew web app is open source (AGPL-3.0)
           </a>
         </div>
       </section>

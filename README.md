@@ -4,24 +4,26 @@
 
 > **Status:** Live in production · Active development · Real customers brewing daily
 
-🌐 **[spritebrew.com](https://spritebrew.com)** — Try it now (free account = 5 generation tokens to start)
+🌐 **[spritebrew.com](https://spritebrew.com)**: try it now (free account = 5 generation tokens to start)
+
+The only official SpriteBrew site is [spritebrew.com](https://spritebrew.com).
 
 ---
 
 ## What is SpriteBrew?
 
-SpriteBrew is a web-based tool for indie game developers that combines traditional sprite sheet workflows with AI-powered generation. Create new characters from text descriptions across 21 visual styles, animate existing pixel art, preview animations with full keyboard controls, and export to every major game engine — all in one place.
+SpriteBrew is a web-based tool for indie game developers that combines traditional sprite sheet workflows with AI-powered generation. Create new characters from text descriptions in a choice of visual styles, animate existing pixel art, preview animations with full keyboard controls, and export to every major game engine, all in one place.
 
 **Free tools (no account needed):** Upload & Slice, Animation Preview, Multi-Engine Export, Pixel Editor, Pixel-Perfect Resizer.
 
-**AI features (free account, token-based):** Text-to-Sprite Generation across 21 styles, Animate My Character. Free signup bonus + daily login rewards. Token packs start at $4.99 for users who want more.
+**AI features (free account, token-based):** Text-to-Sprite Generation, Animate My Character. Free signup bonus + daily login rewards. Token packs start at $4.99 for users who want more.
 
 ---
 
 ## Features
 
 ### 🎨 AI Sprite Generation
-Describe a character in plain text and pick from 21 visual styles across 5 categories: characters (Pro Fantasy, Sci-fi, Horror, Painterly, Simple, Default, Top Down, Platformer), tiles (Isometric, Hexagonal, Spritesheet, Dungeon Map), UI elements (Typography, FPS Weapon, Skill / Spell Icon, UI Panel, Inventory Items), and animation styles (4-Angle Walking, Walking & Idle, Small Sprites, VFX Effects, Custom Animation, 8-Direction Rotation). Each style has its own tier (Fast / Plus / Pro / Animation) with token cost scaled to model complexity. Powered by Retro Diffusion's pixel art models via direct API.
+Describe a character in plain text and pick a visual style: characters (Pro Fantasy, Sci-fi, Horror, Painterly, Simple, Default, Top Down, Platformer), tiles (Isometric, Hexagonal, Spritesheet, Dungeon Map), UI elements (Typography, FPS Weapon, Skill / Spell Icon, UI Panel, Inventory Items), and animation styles (4-Angle Walking, Walking & Idle, Small Sprites, VFX Effects, Custom Animation). Each style has its own tier (Fast / Plus / Pro / Animation) with token cost scaled to model complexity. Powered by Retro Diffusion's pixel art models via direct API.
 
 ### 🖼️ Per-Style Example Lightbox
 Tap the ⤢ icon on any style card to open a carousel showing what each style actually produces — 2-5 curated examples per style. Pick what you actually want, not what you think a style means by name. "Use this style →" in the lightbox toolbar selects + closes in one click.
@@ -160,7 +162,7 @@ Built by [George Albanese](https://github.com/GAlbanese09) — an endpoint autom
 
 **Done:**
 - [x] Phase 1: Web shell, sprite slicer, multi-engine export (6 formats)
-- [x] Phase 2: AI integration via Retro Diffusion direct API (21 styles across 5 categories)
+- [x] Phase 2: AI integration via Retro Diffusion direct API
 - [x] Phase 3: Production launch — Clerk auth, Stripe payments, token economy
 - [x] Queue-and-poll architecture (replaces SSE streaming)
 - [x] Per-style example lightbox previews

@@ -34,6 +34,7 @@ import {
   STREAK_WEEKLY_BONUS_TOKENS,
 } from '@/lib/constants';
 import { GENERATION_STYLES } from '@/lib/styleRegistry';
+import { HOME_JSON_LD } from '@/lib/seo';
 
 /** 1st, 2nd, 3rd, 4th ... 11th, 12th, 13th ... 21st. */
 function ordinal(n: number): string {
@@ -119,6 +120,8 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-[#e8e0d6] font-mono overflow-x-hidden">
+      {/* What SpriteBrew is, for search engines (HQ 2026-11-15-098 item 4): no ratings. */}
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(HOME_JSON_LD) }} />
       {/* ── Nav ── */}
       <nav className="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
         <Link href="/" className="flex items-center gap-2">

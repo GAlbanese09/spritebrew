@@ -1,12 +1,10 @@
 import type { Metadata } from 'next';
 import { RELEASES, releaseLabel } from '@/lib/changelog';
+import { pageMetadata } from '@/lib/seo';
 
 export const runtime = 'edge';
 
-export const metadata: Metadata = {
-  title: 'Updates | SpriteBrew',
-  description: 'Every SpriteBrew update, newest first.',
-};
+export const metadata: Metadata = pageMetadata('Updates | SpriteBrew', 'Every SpriteBrew update, newest first.');
 
 export default function UpdatesPage() {
   return (

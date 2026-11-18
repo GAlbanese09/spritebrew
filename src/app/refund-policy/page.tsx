@@ -1,4 +1,12 @@
+import type { Metadata } from 'next';
+import { pageMetadata } from '@/lib/seo';
+
 export const runtime = 'edge';
+
+export const metadata: Metadata = pageMetadata(
+  'Refund Policy | SpriteBrew',
+  'When you can get a refund on SpriteBrew token purchases, the 14-day window, and how to ask for one.',
+);
 
 export default function RefundPolicyPage() {
   return (

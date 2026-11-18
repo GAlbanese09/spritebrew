@@ -3,6 +3,7 @@ import { Press_Start_2P, JetBrains_Mono } from 'next/font/google';
 import ClerkClientProvider from '@/components/layout/ClerkClientProvider';
 import AppShell from '@/components/layout/AppShell';
 import WhatsNew from '@/components/layout/WhatsNew';
+import { HOME_DESCRIPTION, HOME_TITLE, pageMetadata } from '@/lib/seo';
 import './globals.css';
 
 const pressStart = Press_Start_2P({
@@ -23,8 +24,8 @@ export const metadata: Metadata = {
   // points here. './' resolves to each page's own path, with no query string.
   metadataBase: new URL('https://spritebrew.com'),
   alternates: { canonical: './' },
-  title: 'SpriteBrew: AI-Powered Pixel Art Sprite Sheets',
-  description: 'Describe a character, pick a moveset, and let AI generate game-ready animations. Upload your own art or create from scratch. Export to Unity, Godot, or GameMaker in one click.',
+  // The home page's words are every page's default (HQ 2026-11-17-101).
+  ...pageMetadata(HOME_TITLE, HOME_DESCRIPTION),
 };
 
 export const viewport: Viewport = {

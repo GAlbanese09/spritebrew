@@ -189,9 +189,10 @@ check('every way out, a warning\'s choices too, clears the tried state, and so d
   /const applyOther = \(width: number, height: number\) => \{\s*if \(!unit\) return;\s*setOther\(null\);[\s\S]{0,120}?setOtherTried\(false\);/.test(page) &&
   /onClick=\{\(\) => \{ setOtherTried\(false\); setOther\(\{ width:/.test(page));
 const resizeLayout = read('src/app/resize/layout.tsx');
+// Since the search basics (HQ 2026-11-17-101) the two strings go through pageMetadata, which adds the share card.
 check('the page has its own title and description, as HQ approved them (-102), and keeps the per-page canonical',
-  /title: 'Free Pixel Art Resizer \| SpriteBrew',/.test(resizeLayout) &&
-  /description: 'Resize pixel art and sprite sheets without blurring\. Shrink or grow by whole steps, free, no account, and your image never leaves your browser\.',/.test(resizeLayout) &&
+  /pageMetadata\(\s*'Free Pixel Art Resizer \| SpriteBrew',/.test(resizeLayout) &&
+  /\s'Resize pixel art and sprite sheets without blurring\. Shrink or grow by whole steps, free, no account, and your image never leaves your browser\.',\s*\)/.test(resizeLayout) &&
   !/alternates\s*:/.test(resizeLayout) && !/\u2014/.test(resizeLayout));
 const sidebar = read('src/components/layout/Sidebar.tsx');
 const header = read('src/components/layout/Header.tsx');

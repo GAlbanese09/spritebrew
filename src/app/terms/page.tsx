@@ -1,4 +1,12 @@
+import type { Metadata } from 'next';
+import { pageMetadata } from '@/lib/seo';
+
 export const runtime = 'edge';
+
+export const metadata: Metadata = pageMetadata(
+  'Terms of Service | SpriteBrew',
+  'The terms for using SpriteBrew: your account, the free tier, who owns what you make, refunds and acceptable use.',
+);
 
 export default function TermsPage() {
   return (

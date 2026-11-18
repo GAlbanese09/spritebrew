@@ -117,6 +117,30 @@ check('B4.3: one whole-number zoom, the largest at which Before fits; at 100% wh
   same(previewZoom(1000, 1000, 392, 392), { zoom: 1, pans: true }) && same(previewZoom(10, 10, 0, 0), { zoom: 1, pans: false }));
 check('B4.3: the zoom is named under them: "Frame 1 of each, both at 300%."',
   zoomLine(true, 3) === 'Frame 1 of each, both at 300%.' && zoomLine(false, 1) === 'Both at 100%.');
+
+// The phone preview (DESIGN design/resize/phone-preview/phone-preview.md; HQ -236).
+const fz = P.fitZoom;
+check('Fit each (spec 2eae516d): a picture larger than its room shrinks to fit; a smaller one grows by the largest whole number that fits; one at most 8 px over shows at 100% and pans',
+  P.FIT_PAD === 4 && P.FIT_SLACK === 8 &&
+  fz(1024, 1024, 141, 141) === 141 / 1024 && fz(64, 64, 141, 141) === 2 && fz(128, 128, 141, 141) === 1 &&
+  fz(1024, 1024, 444, 398) === 398 / 1024 && fz(64, 64, 444, 398) === 6 && fz(128, 128, 444, 398) === 3 &&
+  fz(130, 130, 125, 125) === 1 && fz(133, 128, 125, 125) === 1 && fz(134, 128, 125, 125) === 125 / 134 && fz(10, 10, 0, 0) === 1 &&
+  P.fitPans(130, 130, 1, 125, 125) && !P.fitPans(128, 128, 1, 141, 141) && !P.fitPans(1024, 1024, 141 / 1024, 141, 141) &&
+  Math.round(1024 * fz(1024, 1024, 141, 141)) === 141 && Math.round(1024 * fz(1024, 1024, 444, 398)) === 398);
+check('the preview\'s default: Fit each when either picture would not fit at one zoom, else Same scale',
+  P.defaultPreviewMode(true, false) === 'fit' && P.defaultPreviewMode(false, true) === 'fit' && P.defaultPreviewMode(true, true) === 'fit' && P.defaultPreviewMode(false, false) === 'same');
+const view = (b, a, bo = false, ao = false) => ({ beforeZoom: b, afterZoom: a, beforeOver: bo, afterOver: ao });
+check('the line under the pictures, for each row of the spec, as HQ approved it (-236)',
+  P.previewLine(false, 'fit', 1, view(141 / 1024, 2)) === 'Each fitted to its box: Before at 14%, After at 200%. Same scale shows both at one zoom.' &&
+  P.previewLine(false, 'fit', 1, view(141 / 1024, 141 / 1024)) === 'Both at 14%.' &&
+  P.previewLine(true, 'fit', 1, view(331 / 1024, 5)) === 'Frame 1 of each, fitted to its box: Before at 32%, After at 500%. Same scale shows both at one zoom.' &&
+  P.previewLine(false, 'fit', 1, view(1, 1)) === 'Both at 100%.' && P.previewLine(true, 'fit', 1, view(3, 3)) === 'Frame 1 of each, both at 300%.' &&
+  P.previewLine(false, 'same', 3, view(1, 1)) === 'Both at 300%.' && P.previewLine(true, 'same', 2, view(1, 1)) === 'Frame 1 of each, both at 200%.' &&
+  P.previewLine(false, 'same', 1, view(1, 1, true, false)) === 'Both at 100%. Before is larger than its box: drag or scroll it to see the rest.' &&
+  P.previewLine(false, 'same', 1, view(1, 1, false, true)) === 'Both at 100%. After is larger than its box: drag or scroll it to see the rest.' &&
+  P.previewLine(false, 'same', 1, view(1, 1, true, true)) === 'Both at 100%. Both are larger than their boxes: drag or scroll to see the rest.' &&
+  W.previewLabel === 'Preview' && W.fitEach === 'Fit each' && W.sameScale === 'Same scale' &&
+  !Object.values(W).some((v) => typeof v === 'string' && v.includes(String.fromCharCode(0x2014))));
 check('DESIGN -259: both boxes are the Before picture\'s height plus 12 px above and below, as wide as the column; a picture that pans gets the whole room',
   same(P.boxSize(128, 3, false, 430, 408), { width: 430, height: 408 }) && same(P.boxSize(128, 1, false, 135, 264), { width: 135, height: 152 }) &&
   same(P.boxSize(64, 2, false, 300, 408), { width: 300, height: 152 }) && same(P.boxSize(1000, 1, true, 300, 264), { width: 300, height: 264 }) && P.BOX_PAD === 12);
@@ -144,8 +168,17 @@ check('the resize runs in a worker, with the page as the fallback, and only the 
   /const waiting = \[\.\.\.waitingRef\.current\.values\(\)\];\s*waitingRef\.current\.clear\(\);\s*waiting\.forEach\(\(back\) => back\(null\)\);/.test(page) &&
   /dropWorker\(w\);\s*back\(null\);\s*\}, RESIZE_TIME_LIMIT_MS\);/.test(page) && /const RESIZE_TIME_LIMIT_MS = 15000;/.test(page) &&
   /scope\.postMessage\(\{ id, ok: true, width: out\.width, height: out\.height, data: out\.data \}, \[out\.data\.buffer\]\);/.test(worker));
-check('never smoothing: the engine\'s mapping for every size, pixelated on screen, smoothing off where a canvas scales',
-  /imageRendering: 'pixelated'/.test(page) && (page.match(/imageSmoothingEnabled = false/g) ?? []).length === 2 && !/imageSmoothingEnabled = true/.test(page));
+check('never smoothing: the engine\'s mapping for every size, pixelated on screen at a whole zoom, smoothing off where a canvas scales; only a preview shrunk to fit is smoothed (the phone preview spec)',
+  /imageRendering: 'pixelated'/.test(page) && /imageRendering: shown >= 1 \? 'pixelated' : 'auto'/.test(page) &&
+  (page.match(/imageSmoothingEnabled = false/g) ?? []).length === 2 && !/imageSmoothingEnabled = true/.test(page));
+check('the preview\'s choice: a labelled two-choice radio group above the pictures, shown when the sizes differ; arrow keys move and choose; the choice holds until another picture loads',
+  /const showChoice = !!before && \(differ \|\| pans \|\| afterOver\);/.test(page) && /\{showChoice && \(/.test(page) && /role="radiogroup" aria-labelledby="resize-preview-label"/.test(page) && /role="radio"\s+aria-checked=\{mode === m\}\s+tabIndex=\{mode === m \? 0 : -1\}/.test(page) &&
+  /\['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'\]\.includes\(e\.key\)/.test(page) && /setLoaded\(\{ name: file\.name, image: out\.image, thumb: out\.thumb \}\);\s*setPreviewChoice\(null\);/.test(page) &&
+  /const mode: PreviewMode = showChoice \? previewChoice \?\? defaultPreviewMode\(pans, afterOver\) : 'same';/.test(page));
+check('Fit each draws boxes as wide as their column and no taller than the room inside a 4 px margin; a panning picture starts at its centre',
+  /const fitBox = Math\.max\(0, Math\.min\(box\.width, box\.height\)\);\s*const fitRoom = \{ width: box\.width - 2 - 2 \* FIT_PAD, height: fitBox - 2 - 2 \* FIT_PAD \};/.test(page) &&
+  /el\.scrollLeft = \(el\.scrollWidth - el\.clientWidth\) \/ 2;\s*el\.scrollTop = \(el\.scrollHeight - el\.clientHeight\) \/ 2;/.test(page) &&
+  /const pan = mode === 'same' \? \(which === 'before' \? pans : afterPans\) : which === 'before' \? beforeFitPans : afterFitPans;/.test(page) && /\{line\}<\/p>/.test(page));
 check('Check true size is absent until #50 merges (B1)', !/Check true size/i.test(page + lib));
 check('the sizes are buttons with aria-pressed; an over-cap size is disabled; "Other size..." opens a dialog that names itself and closes on Escape',
   /aria-pressed=\{pressed\(choice\)\} disabled=\{choice\.overCap\}/.test(page) && /aria-haspopup="dialog"/.test(page) &&

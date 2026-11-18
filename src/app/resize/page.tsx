@@ -384,11 +384,15 @@ export default function ResizePage() {
   const inner = { width: box.width - 2, height: box.height - 2 * BOX_PAD };
   const { zoom, pans } = before ? previewZoom(before.width, before.height, inner.width, inner.height) : { zoom: 1, pans: false };
   const boxed = before ? boxSize(before.height, zoom, pans, box.width, box.height) : { width: 0, height: 0 };
-  const afterOver = after ? after.width * zoom > inner.width || after.height * zoom > boxed.height - 2 * BOX_PAD : false;
+  // After's size is the size picked, known before the new After is drawn,
+  // so the preview's choice and its zooms hold while it is made (REV
+  // resize-phone-preview-rev.md, REV-L1).
+  const afterSize = target ? { width: target.width, height: target.height } : before;
+  const afterOver = afterSize ? afterSize.width * zoom > inner.width || afterSize.height * zoom > boxed.height - 2 * BOX_PAD : false;
   const afterPans = pans || afterOver;
   // The preview's choice shows whenever Before and After differ in size, or
   // a picture would pan at one zoom (DESIGN design/resize/phone-preview/phone-preview.md, 2eae516d; HQ -236).
-  const differ = !!before && !!after && (before.width !== after.width || before.height !== after.height);
+  const differ = !!before && !!afterSize && (before.width !== afterSize.width || before.height !== afterSize.height);
   const showChoice = !!before && (differ || pans || afterOver);
   const mode: PreviewMode = showChoice ? previewChoice ?? defaultPreviewMode(pans, afterOver) : 'same';
   // Fit each: boxes as wide as their column and no taller than the room
@@ -397,9 +401,9 @@ export default function ResizePage() {
   const fitBox = Math.max(0, Math.min(box.width, box.height));
   const fitRoom = { width: box.width - 2 - 2 * FIT_PAD, height: fitBox - 2 - 2 * FIT_PAD };
   const beforeFit = before ? fitZoom(before.width, before.height, fitRoom.width, fitRoom.height) : 1;
-  const afterFit = after ? fitZoom(after.width, after.height, fitRoom.width, fitRoom.height) : 1;
+  const afterFit = afterSize ? fitZoom(afterSize.width, afterSize.height, fitRoom.width, fitRoom.height) : 1;
   const beforeFitPans = before ? fitPans(before.width, before.height, beforeFit, fitRoom.width, fitRoom.height) : false;
-  const afterFitPans = after ? fitPans(after.width, after.height, afterFit, fitRoom.width, fitRoom.height) : false;
+  const afterFitPans = afterSize ? fitPans(afterSize.width, afterSize.height, afterFit, fitRoom.width, fitRoom.height) : false;
   const line = previewLine(shownSheet, mode, zoom, { beforeZoom: beforeFit, afterZoom: afterFit, beforeOver: pans, afterOver });
   const modeRefs = useRef<Record<PreviewMode, HTMLButtonElement | null>>({ fit: null, same: null });
   // Arrow keys move and choose within the two-choice group.
@@ -689,7 +693,7 @@ export default function ResizePage() {
                       onScroll={() => (which === 'before' ? follow(beforeScrollRef.current, afterScrollRef.current) : follow(afterScrollRef.current, beforeScrollRef.current))}
                       tabIndex={pan ? 0 : undefined}
                       aria-label={pan ? `${which === 'before' ? W.before : W.after}, scrolls` : undefined}
-                      className={`relative max-w-full rounded-lg border border-border-default ${pan ? (mode === 'fit' ? 'overflow-auto p-1' : 'overflow-auto p-3') : 'overflow-hidden flex items-center justify-center'}`}
+                      className={`relative max-w-full rounded-lg border border-border-default flex ${pan ? (mode === 'fit' ? 'overflow-auto p-1' : 'overflow-auto p-3') : 'overflow-hidden items-center justify-center'}`}
                       style={{ ...CHECKER, width: size.width, height: size.height }}
                     >
                       {image ? (
@@ -698,7 +702,9 @@ export default function ResizePage() {
                           role="img"
                           aria-label={caption(which, shownSheet, image.width, image.height)}
                           // A picture shrunk to fit is smoothed; one shown at a whole zoom stays crisp.
-                          style={{ width: image.width * shown, height: image.height * shown, imageRendering: shown >= 1 ? 'pixelated' : 'auto', flex: 'none' }}
+                          // Auto margins in the flex box: a picture smaller than a panning box sits
+                          // in its middle, one larger scrolls from its edge (PILOT -031, DESIGN -034).
+                          style={{ width: image.width * shown, height: image.height * shown, imageRendering: shown >= 1 ? 'pixelated' : 'auto', flex: 'none', margin: 'auto' }}
                         />
                       ) : (
                         <p role="status" className="text-[13px] font-mono text-text-secondary">{resizing ? W.resizing : ''}</p>

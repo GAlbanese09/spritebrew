@@ -306,7 +306,8 @@ export function useGenerationPoll(options: UseGenerationPollOptions = {}): UseGe
           if (err instanceof PollAbandonedError) {
             setError({
               message:
-                'This is taking much longer than usual. If it finishes, it will be in your gallery. If it fails, your tokens come back automatically.',
+                // DESIGN's words for the 8-minute stop (HQ 2026-11-18-008).
+                'This is taking much longer than usual. If it finishes, it will be in your gallery. If your balance looks wrong after a day, contact support.',
               refunded: false,
             });
             setStatus('abandoned');

@@ -179,6 +179,16 @@ check('Fit each draws boxes as wide as their column and no taller than the room 
   /const fitBox = Math\.max\(0, Math\.min\(box\.width, box\.height\)\);\s*const fitRoom = \{ width: box\.width - 2 - 2 \* FIT_PAD, height: fitBox - 2 - 2 \* FIT_PAD \};/.test(page) &&
   /el\.scrollLeft = \(el\.scrollWidth - el\.clientWidth\) \/ 2;\s*el\.scrollTop = \(el\.scrollHeight - el\.clientHeight\) \/ 2;/.test(page) &&
   /const pan = mode === 'same' \? \(which === 'before' \? pans : afterPans\) : which === 'before' \? beforeFitPans : afterFitPans;/.test(page) && /\{line\}<\/p>/.test(page));
+check('After\'s size is the size picked, so the choice, its default and the zooms hold while a new After is made (REV-L1)',
+  /const afterSize = target \? \{ width: target\.width, height: target\.height \} : before;/.test(page) &&
+  /const afterOver = afterSize \? afterSize\.width \* zoom > inner\.width \|\| afterSize\.height \* zoom > boxed\.height - 2 \* BOX_PAD : false;/.test(page) &&
+  /const differ = !!before && !!afterSize && \(before\.width !== afterSize\.width \|\| before\.height !== afterSize\.height\);/.test(page) &&
+  /const afterFit = afterSize \? fitZoom\(afterSize\.width, afterSize\.height, fitRoom\.width, fitRoom\.height\) : 1;/.test(page) &&
+  /const afterFitPans = afterSize \? fitPans\(afterSize\.width, afterSize\.height, afterFit, fitRoom\.width, fitRoom\.height\) : false;/.test(page) &&
+  !/!!after && \(before\.width !== after\.width/.test(page));
+check('a picture smaller than its panning box sits in its middle; one larger still scrolls from its edge (PILOT -031, DESIGN -034)',
+  /border border-border-default flex \$\{pan \? \(mode === 'fit' \? 'overflow-auto p-1' : 'overflow-auto p-3'\) : 'overflow-hidden items-center justify-center'\}/.test(page) &&
+  /flex: 'none', margin: 'auto' \}/.test(page));
 check('Check true size is absent until #50 merges (B1)', !/Check true size/i.test(page + lib));
 check('the sizes are buttons with aria-pressed; an over-cap size is disabled; "Other size..." opens a dialog that names itself and closes on Escape',
   /aria-pressed=\{pressed\(choice\)\} disabled=\{choice\.overCap\}/.test(page) && /aria-haspopup="dialog"/.test(page) &&

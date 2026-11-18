@@ -3,6 +3,7 @@ import type { SpriteSheet, SpriteAnimation, SpriteFrame } from '@/lib/types';
 import type { SlicerHints } from '@/lib/generationHistory';
 import type { SheetSessionState } from '@/lib/sheetSession';
 import { EMPTY_CARD, handOff, newResult, saveEdit, showVersion, type CardImage, type CardVersion } from '@/lib/cardImage';
+import type { AcceptedCharacter } from '@/lib/animateCharacter';
 
 /**
  * Rescue metadata for the current generation. Set by AnimateForm's poll-
@@ -30,6 +31,52 @@ export type PendingReward =
   | { id: string; type: 'email_list'; amount: number }
   | { id: string; type: 'daily_login'; amount: number; streakDay: number }
   | { id: string; type: 'streak_bonus'; amount: number; streakDay: number };
+
+/** The way Create Sprite was asked to face a sprite, captured at Generate
+ *  (design/tickets/builder-create.md section 8). Null when nothing was asked
+ *  (the person wrote their own description). */
+export type CreateFacing = 'right' | 'left' | 'front' | 'three-quarter' | 'top-down' | null;
+
+/** The way a handed-over sprite faces as the card shows it: a mirrored right
+ *  is left and a mirrored left is right; three-quarter counts as right (so
+ *  a mirrored three-quarter is left); front stays front; top-down and null
+ *  stay null (builder-create.md section 8). */
+export type HandoffFacing = 'right' | 'left' | 'front' | null;
+
+export function facingAsShown(made: CreateFacing, mirrored: boolean): HandoffFacing {
+  const facing: HandoffFacing =
+    made === 'right' || made === 'three-quarter' ? 'right' : made === 'left' ? 'left' : made === 'front' ? 'front' : null;
+  if (!mirrored) return facing;
+  return facing === 'right' ? 'left' : facing === 'left' ? 'right' : facing;
+}
+
+/** The accepted Animate character, kept for the visit for one account
+ *  (design/generate-pass/generate-pass.md 4.5, G0). */
+export interface KeptCharacter {
+  account: string;
+  character: AcceptedCharacter;
+}
+
+/** The kept character for this account, or null: another account's is never
+ *  returned. Pure; readKeptCharacter also drops another account's. */
+export function keptCharacterFor(kept: KeptCharacter | null, account: string | null | undefined): AcceptedCharacter | null {
+  return account && kept && kept.account === account ? kept.character : null;
+}
+
+/** A page request: open Create Sprite with a "What's it for?" card chosen
+ *  and the description filled (generate-pass.md 4.2, "Make a side view").
+ *  A null subject leaves the description empty. */
+export interface CreateRequest {
+  card: 'side';
+  subject: string | null;
+}
+
+/** A page request: open Animate from Text with this animation chosen and the
+ *  description filled (generate-pass.md 4.2, "Open 4-Angle Walking"). */
+export interface TextAnimationRequest {
+  styleId: string;
+  subject: string | null;
+}
 
 interface SpriteStore {
   spriteSheet: SpriteSheet | null;
@@ -133,6 +180,31 @@ interface SpriteStore {
    *  cleared by AnimateForm alongside pendingAnimatorHandoff. */
   pendingAnimatorSkipBgRemoval: boolean;
 
+  // Generate page pass, ticket G0 (generate-pass.md section 7). Nothing on
+  // screen reads these yet: G1, G2, G3 and G4 do. All live for the page load
+  // only; a reload starts over.
+  /** The facing Create Sprite asked for at the last Generate, and its
+   *  subject; null when the person wrote their own description. The result
+   *  card reads them (builder-create.md section 8). */
+  lastCreateFacing: CreateFacing;
+  lastCreateSubject: string | null;
+  /** Written by "Animate this" next to pendingAnimatorHandoff: the facing as
+   *  the card shows it, and the subject. Animate My Character reads them for
+   *  its direction lines and its "Make a side view" and "Open 4-Angle
+   *  Walking" (generate-pass.md 4.2). A new upload, Remove or a new handoff
+   *  sets them again (setHandoff). */
+  handoffFacing: HandoffFacing;
+  handoffSubject: string | null;
+  /** The accepted character, kept for the visit, keyed by account (4.5). */
+  keptCharacter: KeptCharacter | null;
+  /** Auto-Prep is open in Animate My Character's step 1, waiting for Use
+   *  This (5.3). The result card reads it ("Check it in step 1"). */
+  animatePrepPending: boolean;
+  /** One-shot page requests, consumed and cleared by the page. One at a
+   *  time: a newer request of either kind replaces the other. */
+  createRequest: CreateRequest | null;
+  textAnimationRequest: TextAnimationRequest | null;
+
   setSpriteSheet: (sheet: SpriteSheet) => void;
   clearSpriteSheet: () => void;
   /** Swap the sheet's source image and every frame's pixels while keeping
@@ -213,6 +285,21 @@ interface SpriteStore {
   clearPendingAnimatorHandoff: () => void;
   setPendingAnimatorSkipBgRemoval: (skip: boolean) => void;
   clearPendingAnimatorSkipBgRemoval: () => void;
+
+  // Generate page pass, G0
+  setLastCreate: (facing: CreateFacing, subject: string | null) => void;
+  setHandoff: (facing: HandoffFacing, subject: string | null) => void;
+  /** Keep this account's accepted character, or with null, drop it. Without
+   *  an account nothing is written. */
+  keepCharacter: (account: string | null | undefined, character: AcceptedCharacter | null) => void;
+  /** This account's kept character, or null. A read for another account
+   *  drops the one held; without an account nothing is read or dropped. */
+  readKeptCharacter: (account: string | null | undefined) => AcceptedCharacter | null;
+  setAnimatePrepPending: (pending: boolean) => void;
+  requestCreate: (request: CreateRequest) => void;
+  requestTextAnimation: (request: TextAnimationRequest) => void;
+  clearCreateRequest: () => void;
+  clearTextAnimationRequest: () => void;
 }
 
 /** The card's image fields as a CardImage, and back. */
@@ -290,6 +377,14 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
   pendingEditorRestore: null,
   pendingAnimatorHandoff: false,
   pendingAnimatorSkipBgRemoval: false,
+  lastCreateFacing: null,
+  lastCreateSubject: null,
+  handoffFacing: null,
+  handoffSubject: null,
+  keptCharacter: null,
+  animatePrepPending: false,
+  createRequest: null,
+  textAnimationRequest: null,
 
   setSpriteSheet: (sheet) =>
     set((state) => ({ spriteSheet: sheet, selectedFrames: [], animations: [], sheetVersion: state.sheetVersion + 1 })),
@@ -499,4 +594,31 @@ export const useSpriteStore = create<SpriteStore>((set, get) => ({
 
   setPendingAnimatorSkipBgRemoval: (skip) => set({ pendingAnimatorSkipBgRemoval: skip }),
   clearPendingAnimatorSkipBgRemoval: () => set({ pendingAnimatorSkipBgRemoval: false }),
+
+  setLastCreate: (facing, subject) => set({ lastCreateFacing: facing, lastCreateSubject: subject }),
+  setHandoff: (facing, subject) => set({ handoffFacing: facing, handoffSubject: subject }),
+
+  keepCharacter: (account, character) => {
+    if (!account) return;
+    set({ keptCharacter: character ? { account, character } : null });
+  },
+
+  // As createFormVisit.ts keys the style: without an account nothing is
+  // read or dropped; a read for another account drops the one held.
+  readKeptCharacter: (account) => {
+    if (!account) return null;
+    const kept = get().keptCharacter;
+    if (kept && kept.account !== account) {
+      set({ keptCharacter: null });
+      return null;
+    }
+    return keptCharacterFor(kept, account);
+  },
+
+  setAnimatePrepPending: (pending) => set({ animatePrepPending: pending }),
+
+  requestCreate: (request) => set({ createRequest: request, textAnimationRequest: null }),
+  requestTextAnimation: (request) => set({ textAnimationRequest: request, createRequest: null }),
+  clearCreateRequest: () => set({ createRequest: null }),
+  clearTextAnimationRequest: () => set({ textAnimationRequest: null }),
 }));

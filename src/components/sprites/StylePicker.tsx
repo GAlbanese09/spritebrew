@@ -31,10 +31,12 @@ const CATEGORY_NAMES: Record<StyleCategory, string> = {
   environments: 'Environments',
 };
 
-// Categories in registry order, each with the styles Create offers.
+// Categories in registry order, each with the styles Create Sprite offers.
+// The animation styles are Animate from Text's cards now, so their group is
+// not here (DESIGN generate-pass.md 2.4, G1).
 const CATEGORIES: { id: StyleCategory; name: string; styles: GenerationStyle[] }[] = (() => {
   const out: { id: StyleCategory; name: string; styles: GenerationStyle[] }[] = [];
-  for (const style of OFFERED_STYLES) {
+  for (const style of OFFERED_STYLES.filter((s) => !s.isAnimation)) {
     let group = out.find((c) => c.id === style.category);
     if (!group) {
       group = { id: style.category, name: CATEGORY_NAMES[style.category], styles: [] };

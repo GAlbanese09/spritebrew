@@ -460,6 +460,43 @@ if (typeof useGenerateTab === 'function') {
     { tab: page.value.tab, create: createForm.value.status, saved: saved() });
   createForm.unmount();
   page.unmount();
+
+  // g. G1 (the Generate page pass): three tabs, two kinds of job. A create
+  // job with an animation style is Animate from Text's (generateTabs.ts
+  // tabForJob); one with any other style, or saved without its style, is
+  // Create Sprite's.
+  fresh();
+  send = sendFromAFormThatLeft();
+  send('job-20', 'key-20', 'create', { prompt: 'a knight', styleId: 'anim-4angle-walking' });
+  page = mount(useGenerateTab);
+  check('G1: a text animation saved before the page renders: the page opens on Animate from Text', page.value.tab === 'text', { tab: page.value.tab });
+  page.unmount();
+
+  fresh();
+  send = sendFromAFormThatLeft();
+  send('job-21', 'key-21', 'create', { prompt: 'a knight', styleId: 'plus-classic' });
+  page = mount(useGenerateTab);
+  check('G1: a Create job with a sprite style opens on Create Sprite', page.value.tab === 'create', { tab: page.value.tab });
+  page.unmount();
+
+  fresh();
+  send = sendFromAFormThatLeft();
+  send('job-22', 'key-22', 'create');
+  page = mount(useGenerateTab);
+  check('G1: a Create job saved without its style opens on Create Sprite, as today', page.value.tab === 'create', { tab: page.value.tab });
+  page.unmount();
+
+  fresh();
+  send = sendFromAFormThatLeft();
+  page = mount(useGenerateTab);
+  createForm = mount(useGenerationPoll);
+  send('job-23', 'key-23', 'create', { prompt: 'a knight', styleId: 'anim-vfx' });
+  await settle();
+  check('G1: a text animation landing on Create Sprite: the page opens Animate from Text, and the Create form makes no request',
+    page.value.tab === 'text' && createForm.value.status === 'idle' && fetchCalls.length === 0 && saved() === 'job-23',
+    { tab: page.value.tab, create: createForm.value.status, fetchCalls: fetchCalls.length, saved: saved() });
+  createForm.unmount();
+  page.unmount();
 }
 
 // 5. The click-time context travels with the saved job (history gap, HQ

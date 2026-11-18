@@ -19,6 +19,7 @@ import { canvasToBlob, downloadFile } from '@/lib/downloadUtils';
 import { assemblePlayedSheet, playedIsIdentity } from '@/lib/playedSheet';
 import { borderMostlyTransparent } from '@/lib/sheetAlpha';
 import { deliveredOf, resultKeyOf, shownOf, type CardImage, type CardVersion } from '@/lib/cardImage';
+import { tipsFor, type GenerateTab } from '@/lib/generateTabs';
 import {
   loadHistory,
   clearHistory,
@@ -83,9 +84,13 @@ function saveDataUrl(url: string, filename: string) {
 
 interface GenerationResultProps {
   onReset: () => void;
+  /** The page's tab, for the empty card's lead and tips (generate-pass.md
+   *  2.6, 3 and 4.6; G1), and Animate from Text's chosen card. */
+  tab?: GenerateTab;
+  textStyleId?: string | null;
 }
 
-export default function GenerationResult({ onReset }: GenerationResultProps) {
+export default function GenerationResult({ onReset, tab = 'create', textStyleId = null }: GenerationResultProps) {
   const router = useRouter();
   const { userId } = useAuth();
   // The store's working image (what the Slicer, the Animator and the forms
@@ -607,26 +612,22 @@ export default function GenerationResult({ onReset }: GenerationResultProps) {
   }
 
   if (!generatedImageDataUrl) {
-    // Tips / empty state
+    // Tips / empty state, by the page's tab (generateTabs.ts tipsFor).
+    const tips = tipsFor(tab, textStyleId);
     return (
       <div className="space-y-6">
         <div className="rounded-lg border border-dashed border-border-default bg-bg-surface p-8 text-center">
-          <p className="text-sm font-mono text-text-muted mb-4">
-            Your generated sprites will appear here
+          <p className="text-sm font-mono text-text-secondary mb-4">
+            {tips.lead}
           </p>
           <div className="text-left max-w-xs mx-auto space-y-2">
-            <p className="text-[10px] font-mono text-text-muted uppercase tracking-wider mb-2">
-              Tips for good prompts
+            <p className="text-xs font-mono text-text-secondary uppercase tracking-wider mb-2">
+              {tips.heading}
             </p>
-            {[
-              'Be specific about colors and style',
-              'Mention the action: walking, running, attacking',
-              'Include equipment and accessories',
-              'Specify the art style: 16-bit, 8-bit, etc.',
-            ].map((tip) => (
+            {tips.tips.map((tip) => (
               <div key={tip} className="flex items-start gap-2">
-                <span className="w-1 h-1 rounded-full bg-accent-amber/40 mt-1.5 flex-shrink-0" />
-                <p className="text-[10px] font-mono text-text-secondary">{tip}</p>
+                <span className="w-1 h-1 rounded-full bg-accent-amber/40 mt-1.5 flex-shrink-0" aria-hidden="true" />
+                <p className="text-xs font-mono text-text-secondary">{tip}</p>
               </div>
             ))}
           </div>

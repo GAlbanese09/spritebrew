@@ -375,7 +375,9 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
   check('7: the Get tokens link keeps its 44 px touch target everywhere and adds no height to the reason beside the button',
     /<a\s+href="\/buy-tokens"\s+className="inline-flex items-center pointer-coarse:min-h-11 lg:pointer-coarse:-my-3 text-accent-amber underline hover:text-accent-amber-strong"/.test(form));
   check('7: while paused the bar shows one short line, and the whole message stays for screen readers in the element the button is described by',
-    /if \(GENERATION_PAUSED\) \{\s*disabledReason = \(\s*<>\s*<span aria-hidden="true">Generating is paused for now\. Details are in the notice above\.<\/span>\s*<span className="sr-only">\{GENERATION_PAUSED_MESSAGE\}<\/span>\s*<\/>\s*\);\s*\} else if \(insufficientTokens\)/.test(form)
+    // G1: the hint is chosen by the bar's state (generateTabs.ts barRow), paused second after brewing.
+    /if \(row === 'paused'\) \{\s*disabledReason = \(\s*<>\s*<span aria-hidden="true">Generating is paused for now\. Details are in the notice above\.<\/span>\s*<span className="sr-only">\{GENERATION_PAUSED_MESSAGE\}<\/span>\s*<\/>\s*\);\s*\} else if \(row === 'guide'\)/.test(form)
+    && /const row = barRow\(\{\s*generating: isGenerating,\s*paused: GENERATION_PAUSED,/.test(form)
     && !form.includes('disabledReason = GENERATION_PAUSED_MESSAGE')
     && /<p id=\{reasonId\} className="[^"]*">\s*\{disabledReason\}\s*<\/p>/.test(form)
     && /aria-describedby=\{disabledReason \? reasonId : undefined\}/.test(form)
@@ -797,11 +799,13 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     const opened = noteOn(null);
     const classic = noteOn('plus-classic');
     const third = noteOn('pro-fantasy');
-    const anim = noteOn('anim-any');
+    // G1: the animation styles left Create for Animate from Text, so the
+    // fourth case is another style Create offers.
+    const anim = noteOn('pro-platformer');
     check('8: C: at balance 10 the note is the known sentence on fast-retro and plus-classic, and null on a third style',
       known10 === 'You have 10 tokens: Retro Arcade is ready at 5. Classic Pixel Art needs 16 (+3 a day, +5 for the newsletter).'
       && opened.style === 'fast-retro' && opened.note === known10 && classic.style === 'plus-classic' && classic.note === known10
-      && third.style === 'pro-fantasy' && third.note === null && anim.style === 'anim-any' && anim.note === null, { opened, classic, third, anim });
+      && third.style === 'pro-fantasy' && third.note === null && anim.style === 'pro-platformer' && anim.note === null, { opened, classic, third, anim });
     check('8: C: the form checks the opening styles through OPENING_CANDIDATES, not ids typed again',
       /const balanceNote = serverBalanceKnown && \(OPENING_CANDIDATES as readonly string\[\]\)\.includes\(selectedStyleId\)\s*\?/.test(stripComments(formSrc))
       && !/balanceNote[^;]*'(plus-classic|fast-retro)'/.test(formSrc));
@@ -836,8 +840,10 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
       { opened, recentAtOpen });
     check('8: E: chooseStyle(\'anim-8dir\') changes nothing: no style, no latch, no Recent, no visit write, no announcement',
       before === after && f.style === 'plus-classic' && f.acted === false && f.announced() === '', { before, after });
-    check('8: E: the picker\'s groups (StylePicker\'s own code) hold the 20 offered styles and not anim-8dir',
-      pickerIds.length === 20 && !pickerIds.includes('anim-8dir') && JSON.stringify([...pickerIds].sort()) === JSON.stringify(OFFERED_STYLES.map((s) => s.id).sort()), pickerIds.length);
+    // G1: the picker holds Create Sprite's styles, the offered ones that are
+    // not animations (Animate from Text has those).
+    check('8: E: the picker\'s groups (StylePicker\'s own code) hold the 15 offered styles that are not animations, and not anim-8dir',
+      pickerIds.length === 15 && !pickerIds.includes('anim-8dir') && JSON.stringify([...pickerIds].sort()) === JSON.stringify(OFFERED_STYLES.filter((s) => !s.isAnimation).map((s) => s.id).sort()), pickerIds.length);
   }
 }
 

@@ -13,6 +13,8 @@ import {
   OFFERED_STYLES,
   type GenerationStyle,
 } from '@/lib/styleRegistry';
+import { badgeStates, barRow, DIMMED_GENERATE, GUIDE_HINT } from '@/lib/generateTabs';
+import StepBadge, { StepWord } from './StepBadge';
 import { accountRecentStorage, pushRecent, readRecent, visibleRecent, writeRecent, type RecentStorage } from '@/lib/recentStyles';
 import { affordableNote, DEFAULT_STYLE_ID, OPENING_CANDIDATES, openingStyle } from '@/lib/affordableStyle';
 import { formVisit } from '@/lib/createFormVisit';
@@ -39,8 +41,11 @@ const EXAMPLE_PROMPTS = [
   { label: 'Robot', prompt: 'robot with laser gun' },
 ];
 
-/** The styles Create offers: what Recent, the visit and chooseStyle accept. */
-const STYLE_IDS = OFFERED_STYLES.map((s) => s.id);
+/** The styles Create Sprite offers: what Recent, the visit and chooseStyle
+ *  accept. The animation styles are Animate from Text's (generate-pass.md
+ *  3, G1), so Create's Recent badges never list one. The same list as
+ *  generateTabs.ts CREATE_STYLE_IDS (scripts/generate-tabs-test.mjs). */
+const STYLE_IDS = OFFERED_STYLES.filter((s) => !s.isAnimation).map((s) => s.id);
 
 /** This account's Recent in this browser's localStorage (recentStyles.ts),
  *  or null where it cannot be reached or no one is signed in. */
@@ -59,9 +64,12 @@ const tokensWord = (n: number) => (n === 1 ? 'token' : 'tokens');
 
 interface GenerationFormProps {
   onGenerated: (imageUrl: string, prompt: string, style: string, animateContext?: FinishedJob['animate'], jobId?: string) => void;
+  /** The page's first-visit guide is showing: the bar says "Pick one to
+   *  start." and the step badges are plain (generate-pass.md section 1). */
+  guideShowing?: boolean;
 }
 
-export default function GenerationForm({ onGenerated }: GenerationFormProps) {
+export default function GenerationForm({ onGenerated, guideShowing = false }: GenerationFormProps) {
   const { userId, getToken } = useAuth();
   const setGenerating = useSpriteStore((s) => s.setGenerating);
   const setGeneratingAction = useSpriteStore((s) => s.setGeneratingAction);
@@ -429,35 +437,52 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const bgLabelId = useId();
   const bgValueId = useId();
 
-  // Why Generate is disabled, when the person can act on it (none while brewing).
-  // While paused the bar shows one short line: the pause banner carries the
-  // whole message, and screen readers get it here, through the button's
-  // aria-describedby.
+  // The steps: 1 Describe it (required), 2 Style (has a default, so done);
+  // Generate is the bar's step 3 (generate-pass.md section 1; G2 inserts
+  // "What's it for?" as step 2).
+  const [describeBadge, styleBadge] = badgeStates(
+    [{ required: true, done: prompt.trim() !== '' }, { required: true, done: true }],
+    guideShowing,
+  );
+
+  // The bar's hint, by the first of its states that applies (section 1's
+  // table): none while brewing; while paused one short line, the pause
+  // banner carrying the whole message, which screen readers get here
+  // through the button's aria-describedby.
+  const row = barRow({
+    generating: isGenerating,
+    paused: GENERATION_PAUSED,
+    guideShowing,
+    requiredMissing: !prompt.trim(),
+    shortBy: insufficientTokens ? tokensNeeded : 0,
+  });
   const reasonId = GENERATION_PAUSED ? 'generate-paused-reason' : 'generate-reason';
   let disabledReason: ReactNode = null;
-  if (!isGenerating) {
-    if (GENERATION_PAUSED) {
-      disabledReason = (
-        <>
-          <span aria-hidden="true">Generating is paused for now. Details are in the notice above.</span>
-          <span className="sr-only">{GENERATION_PAUSED_MESSAGE}</span>
-        </>
-      );
-    } else if (insufficientTokens) {
-      disabledReason = (
-        <>
-          You need {formatCount(tokensNeeded)} more {tokensWord(tokensNeeded)} for this style.{' '}
-          <a
-            href="/buy-tokens"
-            className="inline-flex items-center pointer-coarse:min-h-11 lg:pointer-coarse:-my-3 text-accent-amber underline hover:text-accent-amber-strong"
-          >
-            Get tokens
-          </a>
-        </>
-      );
-    } else if (!prompt.trim()) {
-      disabledReason = asksForCharacter ? 'Describe a character to start.' : 'Describe what to generate to start.';
-    }
+  if (row === 'paused') {
+    disabledReason = (
+      <>
+        <span aria-hidden="true">Generating is paused for now. Details are in the notice above.</span>
+        <span className="sr-only">{GENERATION_PAUSED_MESSAGE}</span>
+      </>
+    );
+  } else if (row === 'guide') {
+    disabledReason = GUIDE_HINT;
+  } else if (row === 'required') {
+    disabledReason = 'Step 1: describe your sprite.';
+  } else if (row === 'short') {
+    disabledReason = (
+      <>
+        You need {formatCount(tokensNeeded)} more {tokensWord(tokensNeeded)} for this style.{' '}
+        <a
+          href="/buy-tokens"
+          className="inline-flex items-center pointer-coarse:min-h-11 lg:pointer-coarse:-my-3 text-accent-amber underline hover:text-accent-amber-strong"
+        >
+          Get tokens
+        </a>
+      </>
+    );
+  } else if (row === 'ready') {
+    disabledReason = 'Step 3: Generate.';
   }
 
   // The bar's coin, cost and balance. A short balance reads "16 tokens ·
@@ -490,9 +515,13 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       <div>
         <label
           htmlFor="create-prompt"
-          className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2"
+          className="flex items-center gap-2 text-xs font-mono text-text-secondary uppercase tracking-wider mb-2"
         >
-          {asksForCharacter ? 'Describe your character' : 'Describe what to generate'}
+          <StepBadge n={1} state={describeBadge} />
+          <span>
+            <StepWord n={1} />
+            Describe it
+          </span>
         </label>
         <textarea
           id="create-prompt"
@@ -529,6 +558,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
           onOpenPicker={() => setPickerOpen(true)}
           onViewExamples={setLightboxStyle}
           onChooseRecent={chooseStyle}
+          step={{ n: 2, state: styleBadge }}
         />
         {balanceNote && (
           <p className="text-[13px] font-mono text-text-secondary mt-2">{balanceNote}</p>
@@ -710,6 +740,8 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
               onClick={handleGenerate}
               disabled={GENERATION_PAUSED || !prompt.trim() || isGenerating || insufficientTokens}
               className={`w-full sm:w-auto whitespace-nowrap pointer-coarse:min-h-11 ${!GENERATION_PAUSED && !isGenerating && prompt.trim() && !insufficientTokens ? 'animate-pulse motion-reduce:animate-none' : ''}`}
+              // Dimmed: the fill dims, the label stays at full strength (section 1; AUDIT g1-tabs-r1 M4).
+              style={!GENERATION_PAUSED && !isGenerating && prompt.trim() && !insufficientTokens ? undefined : DIMMED_GENERATE}
               title={GENERATION_PAUSED ? GENERATION_PAUSED_MESSAGE : insufficientTokens ? `Need ${tokensNeeded} more ${tokensWord(tokensNeeded)}` : undefined}
               aria-describedby={disabledReason ? reasonId : undefined}
             >
@@ -721,9 +753,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
               ) : (
                 <>
                   <Sparkles size={16} />
-                  Generate
+                  Generate sprite
                   <span className="inline-flex items-center gap-1.5 tabular-nums">
                     &middot; <PixelCoin /> {formatCount(tokenCost)}
+                    <span className="sr-only"> tokens</span>
                   </span>
                 </>
               )}

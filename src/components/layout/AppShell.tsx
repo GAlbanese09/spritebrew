@@ -8,6 +8,8 @@ import GenerationPauseBanner from './GenerationPauseBanner';
 import RewardModal from '@/components/rewards/RewardModal';
 import GenerationErrorNotice from '@/components/sprites/GenerationErrorNotice';
 import { ViewportVars } from '@/components/sprites/ViewportVars';
+import { GENERATE_BAR_GAP_PX } from '@/lib/generateBarHeight';
+import { useGenerateBarHeight } from './useGenerateBarHeight';
 
 interface AppShellProps {
   children: ReactNode;
@@ -20,6 +22,10 @@ export default function AppShell({ children }: AppShellProps) {
   // so its h-editor-page grid fills exactly the visible area and the mobile
   // bottom toolbar doesn't get pushed below the fold by AppShell padding.
   const isEditor = pathname === '/editor';
+  // On /generate, <main> keeps its bottom scroll padding 8 px taller than the
+  // Generate bar, so a control scrolled into view (and its focus ring) is
+  // never under the bar (DESIGN generate-pass.md section 1, G1).
+  const barHeight = useGenerateBarHeight(pathname === '/generate');
 
   // The landing page at / has its own nav and layout — no sidebar/header.
   if (pathname === '/') {
@@ -59,9 +65,16 @@ export default function AppShell({ children }: AppShellProps) {
             status line is one) is laid out against the document instead,
             the document grows taller than the window, and a wheel turn or a
             drag over the sidebar or the header slides the whole app up. */}
-        <main className={`relative flex-1 pixel-grid overscroll-none ${isEditor ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+        <main
+          className={`relative flex-1 pixel-grid overscroll-none ${isEditor ? 'overflow-hidden' : 'overflow-y-auto'}`}
+          style={barHeight === null ? undefined : { scrollPaddingBottom: barHeight + GENERATE_BAR_GAP_PX }}
+        >
           <div className={isEditor ? 'h-full' : 'p-6 sm:p-8'}>
             {children}
+            {/* While the Generate bar shows, real room at the end as tall as the
+                bar, so the page's last controls can scroll clear of it (AUDIT
+                g1-tabs-r1 M3); the scroll padding keeps a focused one clear. */}
+            {barHeight !== null && <div aria-hidden="true" data-bar-room="" style={{ height: barHeight }} />}
           </div>
         </main>
       </div>

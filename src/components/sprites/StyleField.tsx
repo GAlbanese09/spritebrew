@@ -5,7 +5,9 @@ import { Film, Play } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import PixelCoin from '@/components/ui/PixelCoin';
 import type { GenerationStyle } from '@/lib/styleRegistry';
+import type { BadgeState } from '@/lib/generateTabs';
 import { ANIMATED_STILLS, stillFrameStyle } from './animatedStills';
+import StepBadge, { StepWord } from './StepBadge';
 
 interface StyleFieldProps {
   style: GenerationStyle;
@@ -15,6 +17,8 @@ interface StyleFieldProps {
   onOpenPicker: () => void;
   onViewExamples: (style: GenerationStyle) => void;
   onChooseRecent: (id: string) => void;
+  /** The section's step number and badge (generate-pass.md section 1, G1). */
+  step?: { n: number; state: BadgeState };
 }
 
 /**
@@ -25,7 +29,7 @@ interface StyleFieldProps {
  * so the picker can hand focus back to it.
  */
 const StyleField = forwardRef<HTMLButtonElement, StyleFieldProps>(function StyleField(
-  { style, recent, pickerOpen, onOpenPicker, onViewExamples, onChooseRecent },
+  { style, recent, pickerOpen, onOpenPicker, onViewExamples, onChooseRecent, step },
   changeRef,
 ) {
   const labelId = useId();
@@ -35,8 +39,12 @@ const StyleField = forwardRef<HTMLButtonElement, StyleFieldProps>(function Style
 
   return (
     <div>
-      <p id={labelId} className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2">
-        Style
+      <p id={labelId} className="flex items-center gap-2 text-xs font-mono text-text-secondary uppercase tracking-wider mb-2">
+        {step && <StepBadge n={step.n} state={step.state} />}
+        <span>
+          {step && <StepWord n={step.n} />}
+          Style
+        </span>
       </p>
       <div role="group" aria-labelledby={labelId}>
         <div className="w-full rounded-xl border border-border-strong p-2.5">

@@ -73,6 +73,18 @@ export interface GenerateBody {
   /** Client-supplied UUID for the queue-kickoff path (Build #2A).
    *  Required only when QUEUE_KICKOFF_ENABLED is on for this user. */
   idempotencyKey?: string;
+  /** Create only (G2): the page's card and fine-tune ids. Ids, never words;
+   *  checked by the private side before any debit (src/lib/createWords.ts). */
+  promptSpec?: unknown;
+  /** Create with `promptSpec` only: the person's text. Such a request sends
+   *  `description` and never `prompt`, so a route without G2 refuses it
+   *  ("Prompt is required.") instead of charging for the bare text (AUDIT
+   *  g2 r1 M2). */
+  description?: unknown;
+  /** Create with `promptSpec`, optional: the table version the page's "Adds"
+   *  line showed. A different version is refused with nothing charged, so
+   *  the words sent are the words shown (AUDIT g2 r1 L3). */
+  wordsVersion?: unknown;
   /**
    * Optional 64×64 opaque PNG base64 (no data: prefix) rendered by the
    * client alongside the primary inputImage. Threaded into the QUEUE
@@ -125,6 +137,7 @@ import { isQueueKickoffEnabled } from '@/lib/featureFlag';
 import { deriveJobId } from '@/lib/jobIdHelper';
 import { DEBT_TTL_S, putJobState } from '@/lib/jobState';
 import { enqueueJob } from '@/lib/queueProducer';
+import { askCreateWords, CREATE_SPEC_MESSAGES, parseCreateSpecIds, type CreateSpecIds } from '@/lib/createWords';
 import { buildRdCreateBody, buildRdAnimateBody } from '@/lib/rdBodyBuilder';
 import { devDelay, devFault, MoneyPausedError, PAUSED_MESSAGE } from '@/lib/moneyPause';
 import { admitMoney } from '@/lib/moneyAdmission';
@@ -179,6 +192,20 @@ export async function POST(request: Request) {
     return Response.json({ success: false, error: 'Unknown mode.' }, { status: 400 });
   }
   const mode: 'create' | 'animate' = requestedMode;
+
+  // G2 (AUDIT g2 r1 M2): a Create with the page's card ids carries its text as
+  // `description`, never `prompt`, so a route that does not know cards refuses
+  // it rather than charging for the bare text. Here the text moves to
+  // `prompt` for the checks and the body below.
+  if (mode === 'create' && body.promptSpec !== undefined) {
+    if (body.prompt !== undefined || typeof body.description !== 'string') {
+      return Response.json(
+        { success: false, error: 'create_spec_refused', reason: 'spec', message: CREATE_SPEC_MESSAGES.spec },
+        { status: 400 }
+      );
+    }
+    body.prompt = body.description;
+  }
 
   // Validate before streaming (fast errors as plain JSON)
   if (mode === 'create') {
@@ -323,6 +350,48 @@ export async function POST(request: Request) {
       );
     }
   } catch { /* carry on: the late check guards */ }
+
+  // G2 (HQ 2026-11-18-049, -056): a Create with the page's card and fine-tune
+  // ids. The private side, through the CREATE_WORDS binding, checks the ids
+  // and the final prompt's length before any admission or debit. A refusal,
+  // or a binding that is missing or fails, is answered here with nothing
+  // charged: a card the person chose is never dropped. The ids ride on the
+  // queue message; the description goes as typed (rdBodyBuilder trims it, so
+  // the check uses the trimmed text too).
+  let createSpec: CreateSpecIds | undefined;
+  if (mode === 'create' && body.promptSpec !== undefined) {
+    const ids = parseCreateSpecIds(body.promptSpec);
+    if (!ids) {
+      return Response.json(
+        { success: false, error: 'create_spec_refused', reason: 'spec', message: CREATE_SPEC_MESSAGES.spec },
+        { status: 400 }
+      );
+    }
+    const answer = await askCreateWords(process.env as Record<string, unknown>, {
+      style: promptStyle,
+      promptSpec: ids,
+      description: body.prompt!.trim(),
+    });
+    if (answer.kind === 'unavailable') {
+      return Response.json(
+        { success: false, error: 'create_words_unavailable', message: CREATE_SPEC_MESSAGES.unavailable },
+        { status: 503 }
+      );
+    }
+    if (answer.kind === 'refused') {
+      return Response.json(
+        { success: false, error: 'create_spec_refused', reason: answer.reason, message: CREATE_SPEC_MESSAGES[answer.reason] },
+        { status: 400 }
+      );
+    }
+    if (body.wordsVersion !== undefined && body.wordsVersion !== answer.version) {
+      return Response.json(
+        { success: false, error: 'create_words_changed', message: CREATE_SPEC_MESSAGES.changed },
+        { status: 409 }
+      );
+    }
+    createSpec = ids;
+  }
 
   // Money paused (n1-ledger 005 section 4): no fresh generation starts, so
   // nothing is debited. S0's admission record replaces the pause read: zero
@@ -570,7 +639,10 @@ export async function POST(request: Request) {
           idempotencyKey,
           tokenCost,
           mode,
-          body: rdBody,
+          // G2 (AUDIT g2 r1 M2): a spec'd Create carries its provider body as
+          // createBody, so a consumer that does not know specs cannot run it
+          // bare: it finds no body, the message dead-letters and is refunded.
+          ...(createSpec ? { createBody: rdBody, promptSpec: createSpec } : { body: rdBody }),
           enqueuedAt: now,
           ...(includeFallback ? { fallbackInputImage: body.fallbackInputImage } : {}),
         });

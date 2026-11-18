@@ -65,6 +65,23 @@ const BEFORE = {
 };
 const NOTE = ' Your tokens have been refunded.';
 
+// The refusal words (design/generate-pass/failure-lines.md, HQ 2026-11-17-236), without
+// " under More settings" until that section exists on each form (G2, G4).
+const REFUSAL = {
+  generation: (note) => `Generation failed: the AI service could not make this one.${note} You can try again, or change the description or the style, or the size.`,
+  'text-animation': (note) => `Animation failed: the AI service could not make this one.${note} You can try again, or change the description or the animation.`,
+  animation: (note) => `Animation failed: the AI service could not make this one.${note} You can try again, or change the picture or the action, or the frame count.`,
+};
+const REFUSAL_PAUSED = {
+  generation: (note) => `Generation failed: the AI service could not make this one.${note}`,
+  'text-animation': (note) => `Animation failed: the AI service could not make this one.${note}`,
+  animation: (note) => `Animation failed: the AI service could not make this one.${note}`,
+};
+const KINDS = ['generation', 'text-animation', 'animation'];
+// The words a kind falls back to for a failure that is not a refusal: Animate from Text
+// keeps the generation words until G1, as today.
+const fallbackKind = (kind) => (kind === 'animation' ? 'animation' : 'generation');
+
 // ── Reading the switch ──
 {
   const { pause } = await load('unset', undefined);
@@ -89,6 +106,14 @@ for (const [tag, value] of [['unset', undefined], ['zero', '0'], ['false', 'fals
       pause.upstreamFailureMessage(kind, NOTE) === BEFORE[kind](NOTE)
         && pause.upstreamFailureMessage(kind, '') === BEFORE[kind](''));
   }
+  for (const kind of KINDS) {
+    check(`${tag}: a ${kind} refusal (rd_400, rd_200) shows the refusal words, with and without the refund note`,
+      ['rd_400', 'rd_200'].every((code) => pause.providerFailureMessage(kind, NOTE, code) === REFUSAL[kind](NOTE)
+        && pause.providerFailureMessage(kind, '', code) === REFUSAL[kind]('')));
+    check(`${tag}: a ${kind} failure that is not a refusal (rd_429, rd_500, a timeout, no code) keeps today's words`,
+      ['rd_429', 'rd_500', 'rd_async_timeout', 'rd_submit_orphaned_redelivery', undefined].every((code) =>
+        pause.providerFailureMessage(kind, NOTE, code) === BEFORE[fallbackKind(kind)](NOTE)));
+  }
 }
 
 // ── On (1, true): no request leaves, the copy drops its advice ──
@@ -110,6 +135,59 @@ for (const [tag, value] of [['one', '1'], ['true', 'true']]) {
     check(`${tag}: the ${kind} failure copy keeps the refund note and drops "try again"`,
       m === BEFORE[kind](NOTE).split(NOTE)[0] + NOTE && !/try again|few minutes|frame count/i.test(m));
   }
+  for (const kind of KINDS) {
+    const r = pause.providerFailureMessage(kind, NOTE, 'rd_400');
+    check(`${tag}: a ${kind} refusal keeps the refund note and drops its advice`,
+      r === REFUSAL_PAUSED[kind](NOTE) && pause.providerFailureMessage(kind, '', 'rd_200') === REFUSAL_PAUSED[kind]('')
+        && !/try again|change/i.test(r));
+    check(`${tag}: a ${kind} failure that is not a refusal keeps the paused words`,
+      pause.providerFailureMessage(kind, NOTE, 'rd_500') === pause.upstreamFailureMessage(fallbackKind(kind), NOTE));
+  }
+}
+
+// ── Which failures show the provider-failure copy (HQ 2026-11-17-029, -033) ──
+{
+  const { pause } = await load('unset', undefined);
+  const up = pause.isUpstreamFailure;
+  // Every provider text the release 1 consumer (rdClient.ts, 1cf3734) writes starts "RD ".
+  check('a text starting "RD " is the provider\'s, with or without a code',
+    up('RD 500: {"error":"x"}') && up('RD async poll exceeded budget 600000ms for task t', 'rd_async_timeout') && up('RD sync call timed out after 240000ms'));
+  check('the older markers still count: inference_failed, Unexpected response, timed out',
+    up('task inference_failed') && up('Unexpected response: status=500') && up('request timed out'));
+  // The one provider text that does not start "RD " (consumer index.ts 521 at 1cf3734).
+  const orphan = 'submit orphaned on redelivery \u2014 RD may have created a task we lost';
+  check('the orphaned-submit text alone is not caught, as before this change', up(orphan) === false);
+  check('the orphaned-submit text with its code rd_submit_orphaned_redelivery is caught', up(orphan, 'rd_submit_orphaned_redelivery'));
+  for (const code of ['rd_submit_orphaned', 'rd_async_timeout', 'rd_sync_timeout', 'rd_task_success_no_image', 'rd_task_unknown_status', 'rd_500', 'rd_0']) {
+    check(`any text with code ${code} is caught`, up('anything at all', code));
+  }
+  for (const code of [undefined, null, 500, ['rd_500'], '', 'rd', 'rd500', 'consumer_unknown', 'dead_lettered', 'stale_running_swept', 'result_store_failed', 'submission_failed', 'RD_500', 'xrd_500']) {
+    check(`a plain text with code ${code === undefined ? 'none' : JSON.stringify(code)} is shown as written`, up('This generation could not be started.', code) === false);
+  }
+  const forms = ['src/components/sprites/GenerationForm.tsx', 'src/components/sprites/AnimateForm.tsx'].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'));
+  check('both forms decide with isUpstreamFailure and the job\'s errorCode',
+    forms.every((s) => s.includes('const isUpstreamError = isUpstreamFailure(rawMessage, poll.error?.errorCode);')
+      && !s.includes("rawMessage.startsWith('RD ')")));
+  check('both forms word a provider failure with providerFailureMessage, their own kind and the job\'s errorCode',
+    forms[0].includes("? providerFailureMessage('generation', refundedNote, poll.error?.errorCode)")
+      && forms[1].includes("? providerFailureMessage('animation', refundedNote, poll.error?.errorCode)")
+      && forms.every((s) => !s.includes('upstreamFailureMessage(')));
+}
+
+// ── Which provider failures are refusals (AUDIT rd-swap-r1 M1; HQ 2026-11-17-155, -236) ──
+{
+  const { pause } = await load('unset', undefined);
+  const refusal = pause.isProviderRefusal;
+  const yes = ['rd_200', 'rd_400', 'rd_401', 'rd_402', 'rd_403', 'rd_404', 'rd_413', 'rd_422', 'rd_499'];
+  const no = ['rd_429', 'rd_500', 'rd_502', 'rd_503', 'rd_0', 'rd_201', 'rd_2000', 'rd_4000', 'rd_40', 'rd_4xx',
+    'rd_async_timeout', 'rd_sync_timeout', 'rd_submit_orphaned', 'rd_submit_orphaned_redelivery',
+    'rd_task_success_no_image', 'rd_task_unknown_status', 'rd_create_outcome_unknown',
+    'RD_400', ' rd_400', 'rd_400 ', 'xrd_400', '', 'consumer_unknown', 'dead_lettered', 'stale_running_swept',
+    'result_store_failed', 'submission_failed', undefined, null, 400, ['rd_400']];
+  check(`refusals: ${yes.join(', ')}`, yes.every((c) => refusal(c) === true));
+  check(`not refusals: ${no.map((c) => (c === undefined ? 'none' : JSON.stringify(c))).join(', ')}`, no.every((c) => refusal(c) === false));
+  const words = KINDS.flatMap((k) => [REFUSAL[k](NOTE), REFUSAL_PAUSED[k](NOTE)]);
+  check('the refusal words carry no em dash and no "few minutes"', words.every((w) => !w.includes('\u2014') && !/few minutes/i.test(w)));
 }
 
 // ── No other copy of the advice in the client ──

@@ -17,7 +17,7 @@ import { accountRecentStorage, pushRecent, readRecent, visibleRecent, writeRecen
 import { affordableNote, DEFAULT_STYLE_ID, OPENING_CANDIDATES, openingStyle } from '@/lib/affordableStyle';
 import { formVisit } from '@/lib/createFormVisit';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
-import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
+import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, isUpstreamFailure, providerFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
 import { type FinishedJob } from '@/lib/pollResume';
 import { finishJob, type JobResultIO } from '@/lib/jobResult';
@@ -375,14 +375,10 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
 
       // Friendly error wrapping: convert technical upstream errors to
       // customer-facing copy. Keep raw error in console for diagnostics.
-      const isUpstreamError =
-        rawMessage.startsWith('RD ') ||
-        rawMessage.includes('inference_failed') ||
-        rawMessage.includes('Unexpected response') ||
-        rawMessage.includes('timed out');
+      const isUpstreamError = isUpstreamFailure(rawMessage, poll.error?.errorCode);
 
       const customerMessage = isUpstreamError
-        ? upstreamFailureMessage('generation', refundedNote)
+        ? providerFailureMessage('generation', refundedNote, poll.error?.errorCode)
         : `${rawMessage}${refundedNote}`;
 
       console.error('[generation error]', { rawMessage, errorCode: poll.error?.errorCode });

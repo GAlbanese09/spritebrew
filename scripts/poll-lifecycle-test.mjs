@@ -286,6 +286,27 @@ function fresh() {
   a.unmount();
 }
 
+// 3b. A failed job's errorCode reaches the form (AUDIT rd-swap-r1 L2): the
+// forms choose the provider-failure words from it (isUpstreamFailure), so
+// pollClient and this hook must carry it, with the text and refunded.
+for (const [tag, body, want] of [
+  ['with a code', { status: 'error', error: 'a plain sentence', errorCode: 'rd_create_outcome_unknown', refunded: true },
+    { message: 'a plain sentence', errorCode: 'rd_create_outcome_unknown', refunded: true }],
+  ['without a code', { status: 'error', error: 'RD 500: x', refunded: false },
+    { message: 'RD 500: x', errorCode: undefined, refunded: false }],
+]) {
+  fresh();
+  fetchQueue.push(answer(body));
+  const a = mount(useGenerationPoll);
+  a.value.startPolling('job-3b', 'key-3b', 'create');
+  await settle();
+  const e = a.value.error;
+  check(`error carry, ${tag}: the hook's error has the job's text, errorCode and refunded`,
+    a.value.status === 'error' && e?.message === want.message && e?.errorCode === want.errorCode && e?.refunded === want.refunded,
+    { status: a.value.status, error: e });
+  a.unmount();
+}
+
 // 4. Which form finishes a saved job (Second 073 P2-B and 090). Before any
 // hook resumes a saved job, it asks the checks registered with
 // onBeforeResume. The page here is the real useGenerateTab. A form is a mount

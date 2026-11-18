@@ -1,4 +1,12 @@
+import type { Metadata } from 'next';
+import { pageMetadata } from '@/lib/seo';
+
 export const runtime = 'edge';
+
+export const metadata: Metadata = pageMetadata(
+  'Privacy Policy | SpriteBrew',
+  'What SpriteBrew collects, why, the services it uses, and how to delete your data.',
+);
 
 export default function PrivacyPage() {
   return (

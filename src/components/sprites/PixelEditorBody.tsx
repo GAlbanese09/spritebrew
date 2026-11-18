@@ -111,6 +111,7 @@ import { useEditorRecovery, closeEditorDraft } from './useEditorRecovery';
 import { useEditorHistoryGuard } from './useEditorHistoryGuard';
 import { useLeaveByBack } from './useLeaveByBack';
 import EditorLeaveDialog from './EditorLeaveDialog';
+import EditorRefusalText from './EditorRefusalText';
 import { isDevHost } from '@/lib/isDevHost';
 import { devRecoverySelfTest } from '@/lib/editorRecovery';
 import { pixelsToPngDataUrl } from '@/lib/editorImage';
@@ -2109,7 +2110,7 @@ export default function PixelEditorBody({
                   Can&apos;t open this image
                 </p>
                 <p className="text-[11px] font-mono text-text-secondary leading-relaxed">
-                  {loadError}
+                  <EditorRefusalText message={loadError} />
                 </p>
                 <div className="mt-3 flex items-center gap-3">
                   <button
@@ -2361,7 +2362,7 @@ export default function PixelEditorBody({
           </div>
           {palette.length === 0 ? (
             <p className="text-[11px] font-mono text-text-muted italic leading-relaxed">
-              Use the color picker above — colors from your source image will appear here when you upload one.
+              Use the color picker above. Colors from your source image will appear here when you upload one.
             </p>
           ) : (
             <div className="grid grid-cols-2 gap-1">

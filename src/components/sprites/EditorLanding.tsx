@@ -3,6 +3,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { UploadCloud, FilePlus, FolderOpen, Image as ImageIcon, AlertCircle, RotateCcw } from 'lucide-react';
 import UploadZone from './UploadZone';
+import EditorRefusalText from './EditorRefusalText';
 import Button from '@/components/ui/Button';
 import {
   dimsWithinEditorLimits,
@@ -242,7 +243,7 @@ export default function EditorLanding({
               <div className="rounded-md border border-red-500/30 bg-red-500/5 p-3 flex items-start gap-2">
                 <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
                 <p className="text-[11px] font-mono text-text-secondary leading-relaxed flex-1 min-w-0">
-                  {uploadError}
+                  <EditorRefusalText message={uploadError} />
                 </p>
                 <button
                   onClick={() => setUploadError(null)}

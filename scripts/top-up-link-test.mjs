@@ -5,7 +5,8 @@
 // brewing." (em dash list row 17), and both places that offer the link must
 // still offer it (REV 2026-11-17-006, H1). The Animate form's own box shows the
 // same error when a person hits Create's cap and opens the Animate tab, and
-// offers its own button (REV-M1, 2026-11-17-012; HQ -172, -194). Reads the
+// offers its own button (REV-M1, 2026-11-17-012; HQ -172, -194); its own cap
+// message reads "Top up" too (row 30, HQ 2026-11-17-219). Reads the
 // source of the three places, takes the very conditions they render the link
 // on, and runs them against the messages the app shows. Run from the repo root:
 // `node scripts/top-up-link-test.mjs`. Writes nothing.
@@ -45,6 +46,7 @@ check('2c: the server cap message is found in the route', typeof serverCap === '
 const animateCapTemplate = (animate.match(/code === 'free_tier_cap_reached'[\s\S]*?setGenerationError\(\s*`([^`]+)`/) || [])[1];
 check('2d: the Animate form\'s own cap message is found', typeof animateCapTemplate === 'string');
 const animateCap = (label) => animateCapTemplate.replace('${tierLabel}', label);
+check('2e: the Animate form\'s own cap message reads "Top up" with a capital T (row 30)', /\. Top up to keep brewing\.$/.test(animateCap('Pro')));
 const shortBalance = 'You need 12 tokens for this style, but you have 3. Try a cheaper style or buy more tokens!';
 const plain = 'Generation failed. Try a different prompt.';
 
@@ -66,7 +68,7 @@ check('8b: a plain failure shows no Buy Tokens in the notice', noticeShows(plain
 for (const label of ['Pro', 'Fast']) {
   check(`9: the Animate form shows Buy Tokens on Create's ${label} cap message, carried over`, animateShows(cap(label)) === true);
   check(`10: the Animate form shows Buy Tokens on its own ${label} cap message`, animateShows(animateCap(label)) === true);
-  check(`11: ... and still does when its own words read "Top up"`, animateShows(animateCap(label).replace(/top up/, 'Top up')) === true);
+  check(`11: ... and still does when its own words read "top up" in lower case`, animateShows(animateCap(label).replace(/Top up/, 'top up')) === true && /top up/.test(animateCap(label).replace(/Top up/, 'top up')));
 }
 check('12: the Animate form shows Buy Tokens on the server cap message', animateShows(serverCap) === true);
 check('13: lower case and upper case "top up" both show it in the Animate form', animateShows('so top up to keep brewing.') === true && animateShows('TOP UP to keep brewing.') === true);

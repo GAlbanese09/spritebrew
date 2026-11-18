@@ -37,13 +37,20 @@ export const EDITOR_MAX_PIXELS = 1_048_576;
  *  itself (an upload), or a project file being opened. */
 export type EditorRefusalPlace = 'card' | 'page' | 'plain' | 'project';
 
+/** The Resize page, named in /editor's way out: the words show it as a link
+ *  (DESIGN room 2026-11-15-126, item 2; HQ 2026-11-17-062). /resize takes
+ *  images up to 4,096 pixels a side, and this way out is only offered under
+ *  that, so it leads somewhere that takes the sheet. */
+export const EDITOR_RESIZE_LINK = { label: 'Resize page', href: '/resize' } as const;
+
+/** /editor's way out over the total, word for word. */
+export const EDITOR_RESIZE_WAY_OUT = `To edit it, make it smaller on the ${EDITOR_RESIZE_LINK.label} first.`;
+
 /** The last sentence of the over-the-total refusal: what the person can do
- *  from there. On /editor, until /resize ships; BUILD's /resize pull request
- *  swaps in "To edit it, make it smaller on the Resize page first." with a
- *  link (DESIGN rooms 2026-11-15-126 and -129). */
+ *  from there (DESIGN rooms 2026-11-15-126 and -129). */
 const EDITOR_WAY_OUT: Readonly<Record<EditorRefusalPlace, string>> = {
   card: 'To edit it, use Send to Editor on its result card, or use Download as delivered and upload that file.',
-  page: 'Sheets you make in SpriteBrew open from their result card with Send to Editor.',
+  page: EDITOR_RESIZE_WAY_OUT,
   // /upload's frame pencil and the Animate form's character Edit: no way out
   // that exists there yet, so the size and the limit alone (AUDIT, editor
   // size r1, M1; DESIGN may give one).

@@ -95,7 +95,7 @@ export default function FitPadResizer({
         <Maximize2 size={16} className="text-accent-amber mt-0.5 flex-shrink-0" />
         <div className="flex-1">
           <h3 className="text-xs font-mono font-semibold text-text-primary uppercase tracking-wider mb-1">
-            Resize Required — {targetSize}x{targetSize}
+            Resize Required: {targetSize}x{targetSize}
           </h3>
           <p className="text-[10px] font-mono text-text-muted leading-relaxed">
             Your character is{' '}
@@ -106,7 +106,7 @@ export default function FitPadResizer({
                 {' '}Your image isn&apos;t square, so we&apos;ll scale it to{' '}
                 <span className="text-text-primary">{scaledW}x{scaledH}</span> and
                 center it on a {targetSize}x{targetSize} canvas with background
-                padding — the character is <span className="text-accent-amber">not stretched</span>.
+                padding, so the character is <span className="text-accent-amber">not stretched</span>.
               </>
             )}
             {isSquare && (

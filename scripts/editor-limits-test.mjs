@@ -5,6 +5,8 @@
 // and -129): the side cap is 4096, the total cap 1,048,576 and its own number;
 // every sheet SpriteBrew makes opens; the just-over cases refuse in DESIGN's
 // words; a 1280 by 512 sheet goes through the store and a project file unchanged.
+// On /editor the way out names the Resize page, and those words show it as a
+// link to /resize (HQ room 2026-11-17-062).
 // Run from the repo root: `node scripts/editor-limits-test.mjs`.
 //
 // The harness writes only its esbuild bundle, to local/.editor-limits-test
@@ -24,9 +26,17 @@ await build({
     editorConstants: path.join(ROOT, 'src/lib/editorConstants.ts'),
     editorStore: path.join(ROOT, 'src/components/sprites/editorStore.ts'),
     spriteProject: path.join(ROOT, 'src/lib/spriteProject.ts'),
+    resizePage: path.join(ROOT, 'src/lib/resizePage.ts'),
+    refusalText: path.join(ROOT, 'src/components/sprites/EditorRefusalText.tsx'),
   },
-  bundle: true, platform: 'node', format: 'esm', outdir: OUT, logLevel: 'error',
+  bundle: true, platform: 'node', format: 'esm', outdir: OUT, logLevel: 'error', jsx: 'automatic',
   tsconfig: path.join(ROOT, 'tsconfig.json'), outExtension: { '.js': '.mjs' },
+  external: ['react', 'react-dom'],
+  // next/link needs Next's router; in its place a plain link that says what it was given.
+  plugins: [{ name: 'link-stand-in', setup(b) {
+    b.onResolve({ filter: /^next\/link$/ }, () => ({ path: 'next-link', namespace: 'stand-in' }));
+    b.onLoad({ filter: /.*/, namespace: 'stand-in' }, () => ({ contents: "import { jsx } from 'react/jsx-runtime'; export default function Link({ href, className, children }) { return jsx('a', { href, className, 'data-link': 'next', children }); }", loader: 'js' }));
+  } }],
 });
 
 // The store builds an ImageData as a size hint; Node has none, so a plain stand-in.
@@ -35,7 +45,7 @@ globalThis.ImageData ??= class ImageData {
 };
 
 const load = async (name) => import(pathToFileURL(path.join(OUT, `${name}.mjs`)).href);
-const { EDITOR_MAX_DIMENSION, EDITOR_MAX_PIXELS, editorSizeRefusal } = await load('editorConstants');
+const { EDITOR_MAX_DIMENSION, EDITOR_MAX_PIXELS, EDITOR_RESIZE_LINK, EDITOR_RESIZE_WAY_OUT, editorSizeRefusal } = await load('editorConstants');
 const { dimsWithinEditorLimits, editorDimsRejectionMessage, useEditorStore } = await load('editorStore');
 const { validateProject } = await load('spriteProject');
 
@@ -53,7 +63,7 @@ const opens = [[1280, 512], [4096, 256], [256, 4096], [1024, 1024], [4096, 1], [
 check("L2: George's 1280 by 512 sheet opens, and so do the extreme shapes the caps allow (4096 by 256, 256 by 4096, 4096 by 1) and the old 1024 by 1024",
   opens.every(([w, h]) => dimsWithinEditorLimits(w, h)), opens.filter(([w, h]) => !dimsWithinEditorLimits(w, h)));
 
-const refused = [[4097, 1], [1, 4097], [4097, 256], [4097, 4097], [919, 1141], [1024, 1025], [0, 5], [5, 0], [-1, 5], [NaN, 5], [Infinity, 5], [5, Infinity]];
+const refused = [[4097, 1], [1, 4097], [4097, 256], [4097, 4097], [919, 1141], [1024, 1025], [4096, 257], [257, 4096], [0, 5], [5, 0], [-1, 5], [NaN, 5], [Infinity, 5], [5, Infinity]];
 check('L3: just over refuses: 4097 on a side, 919 by 1141 (1,048,579 pixels, the smallest total over the cap that is a rectangle within 4096 a side; 1,048,577 itself is 17 by 61,681), 1024 by 1025; and no size the editor can read',
   refused.every(([w, h]) => !dimsWithinEditorLimits(w, h)), refused.filter(([w, h]) => dimsWithinEditorLimits(w, h)));
 
@@ -77,7 +87,7 @@ check("L5: Create's stills (to 384 by 384) and its animation styles (16 frames o
 // ---- The words (DESIGN, rooms 2026-11-15-126 and -129) ----
 const words = [
   [[1024, 1792, 'card'], 'This sheet is 1,024 by 1,792 pixels, 1,835,008 in all. The editor opens up to 1,048,576 pixels, such as 16 frames of 256 by 256. To edit it, use Send to Editor on its result card, or use Download as delivered and upload that file.'],
-  [[1024, 1792, 'page'], 'This sheet is 1,024 by 1,792 pixels, 1,835,008 in all. The editor opens up to 1,048,576 pixels, such as 16 frames of 256 by 256. Sheets you make in SpriteBrew open from their result card with Send to Editor.'],
+  [[1024, 1792, 'page'], 'This sheet is 1,024 by 1,792 pixels, 1,835,008 in all. The editor opens up to 1,048,576 pixels, such as 16 frames of 256 by 256. To edit it, make it smaller on the Resize page first.'],
   [[5000, 300, 'page'], 'This image is 5,000 pixels wide. The editor opens images up to 4,096 pixels on a side.'],
   [[300, 5000, 'card'], 'This image is 5,000 pixels tall. The editor opens images up to 4,096 pixels on a side.'],
   [[5000, 6000, 'page'], 'This image is 5,000 by 6,000 pixels. The editor opens images up to 4,096 pixels on a side.'],
@@ -87,9 +97,12 @@ const words = [
   [[NaN, 5, 'project'], "This project's canvas has no size the editor can read."],
   [[1792, 1024, 'plain'], 'This sheet is 1,792 by 1,024 pixels, 1,835,008 in all. The editor opens up to 1,048,576 pixels, such as 16 frames of 256 by 256.'],
   [[2.5, 4, 'project'], "This project's canvas has no size the editor can read."],
+  // A side of exactly 4,096 is no side over the cap: the total speaks (REV on #70, L1).
+  [[4096, 257, 'page'], 'This sheet is 4,096 by 257 pixels, 1,052,672 in all. The editor opens up to 1,048,576 pixels, such as 16 frames of 256 by 256. To edit it, make it smaller on the Resize page first.'],
+  [[257, 4096, 'card'], 'This sheet is 257 by 4,096 pixels, 1,052,672 in all. The editor opens up to 1,048,576 pixels, such as 16 frames of 256 by 256. To edit it, use Send to Editor on its result card, or use Download as delivered and upload that file.'],
 ];
 const wrongWords = words.filter(([[w, h, place], want]) => editorSizeRefusal(w, h, place) !== want).map(([args]) => [args, editorSizeRefusal(...args)]);
-check('L6: the refusals read as DESIGN wrote them: the real size, then the limit, then what to do (a result card; /editor until /resize ships; none over a side, for a project file, or where neither way out exists: /upload\'s frames and the Animate character, AUDIT r1 M1); a size that is not a whole number cannot be read', wrongWords.length === 0, wrongWords);
+check('L6: the refusals read as DESIGN wrote them: the real size, then the limit, then what to do (a result card; on /editor the Resize page; none over a side, for a project file, or where neither way out exists: /upload\'s frames and the Animate character, AUDIT r1 M1); a size that is not a whole number cannot be read', wrongWords.length === 0, wrongWords);
 const all = words.map(([args]) => editorSizeRefusal(...args));
 // The same words rendered in a German locale (where 1,048,576 would read 1.048.576) must not change.
 const german = spawnSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(pathToFileURL(path.join(OUT, 'editorConstants.mjs')).href)}); console.log(JSON.stringify([m.editorSizeRefusal(1024, 1792, 'page'), m.editorSizeRefusal(5000, 6000, 'card'), (1048576).toLocaleString()]));`], { env: { ...process.env, LC_ALL: 'de_DE.UTF-8' }, encoding: 'utf8' });
@@ -164,5 +177,32 @@ const guarded = (t) => [...t.matchAll(/if \(!dimsWithinEditorLimits\(([^)]*)\)\)
 const guards = [[landing, 1], [handoff, 1], [body, 2]].map(([t, n]) => [guarded(t), (t.match(/dimsWithinEditorLimits\(/g) ?? []).length, n]);
 check('L14: every caller checks the size before it shows the words, with the same size, at each of its checks (the /editor upload, the handoff, the editor body twice; AUDIT r1 L1)',
   guards.every(([g, uses, n]) => g === n && uses === n), guards);
+
+// ---- /editor's way out: the Resize page, as a link (HQ room 2026-11-17-062) ----
+const { RESIZE_SIDE_CAP } = await load('resizePage');
+const { default: EditorRefusalText } = await load('refusalText');
+const { createElement } = await import('react');
+const { renderToStaticMarkup } = await import('react-dom/server');
+const shown = (message) => renderToStaticMarkup(createElement(EditorRefusalText, { message }));
+const plainText = (html) => html.replace(/<[^>]+>/g, '').replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
+const pageOver = [[1024, 1792], [4096, 257], [257, 4096], [919, 1141], [1024, 1025]].map(([w, h]) => editorSizeRefusal(w, h, 'page'));
+const others = [...words.filter(([[, , place], want]) => !(place === 'page' && want.endsWith(EDITOR_RESIZE_WAY_OUT))).map(([args]) => editorSizeRefusal(...args)), 'Could not read that file.', 'Resize page'];
+check("L15: on /editor a sheet over the total ends \"To edit it, make it smaller on the Resize page first.\" (DESIGN -126, item 2), and no other refusal does; /resize takes every sheet it is said for (up to 4,096 a side, the editor's own side cap)",
+  EDITOR_RESIZE_WAY_OUT === 'To edit it, make it smaller on the Resize page first.' && EDITOR_RESIZE_LINK.label === 'Resize page' && EDITOR_RESIZE_LINK.href === '/resize'
+  && pageOver.every((t) => t.endsWith(` ${EDITOR_RESIZE_WAY_OUT}`)) && others.every((t) => !t.includes(EDITOR_RESIZE_LINK.label) || t === 'Resize page')
+  && RESIZE_SIDE_CAP >= EDITOR_MAX_DIMENSION && readFileSync(path.join(ROOT, 'src/app/resize/page.tsx'), 'utf8').length > 0,
+  [pageOver.filter((t) => !t.endsWith(EDITOR_RESIZE_WAY_OUT)), RESIZE_SIDE_CAP]);
+const linkHtml = '<a href="/resize" class="relative inline-block underline hover:text-text-primary pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-[13px] pointer-coarse:after:content-[&#x27;&#x27;]" data-link="next">Resize page</a>';
+const asShown = pageOver.map(shown);
+const othersShown = others.map(shown);
+check('L16: those words show "Resize page" as the one link, to /resize, and read the same as the text; every other message shows as it is, with no link',
+  asShown.every((h, i) => (h.match(/<a /g) ?? []).length === 1 && h.endsWith(`To edit it, make it smaller on the ${linkHtml} first.`) && plainText(h) === pageOver[i])
+  && othersShown.every((h, i) => !/<a /.test(h) && plainText(h) === others[i]),
+  [asShown[0], othersShown.filter((h) => /<a /.test(h))]);
+const bare = (t, name) => new RegExp(`^\\s*\\{${name}\\}\\s*$`, 'm').test(t);
+check("L17: /editor's upload refusal and the editor body's refusal both show through it, and neither shows its message bare",
+  /<EditorRefusalText message=\{uploadError\} \/>/.test(landing) && /<EditorRefusalText message=\{loadError\} \/>/.test(body)
+  && !bare(landing, 'uploadError') && !bare(body, 'loadError')
+  && /import EditorRefusalText from '\.\/EditorRefusalText';/.test(landing) && /import EditorRefusalText from '\.\/EditorRefusalText';/.test(body));
 
 process.exit(failed ? 1 : 0);

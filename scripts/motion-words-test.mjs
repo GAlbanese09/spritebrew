@@ -549,6 +549,31 @@ const all = (texts, action, want) => { const got = caught(texts, action); return
         "          {generationError.includes('top up') && (",
       ],
     },
+    {
+      // Em dash list rows 28 to 30 (HQ 2026-11-15-111, word for word; HQ 2026-11-17-219): the template error, the failure fallback and the free-tier cap.
+      start: "      setTemplateError(\"Couldn't save template. Storage may be full.\");",
+      end: "      setTemplateError(\"Couldn't save template. Storage may be full.\");",
+      sha256: '945c21af91b59b6e19dcb1f0020427d924deba93c59faa8b6b458aa7bacd8704',
+      was: [
+        "      setTemplateError(\"Couldn't save template \u2014 storage may be full.\");",
+      ],
+    },
+    {
+      start: "        setGenerationError(String(data.error ?? 'Animation failed. Try again.'));",
+      end: "        setGenerationError(String(data.error ?? 'Animation failed. Try again.'));",
+      sha256: '2a7f64b7f2e38de8d513999e3d09ec0462d2a8d612ff41afad879a15be637d99',
+      was: [
+        "        setGenerationError(String(data.error ?? 'Animation failed \u2014 try again.'));",
+      ],
+    },
+    {
+      start: "          `You've used all free ${tierLabel} generations on this account. Token packs start at $4.99. Top up to keep brewing.`",
+      end: "          `You've used all free ${tierLabel} generations on this account. Token packs start at $4.99. Top up to keep brewing.`",
+      sha256: '9051545ac6072972661a5409292d46397617e63b76ee1eb24a7269104950a458',
+      was: [
+        "          `You've used all free ${tierLabel} generations on this account. Token packs start at $4.99 \u2014 top up to keep brewing.`",
+      ],
+    },
   ];
   const sha256 = (t) => createHash('sha256').update(t).digest('hex');
   const gitBlob = (t) => { const b = Buffer.from(t, 'utf8'); return createHash('sha1').update(`blob ${b.length}\0`).update(b).digest('hex'); };
@@ -571,11 +596,21 @@ const all = (texts, action, want) => { const got = caught(texts, action); return
   check('D0: with the display lines undone, the form is the freeze baseline byte for byte, and each display region is as reviewed', wrong.length === 0, wrong);
 
   // The whole callback that builds and sends the request, byte for byte as
-  // in the baseline (the blob BASE_BLOB).
+  // in the baseline (the blob BASE_BLOB), once its two shown messages are put
+  // back as they were: the failure fallback and the free-tier cap (em dash
+  // list rows 29 and 30; REV 2026-11-17-014). Each approved message stands in
+  // the callback once, so nothing else in it can differ from the baseline.
+  const CALLBACK_WORDS = [
+    ["'Animation failed. Try again.'", "'Animation failed \u2014 try again.'"],
+    ['Token packs start at $4.99. Top up to keep brewing.`', 'Token packs start at $4.99 \u2014 top up to keep brewing.`'],
+  ];
   const a = raw.indexOf('  const handleGenerate = useCallback(async () => {');
   const b = raw.indexOf('\n  ]);', a) + '\n  ]);'.length;
-  const hash = sha256(raw.slice(a, b));
-  check('D1: the callback that builds and sends the request is byte for byte the baseline\'s', a > 0 && hash === 'b8c0a475506358935c3d0f8124b8aa7d06d2212048e8c1651b88f573df2bc95d', hash);
+  let callback = raw.slice(a, b);
+  const wordsOnce = CALLBACK_WORDS.map(([now]) => callback.split(now).length - 1);
+  for (const [now, was] of CALLBACK_WORDS) callback = callback.split(now).join(was);
+  const hash = sha256(callback);
+  check('D1: the callback that builds and sends the request is byte for byte the baseline\'s, once its two approved messages are put back as they were; each stands in it once', a > 0 && wordsOnce.every((n) => n === 1) && hash === 'b8c0a475506358935c3d0f8124b8aa7d06d2212048e8c1651b88f573df2bc95d', [wordsOnce, hash]);
   check('D2: the motion text is still written in three places only (a restore, a template, the box), and sent trimmed; a key counts, a paste, a drop or a cut does not', (src.match(/setMotionPrompt\(/g) ?? []).length === 3 && /motionPrompt: motionPrompt\.trim\(\),/.test(src) && has(`onChange={(e) => { setMotionPrompt(e.target.value); const how = (e.nativeEvent as InputEvent).inputType ?? ''; if (!/^(?:insertFrom|deleteBy)/.test(how)) setMotionKeys((n) => n + 1); }}`) && (src.match(/setMotionKeys\(/g) ?? []).length === 1);
   check('D3: only a key waits a moment after the last key; any other change of the text (even to a text typed before), and a change of action, are taken at once; the request never reads any of it', has(`
     const [motionKeys, setMotionKeys] = useState(0);

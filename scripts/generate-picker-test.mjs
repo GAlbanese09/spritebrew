@@ -321,7 +321,9 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
     // prices, admission or pause.
     const S1 = ['react', 'lucide-react', '@clerk/react', '@/stores/spriteStore', '@/components/ui/Button', '@/components/ui/PixelCoin',
       '@/components/sprites/ReferenceImagesPanel', '@/lib/styleRegistry', '@/lib/recentStyles', '@/lib/sseClient', '@/lib/generationPause',
-      '@/hooks/useGenerationPoll', '@/lib/pollResume', '@/lib/jobResult', '@/lib/spriteUtils', './StyleExamplesLightbox', './StyleField', './StylePicker'];
+      '@/hooks/useGenerationPoll', '@/lib/pollResume', '@/lib/jobResult', '@/lib/spriteUtils', './StyleExamplesLightbox', './StyleField', './StylePicker',
+      // G1 (the Generate page pass): the tabs' rules and the step badge; neither is a money path.
+      '@/lib/generateTabs', './StepBadge'];
     const sources = (text) => [...text.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
     const added = sources(form).filter((src) => !S1.includes(src));
     const affordable = sources(stripComments(read('src/lib/affordableStyle.ts')));
@@ -346,7 +348,8 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   check('5: "Animated from text" names the animations category', /animations: 'Animated from text'/.test(picker));
   check('5: the picker renders into document.body above the bar (z-[60])', /createPortal\(<PickerDialog \{\.\.\.props\} \/>, document\.body\)/.test(picker) && /z-\[60\]/.test(picker));
   check('5: the prompt textarea is named by a label', /<label\s+htmlFor="create-prompt"/.test(form) && /<textarea\s+id="create-prompt"/.test(form));
-  check('5: both empty-prompt reasons exist', form.includes("'Describe a character to start.'") && form.includes("'Describe what to generate to start.'"));
+  // G1: one step hint for an empty description (DESIGN generate-pass.md section 1, row 5).
+  check('5: the empty-description hint names step 1', form.includes("disabledReason = 'Step 1: describe your sprite.';"));
   check('5: the button\'s aria-describedby names the reason line',
     /aria-describedby=\{disabledReason \? reasonId : undefined\}/.test(form) && /<p id=\{reasonId\}/.test(form)
     && /const reasonId = GENERATION_PAUSED \? 'generate-paused-reason' : 'generate-reason';/.test(form));
@@ -608,8 +611,9 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
     && (registrySrc.match(/hidden: true/g) ?? []).length === 1 && /\n {2}hidden\?: boolean;\n/.test(registrySrc)
     && /export const OFFERED_STYLES: GenerationStyle\[\] = GENERATION_STYLES\.filter\(\(s\) => !s\.hidden\);/.test(registrySrc));
   check('7: the picker groups offered styles only; the form\'s STYLE_IDS (Recent, the visit, chooseStyle) are the offered ids',
-    /for \(const style of OFFERED_STYLES\) \{/.test(picker) && !/for \(const style of GENERATION_STYLES\)/.test(picker)
-    && /^const STYLE_IDS = OFFERED_STYLES\.map\(\(s\) => s\.id\);$/m.test(form) && !/GENERATION_STYLES\.map\(/.test(form)
+    // G1: Create Sprite's picker and STYLE_IDS leave out the animation styles (Animate from Text has them).
+    /for \(const style of OFFERED_STYLES\.filter\(\(s\) => !s\.isAnimation\)\) \{/.test(picker) && !/for \(const style of GENERATION_STYLES\)/.test(picker)
+    && /^const STYLE_IDS = OFFERED_STYLES\.filter\(\(s\) => !s\.isAnimation\)\.map\(\(s\) => s\.id\);$/m.test(form) && !/GENERATION_STYLES\.map\(/.test(form)
     && (form.match(/STYLE_IDS/g) ?? []).length === 4);
   check('7: every opening candidate (affordableStyle.ts) is an offered style',
     OPENING_CANDIDATES.length === 2 && OPENING_CANDIDATES.every((id) => offeredIds.includes(id)), OPENING_CANDIDATES);

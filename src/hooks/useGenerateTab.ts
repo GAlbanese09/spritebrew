@@ -2,11 +2,14 @@
 
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { useAuth } from '@clerk/react';
-import { onBeforeResume, savedJobMode, type GenMode } from '@/hooks/useGenerationPoll';
+import { onBeforeResume, savedJob } from '@/hooks/useGenerationPoll';
+import { tabForJob, type GenerateTab } from '@/lib/generateTabs';
 
 /**
  * The /generate page's tab, and the page's say in which form finishes a saved
- * generation. Only the form for the current tab is mounted.
+ * generation. Only the form for the current tab is mounted. Three tabs, two
+ * kinds of job: a create job with an animation style is Animate from Text's
+ * (tabForJob, src/lib/generateTabs.ts; DESIGN generate-pass.md section 3).
  *
  * - The tab opens on the mode of the saved job that will resume for the
  *   signed-in user, if any, so a generation that ran while the user was on
@@ -30,9 +33,9 @@ import { onBeforeResume, savedJobMode, type GenMode } from '@/hooks/useGeneratio
  *   effect can resume a job, and the tab compared with is always the one on
  *   screen.
  */
-export function useGenerateTab(): { tab: GenMode; pickTab: (tab: GenMode) => void } {
+export function useGenerateTab(): { tab: GenerateTab; pickTab: (tab: GenerateTab) => void } {
   const { userId } = useAuth();
-  const [tab, setTab] = useState<GenMode>(() => tabForSavedJob(userId));
+  const [tab, setTab] = useState<GenerateTab>(() => tabForSavedJob(userId));
   // The account the tab was chosen for.
   const [tabUser, setTabUser] = useState(userId);
   const shownTab = useRef(tab);
@@ -61,15 +64,16 @@ export function useGenerateTab(): { tab: GenMode; pickTab: (tab: GenMode) => voi
 
   useLayoutEffect(
     () =>
-      onBeforeResume((mode) => {
-        if (userPicked.current || mode === shownTab.current) return false;
-        setTab(mode);
+      onBeforeResume((mode, styleId) => {
+        const jobTab = tabForJob(mode, styleId);
+        if (userPicked.current || jobTab === shownTab.current) return false;
+        setTab(jobTab);
         return true;
       }),
     []
   );
 
-  const pickTab = useCallback((next: GenMode) => {
+  const pickTab = useCallback((next: GenerateTab) => {
     userPicked.current = true;
     setTab(next);
   }, []);
@@ -77,8 +81,9 @@ export function useGenerateTab(): { tab: GenMode; pickTab: (tab: GenMode) => voi
   return { tab, pickTab };
 }
 
-/** The tab for the saved job that will resume for this user: Animate for an
- *  Animate job, Create otherwise. */
-function tabForSavedJob(userId: string | null | undefined): GenMode {
-  return savedJobMode(userId) === 'animate' ? 'animate' : 'create';
+/** The tab for the saved job that will resume for this user: its own tab
+ *  (tabForJob), or Create Sprite when there is none. */
+function tabForSavedJob(userId: string | null | undefined): GenerateTab {
+  const job = savedJob(userId);
+  return job ? tabForJob(job.mode, job.styleId) : 'create';
 }

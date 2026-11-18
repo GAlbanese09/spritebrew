@@ -10,7 +10,7 @@ import {
   PollTransientError,
   type PollTerminalState,
 } from '@/lib/pollClient';
-import { parseJobContext, resumeDecision, type JobContext } from '@/lib/pollResume';
+import { isAnimateContext, parseJobContext, resumeDecision, type JobContext } from '@/lib/pollResume';
 
 export type GenStatus = 'idle' | 'polling' | 'success' | 'error' | 'abandoned';
 export type GenMode = 'create' | 'animate';
@@ -38,15 +38,17 @@ const PAGE_LOADED_AT = Date.now();
  *  the form on screen picks the job up. */
 const jobSavedListeners = new Set<() => void>();
 
-/** Asked before any hook resumes a saved job, with the job's mode. One that
- *  returns true takes the job: the page opens the job's tab, whose form
- *  resumes it on mount, and the hook that asked leaves it alone, so the
- *  other tab's form never finishes it. */
-const resumeChecks = new Set<(mode: GenMode) => boolean>();
+/** Asked before any hook resumes a saved job, with the job's mode and its
+ *  style (null when it was saved without one). One that returns true takes
+ *  the job: the page opens the job's tab, whose form resumes it on mount,
+ *  and the hook that asked leaves it alone, so another tab's form never
+ *  finishes it. */
+type ResumeCheck = (mode: GenMode, styleId: string | null) => boolean;
+const resumeChecks = new Set<ResumeCheck>();
 
 /** Registers a check asked before any hook resumes a saved job; returns the
  *  unregister function. The generate page's tab (useGenerateTab) uses it. */
-export function onBeforeResume(check: (mode: GenMode) => boolean): () => void {
+export function onBeforeResume(check: ResumeCheck): () => void {
   resumeChecks.add(check);
   return () => {
     resumeChecks.delete(check);
@@ -140,9 +142,22 @@ function readActiveJob(): ActiveJobLocalStorage | null {
  *  (the same rule as the mount effect), or null. GeneratePage opens on that
  *  job's tab, so the form that started a job finishes it. */
 export function savedJobMode(userId?: string | null): GenMode | null {
+  return savedJob(userId)?.mode ?? null;
+}
+
+/** The style a saved job was sent with: a create job's style, or null (an
+ *  animate job, or one saved without its context). */
+function savedStyleId(context: JobContext | undefined): string | null {
+  return context && !isAnimateContext(context) ? context.styleId : null;
+}
+
+/** The mode and style of the saved job that the next mount will resume for
+ *  this user, or null. GeneratePage opens on that job's tab (a text
+ *  animation is a create job with an animation style). */
+export function savedJob(userId?: string | null): { mode: GenMode; styleId: string | null } | null {
   const saved = readActiveJob();
   if (!saved || resumeDecision(saved, Date.now(), PAGE_LOADED_AT, userId) !== 'resume') return null;
-  return saved.mode;
+  return { mode: saved.mode, styleId: savedStyleId(saved.context) };
 }
 
 function writeActiveJob(entry: ActiveJobLocalStorage): void {
@@ -317,7 +332,8 @@ export function useGenerationPoll(options: UseGenerationPollOptions = {}): UseGe
           if (err instanceof PollNotFoundError) {
             setError({
               message:
-                'We could not find this generation anymore. If it finished, it is in your gallery. If it failed, your tokens come back automatically.',
+                // HQ's words for an unknown end (room 2026-11-18-064).
+                'We could not find this generation anymore. If it finished, it is in your gallery. If your balance looks wrong after a day, contact support.',
               refunded: false,
             });
             setStatus('error');
@@ -409,7 +425,7 @@ export function useGenerationPoll(options: UseGenerationPollOptions = {}): UseGe
       // The page decides which form finishes a job, whenever the job was
       // saved: if a check takes it, the form on the job's tab resumes it.
       for (const check of resumeChecks) {
-        if (check(persisted.mode)) return;
+        if (check(persisted.mode, savedStyleId(persisted.context))) return;
       }
       runPoll(persisted.jobId, persisted.idempotencyKey, persisted.mode, true, persisted.startedAt, persisted.context);
       // runPoll captures getTokenStable; if Clerk hasn't hydrated yet, the

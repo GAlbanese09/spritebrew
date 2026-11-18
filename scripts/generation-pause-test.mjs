@@ -164,13 +164,15 @@ for (const [tag, value] of [['one', '1'], ['true', 'true']]) {
   for (const code of [undefined, null, 500, ['rd_500'], '', 'rd', 'rd500', 'consumer_unknown', 'dead_lettered', 'stale_running_swept', 'result_store_failed', 'submission_failed', 'RD_500', 'xrd_500']) {
     check(`a plain text with code ${code === undefined ? 'none' : JSON.stringify(code)} is shown as written`, up('This generation could not be started.', code) === false);
   }
-  const forms = ['src/components/sprites/GenerationForm.tsx', 'src/components/sprites/AnimateForm.tsx'].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'));
-  check('both forms decide with isUpstreamFailure and the job\'s errorCode',
+  // Animate from Text (G1, AUDIT g1-tabs-r1 M2) is the third form.
+  const forms = ['src/components/sprites/GenerationForm.tsx', 'src/components/sprites/AnimateForm.tsx', 'src/components/sprites/TextAnimationForm.tsx'].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'));
+  check('all three forms decide with isUpstreamFailure and the job\'s errorCode',
     forms.every((s) => s.includes('const isUpstreamError = isUpstreamFailure(rawMessage, poll.error?.errorCode);')
       && !s.includes("rawMessage.startsWith('RD ')")));
-  check('both forms word a provider failure with providerFailureMessage, their own kind and the job\'s errorCode',
+  check('all three forms word a provider failure with providerFailureMessage, their own kind and the job\'s errorCode',
     forms[0].includes("? providerFailureMessage('generation', refundedNote, poll.error?.errorCode)")
       && forms[1].includes("? providerFailureMessage('animation', refundedNote, poll.error?.errorCode)")
+      && forms[2].includes("? providerFailureMessage('text-animation', refundedNote, poll.error?.errorCode)")
       && forms.every((s) => !s.includes('upstreamFailureMessage(')));
 }
 
@@ -204,10 +206,11 @@ for (const [tag, value] of [['one', '1'], ['true', 'true']]) {
   };
   walk(path.join(ROOT, 'src'));
   check('"try again in a few minutes" appears only in src/lib/generationPause.ts', hits.length === 1 && hits[0] === path.join('src', 'lib', 'generationPause.ts'));
-  const forms = ['src/components/sprites/GenerationForm.tsx', 'src/components/sprites/AnimateForm.tsx'].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'));
-  check('both forms return from their Generate handler first thing while paused',
+  const forms = ['src/components/sprites/GenerationForm.tsx', 'src/components/sprites/AnimateForm.tsx', 'src/components/sprites/TextAnimationForm.tsx'].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'));
+  check('all three forms return from their Generate handler first thing while paused',
     forms[0].includes('if (GENERATION_PAUSED || !prompt.trim() || isGenerating) return;')
-      && forms[1].includes('if (GENERATION_PAUSED || !characterDataUrl || isGenerating) return;'));
+      && forms[1].includes('if (GENERATION_PAUSED || !characterDataUrl || isGenerating) return;')
+      && forms[2].includes('if (GENERATION_PAUSED || !prompt.trim() || isGenerating) return;'));
 }
 
 console.log(failed ? `${failed} failed` : 'all pass');

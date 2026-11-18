@@ -197,7 +197,11 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
     && (formSrc.match(/setServerBalanceKnown\(/g) ?? []).length === 1);
   // Re-pinned for the em dash change (HQ 2026-11-15-111, rows 16 and 17): the block
   // differs from main only in two error strings, a dash made a full stop.
-  check('1d: handleGenerate, the poll effects and the size effect are byte-identical to main', sha256(logicPart ?? '') === '0eb0e0a68994e07778bda98f43b6d92209222976d1a08637f827081acfeaba91');
+  // Re-pinned for ENG's provider-error swap (HQ 2026-11-17-029, -033, -155; AUDIT rd-swap-r1 M1):
+  // the poll effect decides with isUpstreamFailure(rawMessage, poll.error?.errorCode) and words
+  // the failure with providerFailureMessage('generation', refundedNote, poll.error?.errorCode).
+  // Before it: 0eb0e0a68994...
+  check('1d: handleGenerate, the poll effects and the size effect are byte-identical to main', sha256(logicPart ?? '') === 'b06885e60cedd8b37c31e4b56a4004adbf6b761de6a9c45d56c66ace84674276');
 }
 
 // ── 2. ENG condition 2: the purchase banner ──

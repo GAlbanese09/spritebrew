@@ -9,7 +9,8 @@
 // and the line never blocks Generate. Check D0 carries that condition
 // whole: with the display lines undone (the motion help, the background
 // advice in the drop zone, the 12 px lines), the form must be the freeze
-// baseline byte for byte: the file as it stood before Prompt help, git blob
+// baseline byte for byte: the file as it stood before Prompt help, with the
+// reviewed changes outside the regions noted at BASE_BLOB, git blob
 // BASE_BLOB. Each display region is pinned as it was reviewed. D0 cannot
 // say where a change outside the regions is: git diff does. After a
 // reviewed change to AnimateForm.tsx, MOTION_WORDS_PINS=1 prints the pins
@@ -241,7 +242,13 @@ const all = (texts, action, want) => { const got = caught(texts, action); return
   // baseline has there. Undoing every region must give the baseline, byte
   // for byte (its git blob). So a change anywhere outside the regions fails
   // here, and so does a change inside one.
-  const BASE_BLOB = 'e2eb4625e398df77ca094991d780c282fd04d2bd';
+  // Re-pinned for ENG's provider-error swap (HQ 2026-11-17-029, -033, -155; AUDIT rd-swap-r1
+  // M1). Three changes, all outside every display region: the generationPause import names
+  // isUpstreamFailure and providerFailureMessage; the poll effect's five-line check is one
+  // line calling isUpstreamFailure; and its failure words come from providerFailureMessage.
+  // So BASE_BLOB is no longer a committed blob: it is the file before Prompt help with those
+  // three changes. Before them: e2eb4625e398df77ca094991d780c282fd04d2bd, the file at the freeze.
+  const BASE_BLOB = '0a72086f9c364f292d2a2d43c74652b6f4b32c68';
   const REGIONS = [
     {
       start: "import { useState, useCallback, useRef, useEffect, useId, useMemo } from 'react';",

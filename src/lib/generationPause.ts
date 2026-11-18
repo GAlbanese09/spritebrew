@@ -57,3 +57,66 @@ export function upstreamFailureMessage(
     ? `Animation failed due to a temporary issue with the AI service.${refundedNote}`
     : `Animation failed due to a temporary issue with the AI service.${refundedNote} Please try again in a few minutes, or try a smaller frame count (6 or 8) if the issue persists.`;
 }
+
+/**
+ * Provider refusals the consumer does not retry (AUDIT rd-swap-r1 M1): a 4xx
+ * other than 429 (`rd_400`, `rd_403`, ...) and a task the provider reports as
+ * failed (`rd_200`). Trying again in a few minutes cannot fix these, so their
+ * words suggest a change instead. Timeouts, orphaned submits, 429 and 5xx keep
+ * upstreamFailureMessage's words.
+ */
+export function isProviderRefusal(errorCode?: string): boolean {
+  if (typeof errorCode !== 'string') return false;
+  if (errorCode === 'rd_200') return true;
+  return /^rd_4\d\d$/.test(errorCode) && errorCode !== 'rd_429';
+}
+
+/**
+ * The customer message for a provider failure, by form: the refusal words
+ * (design/generate-pass/failure-lines.md, HQ 2026-11-17-236) for a refusal,
+ * otherwise upstreamFailureMessage's. `text-animation` is Animate from Text,
+ * the tab G1 adds; until then its jobs come through the Create Sprite form as
+ * `generation`, and its other failures keep the generation words, as today.
+ * " under More settings" is left out until that section exists on each form
+ * (G2 for Create Sprite, G4 for Animate My Character). Paused, the advice is
+ * left out, as in upstreamFailureMessage.
+ */
+export function providerFailureMessage(
+  kind: 'generation' | 'text-animation' | 'animation',
+  refundedNote: string,
+  errorCode?: string,
+  paused: boolean = GENERATION_PAUSED
+): string {
+  if (!isProviderRefusal(errorCode)) {
+    return upstreamFailureMessage(kind === 'animation' ? 'animation' : 'generation', refundedNote, paused);
+  }
+  const head = kind === 'generation' ? 'Generation failed' : 'Animation failed';
+  const lead = `${head}: the AI service could not make this one.${refundedNote}`;
+  if (paused) return lead;
+  if (kind === 'generation') {
+    return `${lead} You can try again, or change the description or the style, or the size.`;
+  }
+  if (kind === 'text-animation') {
+    return `${lead} You can try again, or change the description or the animation.`;
+  }
+  return `${lead} You can try again, or change the picture or the action, or the frame count.`;
+}
+
+/**
+ * Whether a failed job's text is the provider's, so a form shows
+ * upstreamFailureMessage in its place. The consumer starts its provider
+ * errors with "RD " and gives each provider failure an errorCode starting
+ * "rd_". The code also catches the one provider text that does not start
+ * "RD ", the orphaned-submit message (HQ 2026-11-17-029 and -033), so a
+ * form never shows the provider's text as its message. The text itself still
+ * reaches the status reply and the browser console (AUDIT rd-swap-r1 L5).
+ */
+export function isUpstreamFailure(rawMessage: string, errorCode?: string): boolean {
+  return (
+    rawMessage.startsWith('RD ') ||
+    rawMessage.includes('inference_failed') ||
+    rawMessage.includes('Unexpected response') ||
+    rawMessage.includes('timed out') ||
+    (typeof errorCode === 'string' && errorCode.startsWith('rd_'))
+  );
+}

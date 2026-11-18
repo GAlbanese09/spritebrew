@@ -51,7 +51,7 @@ import {
   type DecodeImage,
 } from '@/lib/animateCharacter';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
-import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, upstreamFailureMessage } from '@/lib/generationPause';
+import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, isUpstreamFailure, providerFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
 import { ANIMATE_FILL, finishJob, type JobResultIO } from '@/lib/jobResult';
 import { ANIMATE_INPUT_B64_CLIENT_MAX } from '@/lib/constants';
@@ -986,14 +986,10 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
       // Friendly error wrapping: convert technical upstream errors to
       // customer-facing copy. Keep raw error in console for diagnostics.
-      const isUpstreamError =
-        rawMessage.startsWith('RD ') ||
-        rawMessage.includes('inference_failed') ||
-        rawMessage.includes('Unexpected response') ||
-        rawMessage.includes('timed out');
+      const isUpstreamError = isUpstreamFailure(rawMessage, poll.error?.errorCode);
 
       const customerMessage = isUpstreamError
-        ? upstreamFailureMessage('animation', refundedNote)
+        ? providerFailureMessage('animation', refundedNote, poll.error?.errorCode)
         : `${rawMessage}${refundedNote}`;
 
       console.error('[generation error]', { rawMessage, errorCode: poll.error?.errorCode });

@@ -59,6 +59,10 @@ export const RESIZE_WORDS = Object.freeze({
   resizing: 'Resizing...',
   // A side that is not a size (AUDIT resize-page-r1, M3; DESIGN -090, HQ -093).
   notASize: 'Type a whole number of pixels, 1 or more, for each side.',
+  // The preview's choice (DESIGN design/resize/phone-preview/phone-preview.md; HQ -236).
+  previewLabel: 'Preview',
+  fitEach: 'Fit each',
+  sameScale: 'Same scale',
 });
 
 /** Is this file one the page takes? By its type, or by its name when the
@@ -224,6 +228,58 @@ export function boxSize(height: number, zoom: number, pans: boolean, roomWidth: 
 /** The line under Before and After: "Frame 1 of each, both at 300%." */
 export function zoomLine(sheet: boolean, zoom: number): string {
   return sheet ? `Frame 1 of each, both at ${zoom * 100}%.` : `Both at ${zoom * 100}%.`;
+}
+
+/** Fit each's margin inside the box, and how far over its room a picture may
+ *  be and still show at 100%, panning by those pixels (DESIGN spec 2eae516d). */
+export const FIT_PAD = 4;
+export const FIT_SLACK = 8;
+
+/**
+ * "Fit each" (DESIGN, design/resize/phone-preview/phone-preview.md): a
+ * picture smaller than its room grows by the largest whole number that fits,
+ * pixels crisp; one at most 8 px over shows at 100% and pans by those pixels;
+ * a larger one shrinks to fit, smoothed, so it reads as the whole picture.
+ * Only the preview shrinks; the download is untouched. Under 1 means not
+ * measured yet, and 1 is used.
+ */
+export function fitZoom(width: number, height: number, roomWidth: number, roomHeight: number): number {
+  if (roomWidth < 1 || roomHeight < 1 || width < 1 || height < 1) return 1;
+  if (width <= roomWidth && height <= roomHeight) return Math.max(1, Math.floor(Math.min(roomWidth / width, roomHeight / height)));
+  if (width <= roomWidth + FIT_SLACK && height <= roomHeight + FIT_SLACK) return 1;
+  return Math.min(roomWidth / width, roomHeight / height);
+}
+
+/** In Fit each, a picture at 100% that is a few pixels over its room pans. */
+export function fitPans(width: number, height: number, zoom: number, roomWidth: number, roomHeight: number): boolean {
+  return zoom === 1 && (width > roomWidth || height > roomHeight);
+}
+
+/** How Before and After are shown: each fitted to its box, or at one zoom. */
+export type PreviewMode = 'fit' | 'same';
+
+/** "Fit each" by default when either picture would not fit its box at one
+ *  zoom (the pan case); otherwise "Same scale", today's view. */
+export function defaultPreviewMode(beforeOver: boolean, afterOver: boolean): PreviewMode {
+  return beforeOver || afterOver ? 'fit' : 'same';
+}
+
+const percent = (zoom: number) => Math.round(zoom * 100);
+
+/** The line under Before and After, for either view (HQ -236's words). */
+export function previewLine(sheet: boolean, mode: PreviewMode, zoom: number, view: { beforeZoom: number; afterZoom: number; beforeOver: boolean; afterOver: boolean }): string {
+  if (mode === 'fit') {
+    const b = percent(view.beforeZoom);
+    const a = percent(view.afterZoom);
+    if (b === a) return sheet ? `Frame 1 of each, both at ${b}%.` : `Both at ${b}%.`;
+    const lead = sheet ? 'Frame 1 of each, fitted to its box' : 'Each fitted to its box';
+    return `${lead}: Before at ${b}%, After at ${a}%. Same scale shows both at one zoom.`;
+  }
+  const z = percent(zoom);
+  if (view.beforeOver && view.afterOver) return `Both at ${z}%. Both are larger than their boxes: drag or scroll to see the rest.`;
+  if (view.beforeOver) return `Both at ${z}%. Before is larger than its box: drag or scroll it to see the rest.`;
+  if (view.afterOver) return `Both at ${z}%. After is larger than its box: drag or scroll it to see the rest.`;
+  return zoomLine(sheet, zoom);
 }
 
 /** A figure's caption: "Before · frame 1, 128 px" or "After · 256 px". */

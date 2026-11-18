@@ -29,7 +29,12 @@ import {
   cleanSizeLabel,
   wholeCounts,
   wholeGuess,
-  zoomLine,
+  fitZoom,
+  fitPans,
+  FIT_PAD,
+  defaultPreviewMode,
+  previewLine,
+  type PreviewMode,
   type PageGrid,
 } from '@/lib/resizePage';
 
@@ -142,6 +147,8 @@ export default function ResizePage() {
   const [result, setResult] = useState<PixelImage | null>(null);
   const [resizing, setResizing] = useState(false);
   const [box, setBox] = useState({ width: 0, height: 0 });
+  // The person's preview choice, kept until another picture is loaded.
+  const [previewChoice, setPreviewChoice] = useState<PreviewMode | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const otherButtonRef = useRef<HTMLButtonElement>(null);
   const otherFirstRef = useRef<HTMLInputElement>(null);
@@ -204,6 +211,7 @@ export default function ResizePage() {
     setPicking(false);
     setNoGuess(false);
     setLoaded({ name: file.name, image: out.image, thumb: out.thumb });
+    setPreviewChoice(null);
   }, [resetTarget]);
 
   const onDrop = (e: DragEvent) => {
@@ -376,10 +384,36 @@ export default function ResizePage() {
   const inner = { width: box.width - 2, height: box.height - 2 * BOX_PAD };
   const { zoom, pans } = before ? previewZoom(before.width, before.height, inner.width, inner.height) : { zoom: 1, pans: false };
   const boxed = before ? boxSize(before.height, zoom, pans, box.width, box.height) : { width: 0, height: 0 };
-  const afterPans = pans || (after ? after.width * zoom > inner.width || after.height * zoom > boxed.height - 2 * BOX_PAD : false);
+  const afterOver = after ? after.width * zoom > inner.width || after.height * zoom > boxed.height - 2 * BOX_PAD : false;
+  const afterPans = pans || afterOver;
+  // The preview's choice shows whenever Before and After differ in size, or
+  // a picture would pan at one zoom (DESIGN design/resize/phone-preview/phone-preview.md, 2eae516d; HQ -236).
+  const differ = !!before && !!after && (before.width !== after.width || before.height !== after.height);
+  const showChoice = !!before && (differ || pans || afterOver);
+  const mode: PreviewMode = showChoice ? previewChoice ?? defaultPreviewMode(pans, afterOver) : 'same';
+  // Fit each: boxes as wide as their column and no taller than the room
+  // (square on a phone), each picture fitted inside a 4 px margin and the
+  // box's border.
+  const fitBox = Math.max(0, Math.min(box.width, box.height));
+  const fitRoom = { width: box.width - 2 - 2 * FIT_PAD, height: fitBox - 2 - 2 * FIT_PAD };
+  const beforeFit = before ? fitZoom(before.width, before.height, fitRoom.width, fitRoom.height) : 1;
+  const afterFit = after ? fitZoom(after.width, after.height, fitRoom.width, fitRoom.height) : 1;
+  const beforeFitPans = before ? fitPans(before.width, before.height, beforeFit, fitRoom.width, fitRoom.height) : false;
+  const afterFitPans = after ? fitPans(after.width, after.height, afterFit, fitRoom.width, fitRoom.height) : false;
+  const line = previewLine(shownSheet, mode, zoom, { beforeZoom: beforeFit, afterZoom: afterFit, beforeOver: pans, afterOver });
+  const modeRefs = useRef<Record<PreviewMode, HTMLButtonElement | null>>({ fit: null, same: null });
+  // Arrow keys move and choose within the two-choice group.
+  const onModeKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    e.preventDefault();
+    const next: PreviewMode = mode === 'fit' ? 'same' : 'fit';
+    setPreviewChoice(next);
+    modeRefs.current[next]?.focus();
+  };
 
   useLayoutEffect(() => { paint(beforeRef.current, before); }, [before]);
   useLayoutEffect(() => { paint(afterRef.current, after); }, [after]);
+
 
   // When the two pan, they pan together.
   const syncing = useRef(false);
@@ -392,6 +426,20 @@ export default function ResizePage() {
     to.scrollTop = fy * (to.scrollHeight - to.clientHeight);
     requestAnimationFrame(() => { syncing.current = false; });
   };
+
+  // A picture that pans starts at its centre, not its top-left corner; in
+  // Same scale the two still pan together.
+  useLayoutEffect(() => {
+    const beforePan = mode === 'same' ? pans : beforeFitPans;
+    const afterPan = mode === 'same' ? afterPans : afterFitPans;
+    syncing.current = true;
+    for (const [el, pan] of [[beforeScrollRef.current, beforePan], [afterScrollRef.current, afterPan]] as const) {
+      if (!el || !pan) continue;
+      el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
+      el.scrollTop = (el.scrollHeight - el.clientHeight) / 2;
+    }
+    requestAnimationFrame(() => { syncing.current = false; });
+  }, [mode, pans, afterPans, beforeFitPans, afterFitPans, zoom, before, after, boxed.width, boxed.height, box.width, fitBox]);
 
   // Other size: every way out returns the focus to "Other size..."
   // (AUDIT resize-page-r1, M3).
@@ -605,11 +653,35 @@ export default function ResizePage() {
               {rows.overLine && <p className="text-[13px] font-mono text-text-secondary">{rows.overLine}</p>}
             </div>
 
+            {showChoice && (
+              <div className="flex flex-col gap-2">
+                <p id="resize-preview-label" className="text-xs font-mono uppercase tracking-wider text-text-secondary">{W.previewLabel}</p>
+                <div role="radiogroup" aria-labelledby="resize-preview-label" className="flex flex-wrap gap-2" onKeyDown={onModeKey}>
+                  {(['fit', 'same'] as const).map((m) => (
+                    <button
+                      key={m}
+                      ref={(el) => { modeRefs.current[m] = el; }}
+                      type="button"
+                      role="radio"
+                      aria-checked={mode === m}
+                      tabIndex={mode === m ? 0 : -1}
+                      onClick={() => setPreviewChoice(m)}
+                      className={`${PILL} ${mode === m ? PILL_ON : PILL_OFF}`}
+                    >
+                      {m === 'fit' ? W.fitEach : W.sameScale}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-2 sm:gap-3">
               {(['before', 'after'] as const).map((which) => {
                 const image = which === 'before' ? before : after;
                 const scroll = which === 'before' ? beforeScrollRef : afterScrollRef;
-                const pan = which === 'before' ? pans : afterPans;
+                const pan = mode === 'same' ? (which === 'before' ? pans : afterPans) : which === 'before' ? beforeFitPans : afterFitPans;
+                const shown = mode === 'fit' ? (which === 'before' ? beforeFit : afterFit) : zoom;
+                const size = mode === 'fit' ? { width: box.width, height: fitBox } : boxed;
                 return (
                   <figure key={which} ref={which === 'before' ? boxRef : undefined} className="flex flex-col gap-2 min-w-0">
                     <div
@@ -617,15 +689,16 @@ export default function ResizePage() {
                       onScroll={() => (which === 'before' ? follow(beforeScrollRef.current, afterScrollRef.current) : follow(afterScrollRef.current, beforeScrollRef.current))}
                       tabIndex={pan ? 0 : undefined}
                       aria-label={pan ? `${which === 'before' ? W.before : W.after}, scrolls` : undefined}
-                      className={`relative max-w-full rounded-lg border border-border-default ${pan ? 'overflow-auto p-3' : 'overflow-hidden flex items-center justify-center'}`}
-                      style={{ ...CHECKER, width: boxed.width, height: boxed.height }}
+                      className={`relative max-w-full rounded-lg border border-border-default ${pan ? (mode === 'fit' ? 'overflow-auto p-1' : 'overflow-auto p-3') : 'overflow-hidden flex items-center justify-center'}`}
+                      style={{ ...CHECKER, width: size.width, height: size.height }}
                     >
                       {image ? (
                         <canvas
                           ref={which === 'before' ? beforeRef : afterRef}
                           role="img"
                           aria-label={caption(which, shownSheet, image.width, image.height)}
-                          style={{ width: image.width * zoom, height: image.height * zoom, imageRendering: 'pixelated', flex: 'none' }}
+                          // A picture shrunk to fit is smoothed; one shown at a whole zoom stays crisp.
+                          style={{ width: image.width * shown, height: image.height * shown, imageRendering: shown >= 1 ? 'pixelated' : 'auto', flex: 'none' }}
                         />
                       ) : (
                         <p role="status" className="text-[13px] font-mono text-text-secondary">{resizing ? W.resizing : ''}</p>
@@ -638,7 +711,7 @@ export default function ResizePage() {
                 );
               })}
             </div>
-            <p className="text-[13px] font-mono text-text-secondary">{zoomLine(shownSheet, zoom)}</p>
+            <p className="text-[13px] font-mono text-text-secondary">{line}</p>
 
             <div className="flex justify-end">
               <Button className="w-full sm:w-auto pointer-coarse:min-h-11" onClick={save} disabled={target !== null && !result}>

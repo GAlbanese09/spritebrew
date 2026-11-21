@@ -164,6 +164,20 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
   // an effect; a background-removal toggle, an editor save and a version
   // switch keep both, so the loop survives them.
   const [loopEdit, setLoopEdit] = useState<{ src: string; frames: number; seq: LoopSequence } | null>(null);
+  // The loop's Play, Stop and frame steps (LoopFrameStrip): stopped holds
+  // one position of the order, and a press of Play counts as the tap that
+  // starts the loop under reduced motion. Both are held with the result, so
+  // a new generation plays again. The step the loop shows goes to the strip
+  // through an event, so this card does not render at the loop's frame rate.
+  const [loopHold, setLoopHold] = useState<{ src: string; pos: number } | null>(null);
+  const [loopStartedSrc, setLoopStartedSrc] = useState<string | null>(null);
+  const [loopSteps] = useState(() => new EventTarget());
+  const handleLoopStep = useCallback(
+    (step: number) => {
+      loopSteps.dispatchEvent(new CustomEvent('step', { detail: step }));
+    },
+    [loopSteps]
+  );
   // Download GIF: output scale, an in-flight flag, and the last encode error
   // held with the source it was for, so a new generation drops it without
   // resetting state in an effect.
@@ -363,6 +377,18 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
     [loopEdit, resultKey, loopFrames]
   );
   const loopPlayback = useMemo(() => playback(loopSeq), [loopSeq]);
+  const loopHeld =
+    loopHold && loopHold.src === resultKey && loopSeq.order.length > 0
+      ? Math.min(loopHold.pos, loopSeq.order.length - 1)
+      : null;
+  const handleLoopHold = useCallback(
+    (pos: number | null) => {
+      if (!resultKey) return;
+      setLoopHold(pos === null ? null : { src: resultKey, pos });
+      if (pos === null) setLoopStartedSrc(resultKey);
+    },
+    [resultKey]
+  );
   const handleLoopChange = useCallback(
     (seq: LoopSequence) => {
       if (resultKey) setLoopEdit({ src: resultKey, frames: loopFrames, seq });
@@ -835,6 +861,10 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
                 sequence={loopPlayback}
                 fps={loopSeq.fps}
                 playing={showLoop}
+                paused={loopHeld !== null}
+                holdStep={loopHeld ?? 0}
+                started={loopStartedSrc === resultKey}
+                onStep={handleLoopStep}
                 className="w-full h-full"
               />
             </div>
@@ -901,6 +931,9 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
             geometry={loopGeometry}
             sequence={loopSeq}
             onChange={handleLoopChange}
+            heldPos={loopHeld}
+            onHold={handleLoopHold}
+            steps={loopSteps}
           />
         </div>
       )}

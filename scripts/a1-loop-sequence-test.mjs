@@ -19,7 +19,7 @@ await build({
   bundle: true, platform: 'node', format: 'esm', outdir: OUT, logLevel: 'error',
   tsconfig: path.join(ROOT, 'tsconfig.json'), outExtension: { '.js': '.mjs' },
 });
-const { createSequence, move, remove, duplicate, setFps, togglePingPong, playback } = await import(
+const { createSequence, move, remove, duplicate, setFps, togglePingPong, playback, positionAt, stepFrom } = await import(
   pathToFileURL(path.join(OUT, 'loopSequence.mjs')).href
 );
 
@@ -122,6 +122,34 @@ check('playback returns a new array', playback(base) !== base.order);
   check('walk: reorder, remove, duplicate, 12 fps, ping-pong -> [1,0,0,2,0,0] at 12',
     eq(playback(s), [1, 0, 0, 2, 0, 0]) && s.fps === 12);
   check('walk: reset restores 4 frames at 8 fps', eq(createSequence(4), seqOf([0, 1, 2, 3])));
+}
+
+// ── the frame walk: which strip position a step of playback shows, and a
+//    step of one either way (Play, Stop, previous and next frame) ──
+
+{
+  // Every step of playback shows the strip position whose frame it draws.
+  const orders = [[0], [0, 1], [0, 1, 2], [0, 1, 2, 3], [3, 1, 1, 0], [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]];
+  const bad = [];
+  for (const order of orders) for (const pp of [false, true]) {
+    const seq = seqOf(order, 8, pp);
+    const list = playback(seq);
+    for (let step = 0; step < list.length * 3; step++) {
+      const pos = positionAt(seq, step);
+      if (!(Number.isInteger(pos) && pos >= 0 && pos < order.length && order[pos] === list[step % list.length])) bad.push([order.join(''), pp, step, pos]);
+    }
+  }
+  check('positionAt: every step of playback, over three loops, names a position whose frame is the one drawn', bad.length === 0);
+  check('positionAt ping-pong [0,1,2,3]: steps 0 to 6 show positions 0,1,2,3,2,1,0',
+    eq([0, 1, 2, 3, 4, 5, 6].map((st) => positionAt(seqOf([0, 1, 2, 3], 8, true), st)), [0, 1, 2, 3, 2, 1, 0]));
+  check('positionAt: a bad step or an empty order gives 0',
+    [-1, 1.5, NaN, Infinity].every((st) => positionAt(base, st) === 0) && positionAt(seqOf([]), 3) === 0);
+  check('stepFrom: next and previous move one and wrap at both ends',
+    stepFrom(base, 0, 1) === 1 && stepFrom(base, 3, 1) === 0 && stepFrom(base, 0, -1) === 3 && stepFrom(base, 2, -1) === 1);
+  check('stepFrom: one frame stays put; an empty order gives 0; a bad position starts from 0',
+    stepFrom(seqOf([5]), 0, 1) === 0 && stepFrom(seqOf([5]), 0, -1) === 0 && stepFrom(seqOf([]), 0, 1) === 0 && stepFrom(base, 9, 1) === 1 && stepFrom(base, -2, -1) === 3);
+  check('positionAt and stepFrom leave the sequence as it was',
+    (() => { const b = JSON.stringify(base); positionAt(base, 5); stepFrom(base, 1, 1); return JSON.stringify(base) === b; })());
 }
 
 console.log(failed === 0 ? 'all pass' : `${failed} failed`);

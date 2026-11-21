@@ -1,13 +1,16 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, Play, Square } from 'lucide-react';
 import type { SheetLoopGeometry } from './SheetLoop';
 import {
   createSequence,
   duplicate,
   move,
+  positionAt,
   remove,
   setFps,
+  stepFrom,
   togglePingPong,
   LOOP_FPS_MAX,
   LOOP_FPS_MIN,
@@ -20,6 +23,8 @@ const TILE_PX = 40;
 
 // 44 px tap target on touch, compact from md up (the editor toolbar pattern).
 const TAP = 'min-h-11 min-w-11 md:min-h-0 md:min-w-0';
+// The playback controls keep 44 px wherever the pointer is a finger, at any width.
+const TAP_TOUCH = `${TAP} pointer-coarse:min-h-11 pointer-coarse:min-w-11`;
 
 const CHECKER = {
   backgroundImage:
@@ -34,6 +39,12 @@ interface LoopFrameStripProps {
   geometry: SheetLoopGeometry;
   sequence: LoopSequence;
   onChange: (next: LoopSequence) => void;
+  /** The position held by Stop or a frame step; null while playing. */
+  heldPos?: number | null;
+  /** Stop or step (a position) or play again (null). */
+  onHold?: (pos: number | null) => void;
+  /** The loop's steps as it draws them ('step' events, detail = step). */
+  steps?: EventTarget;
 }
 
 /** One sheet frame on a canvas the size of the frame, scaled by CSS. */
@@ -66,7 +77,7 @@ function FrameTile({ img, geometry, index }: { img: HTMLImageElement | null; geo
  * remove frames, set the speed, turn on ping-pong. Local to the result
  * card; the parent holds the sequence and passes it to SheetLoop.
  */
-export default function LoopFrameStrip({ src, geometry, sequence, onChange }: LoopFrameStripProps) {
+export default function LoopFrameStrip({ src, geometry, sequence, onChange, heldPos = null, onHold, steps }: LoopFrameStripProps) {
   const [loadedImg, setLoadedImg] = useState<{ src: string; img: HTMLImageElement } | null>(null);
   const img = loadedImg?.src === src ? loadedImg.img : null;
 
@@ -89,9 +100,34 @@ export default function LoopFrameStrip({ src, geometry, sequence, onChange }: Lo
     };
   }, [src]);
 
+  // The step the loop is drawing, from its events. Set in the listener,
+  // never during render.
+  const [shownStep, setShownStep] = useState(0);
+  useEffect(() => {
+    if (!steps) return;
+    const listen = (e: Event) => setShownStep((e as CustomEvent<number>).detail);
+    steps.addEventListener('step', listen);
+    return () => steps.removeEventListener('step', listen);
+  }, [steps]);
+  const stopped = heldPos !== null;
+  // The frame the preview shows now: the held one, or the one playing. It
+  // carries the amber outline, moving with the animation.
+  const shownPos = stopped ? heldPos : positionAt(sequence, shownStep);
+
   const apply = (next: LoopSequence, pos: number | null) => {
     onChange(next);
     setSelection(pos === null ? null : { seq: next, pos });
+    // Stopped, the preview follows the frame being worked on.
+    if (stopped && pos !== null) onHold?.(pos);
+  };
+
+  // Stop holds the frame shown; a step stops, moves one (wrapping) and
+  // selects that frame, so Earlier, Later, Duplicate and Remove act on it.
+  const stop = () => onHold?.(shownPos);
+  const step = (delta: number) => {
+    const pos = stepFrom(sequence, shownPos, delta);
+    onHold?.(pos);
+    setSelection({ seq: sequence, pos });
   };
 
   const count = sequence.order.length;
@@ -111,6 +147,7 @@ export default function LoopFrameStrip({ src, geometry, sequence, onChange }: Lo
       <div className="flex flex-wrap gap-1">
         {sequence.order.map((frame, pos) => {
           const isSelected = pos === selected;
+          const isShown = onHold !== undefined && pos === shownPos;
           return (
             <button
               key={pos}
@@ -118,11 +155,14 @@ export default function LoopFrameStrip({ src, geometry, sequence, onChange }: Lo
               onClick={() => setSelection(isSelected ? null : { seq: sequence, pos })}
               aria-pressed={isSelected}
               aria-label={`Frame ${pos + 1}`}
+              aria-current={isShown && stopped ? 'true' : undefined}
+              data-shown={isShown || undefined}
               className={`${TAP} inline-flex items-center justify-center p-0.5 rounded border cursor-pointer transition-colors
                 ${isSelected
                   ? 'border-accent-amber bg-accent-amber/10'
                   : 'border-border-subtle hover:border-accent-amber/40'
-                }`}
+                }
+                ${isShown ? 'ring-2 ring-accent-amber' : ''}`}
             >
               <FrameTile img={img} geometry={geometry} index={frame} />
             </button>
@@ -172,6 +212,36 @@ export default function LoopFrameStrip({ src, geometry, sequence, onChange }: Lo
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        {onHold && (
+          <div className="flex items-center gap-1" role="group" aria-label="Playback">
+            <button
+              type="button"
+              onClick={() => onHold(null)}
+              aria-pressed={!stopped}
+              className={`${TAP_TOUCH} inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
+                ${!stopped ? 'bg-accent-amber text-bg-primary' : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'}`}
+            >
+              <Play size={12} aria-hidden="true" />
+              Play
+            </button>
+            <button
+              type="button"
+              onClick={stop}
+              aria-pressed={stopped}
+              className={`${TAP_TOUCH} inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded text-[10px] font-mono cursor-pointer transition-colors
+                ${stopped ? 'bg-accent-amber text-bg-primary' : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'}`}
+            >
+              <Square size={12} aria-hidden="true" />
+              Stop
+            </button>
+            <button type="button" onClick={() => step(-1)} aria-label="Previous frame" title="Previous frame" className={`${TAP_TOUCH} ${actionClass}`}>
+              <ChevronLeft size={14} aria-hidden="true" />
+            </button>
+            <button type="button" onClick={() => step(1)} aria-label="Next frame" title="Next frame" className={`${TAP_TOUCH} ${actionClass}`}>
+              <ChevronRight size={14} aria-hidden="true" />
+            </button>
+          </div>
+        )}
         <label className={`${TAP} flex items-center gap-2 flex-1 min-w-[10rem]`}>
           <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider">Speed</span>
           <input

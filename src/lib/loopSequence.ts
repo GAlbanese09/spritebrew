@@ -77,3 +77,22 @@ export function playback(seq: LoopSequence): number[] {
   if (!seq.pingPong || order.length <= 2) return order;
   return [...order, ...order.slice(1, -1).reverse()];
 }
+
+/** The position in `order` that a step of playback shows: the step itself
+ *  on the way out, and with ping-pong the mirror position on the way back.
+ *  Steps past the end wrap; a bad step or an empty order gives 0. */
+export function positionAt(seq: LoopSequence, step: number): number {
+  const n = seq.order.length;
+  if (n < 1 || !Number.isInteger(step) || step < 0) return 0;
+  const steps = seq.pingPong && n > 2 ? 2 * n - 2 : n;
+  const s = step % steps;
+  return s < n ? s : 2 * (n - 1) - s;
+}
+
+/** The position one step from `pos`, wrapping at either end. */
+export function stepFrom(seq: LoopSequence, pos: number, delta: number): number {
+  const n = seq.order.length;
+  if (n < 1) return 0;
+  const from = Number.isInteger(pos) && pos >= 0 && pos < n ? pos : 0;
+  return (((from + Math.sign(delta)) % n) + n) % n;
+}

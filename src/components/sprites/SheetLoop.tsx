@@ -22,6 +22,17 @@ interface SheetLoopProps {
   /** Sheet frame indexes (row-major) played in this order. Absent plays
    *  every frame in sheet order. Indexes outside the sheet are skipped. */
   sequence?: number[];
+  /** Stopped by the person (the result card's Stop or a frame step): holds
+   *  `holdStep` instead of looping. Defaults to false. */
+  paused?: boolean;
+  /** The step of the play list shown while paused; playing again goes on
+   *  from it. */
+  holdStep?: number;
+  /** The person pressed a play control outside this loop: under reduced
+   *  motion it counts as the tap on the loop's own play button. */
+  started?: boolean;
+  /** Called with each step of the play list as it is drawn. */
+  onStep?: (step: number) => void;
   className?: string;
 }
 
@@ -32,13 +43,30 @@ interface SheetLoopProps {
  * session. Pauses off screen and in a hidden tab. Under
  * prefers-reduced-motion it shows the first frame until the user taps play.
  */
-export default function SheetLoop({ src, geometry, fps = 8, playing = true, sequence, className }: SheetLoopProps) {
+export default function SheetLoop({
+  src,
+  geometry,
+  fps = 8,
+  playing = true,
+  sequence,
+  paused = false,
+  holdStep = 0,
+  started = false,
+  onStep,
+  className,
+}: SheetLoopProps) {
   const { frameW, frameH, cols, frames } = geometry;
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   // Current step: a position in the play list, not a sheet frame index.
   const frameRef = useRef(0);
+  // The caller's step listener, read at draw time so a new callback never
+  // restarts the loop.
+  const onStepRef = useRef(onStep);
+  useEffect(() => {
+    onStepRef.current = onStep;
+  }, [onStep]);
 
   // The play list, keyed by content so a new array with the same frames
   // does not restart the loop. Null plays every frame in sheet order.
@@ -61,7 +89,7 @@ export default function SheetLoop({ src, geometry, fps = 8, playing = true, sequ
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const [startedSrc, setStartedSrc] = useState<string | null>(null);
   const loaded = loadedSrc === src;
-  const userStarted = startedSrc === src;
+  const userStarted = startedSrc === src || started;
   const [onScreen, setOnScreen] = useState(false);
   const [tabVisible, setTabVisible] = useState(
     () => typeof document === 'undefined' || document.visibilityState !== 'hidden'
@@ -88,12 +116,13 @@ export default function SheetLoop({ src, geometry, fps = 8, playing = true, sequ
     [frameW, frameH, cols]
   );
 
-  // Draws the frame at a step of the play list.
+  // Draws the frame at a step of the play list, and says which step.
   const drawStep = useCallback(
     (step: number) => {
       if (steps < 1) return;
       const s = step % steps;
       drawFrame(playList ? playList[s] : s);
+      onStepRef.current?.(s);
     },
     [steps, playList, drawFrame]
   );
@@ -149,15 +178,17 @@ export default function SheetLoop({ src, geometry, fps = 8, playing = true, sequ
     return () => query.removeEventListener('change', update);
   }, []);
 
-  const active = loaded && playing && (onScreen || !ioSupported) && tabVisible && (!reducedMotion || userStarted);
+  const active = loaded && playing && !paused && (onScreen || !ioSupported) && tabVisible && (!reducedMotion || userStarted);
 
-  // Still frame when not running: the first step when stopped by the caller
-  // or by reduced motion, otherwise hold the current step (paused off screen).
+  // Still frame when not running: the held step when paused by the person,
+  // the first step when stopped by the caller or by reduced motion, otherwise
+  // hold the current step (paused off screen).
   useEffect(() => {
     if (!loaded || active) return;
-    if (!playing || (reducedMotion && !userStarted)) frameRef.current = 0;
+    if (playing && paused) frameRef.current = steps > 0 && Number.isInteger(holdStep) && holdStep >= 0 ? holdStep % steps : 0;
+    else if (!playing || (reducedMotion && !userStarted)) frameRef.current = 0;
     drawStep(frameRef.current);
-  }, [loaded, active, playing, reducedMotion, userStarted, drawStep]);
+  }, [loaded, active, playing, paused, holdStep, steps, reducedMotion, userStarted, drawStep]);
 
   // Animation loop.
   useEffect(() => {
@@ -183,7 +214,7 @@ export default function SheetLoop({ src, geometry, fps = 8, playing = true, sequ
     return () => cancelAnimationFrame(raf);
   }, [active, fps, steps, drawStep]);
 
-  const showPlayButton = loaded && playing && reducedMotion && !userStarted;
+  const showPlayButton = loaded && playing && !paused && reducedMotion && !userStarted;
 
   return (
     <div ref={wrapperRef} className={`relative ${className ?? ''}`}>

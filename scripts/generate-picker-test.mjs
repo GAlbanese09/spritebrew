@@ -647,7 +647,7 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
     // G2: the side-view line offers only styles Create offers (STYLE_IDS.includes in sideOffers).
     && (form.match(/STYLE_IDS/g) ?? []).length === 5 && /!!s && STYLE_IDS\.includes\(s\.id\) && serverBalanceKnown && tokenBalance >= s\.tokenCost/.test(form));
   check('7: every opening candidate (affordableStyle.ts) is an offered style',
-    OPENING_CANDIDATES.length === 2 && OPENING_CANDIDATES.every((id) => offeredIds.includes(id)), OPENING_CANDIDATES);
+    OPENING_CANDIDATES.length === 1 && OPENING_CANDIDATES.every((id) => offeredIds.includes(id)), OPENING_CANDIDATES);
   check('7: anim-8dir still answers every lookup and price as before: getStyleById, getTokenCost 50, getResolutionMode locked at 80, the pro free-tier bucket',
     getStyleById('anim-8dir')?.label === '8-Direction Rotation' && getStyleById('anim-8dir')?.promptStyle === 'animation__8_dir_rotation'
     && getTokenCost('animation__8_dir_rotation') === 50 && same(getResolutionMode('animation__8_dir_rotation'), { kind: 'locked', size: 80 })

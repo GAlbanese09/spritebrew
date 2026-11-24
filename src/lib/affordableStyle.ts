@@ -8,10 +8,13 @@
 import { getStyleById, type GenerationStyle } from '@/lib/styleRegistry';
 import { DAILY_LOGIN_TOKENS, EMAIL_LIST_BONUS_TOKENS } from '@/lib/constants';
 
-/** The form's default style. */
-export const DEFAULT_STYLE_ID = 'plus-classic';
-/** The styles a short balance may open on, in order: the default first. */
-export const OPENING_CANDIDATES = [DEFAULT_STYLE_ID, 'fast-retro'] as const;
+/** The form's default style: Retro Arcade (George, Nov 24, 2026; HQ room
+ *  2026-11-24-149). It was Classic Pixel Art. */
+export const DEFAULT_STYLE_ID = 'fast-retro';
+/** The styles a short balance may open on, in order: the default first.
+ *  Retro Arcade is the cheapest style Create offers, so there is no cheaper
+ *  one to open on. */
+export const OPENING_CANDIDATES: readonly string[] = [DEFAULT_STYLE_ID];
 
 function style(id: string): GenerationStyle {
   const s = getStyleById(id);
@@ -49,13 +52,17 @@ export function affordableNote({ balance, emailListClaimed, emailListClaimKnown 
   emailListClaimed: boolean;
   emailListClaimKnown: boolean;
 }): string | null {
-  const classic = style(DEFAULT_STYLE_ID);
-  if (balance >= classic.tokenCost) return null;
-  const fast = style(OPENING_CANDIDATES[1]);
+  const opening = style(DEFAULT_STYLE_ID);
+  if (balance >= opening.tokenCost) return null;
+  const candidates = OPENING_CANDIDATES.map(style);
   const newsletter = emailListClaimKnown && !emailListClaimed;
   const more = `+${DAILY_LOGIN_TOKENS} a day${newsletter ? `, +${EMAIL_LIST_BONUS_TOKENS} for the newsletter` : ''}`;
-  if (balance >= fast.tokenCost) {
-    return `You have ${plural(balance)}: ${fast.label} is ready at ${fast.tokenCost}. ${classic.label} needs ${classic.tokenCost} (${more}).`;
+  // A cheaper candidate the balance covers (none while the default is the
+  // cheapest), else the cheapest one's cost.
+  const ready = candidates.find((s) => balance >= s.tokenCost);
+  if (ready) {
+    return `You have ${plural(balance)}: ${ready.label} is ready at ${ready.tokenCost}. ${opening.label} needs ${opening.tokenCost} (${more}).`;
   }
-  return `You have ${plural(balance)}. ${fast.label} needs ${fast.tokenCost} (${more}).`;
+  const cheapest = candidates.reduce((a, b) => (b.tokenCost < a.tokenCost ? b : a));
+  return `You have ${plural(balance)}. ${cheapest.label} needs ${cheapest.tokenCost} (${more}).`;
 }

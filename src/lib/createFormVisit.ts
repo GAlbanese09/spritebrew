@@ -1,7 +1,9 @@
 /**
  * What /generate's Create form remembers for this page load (HQ room
- * 2026-11-11-034, ENG 2026-11-11-043): the style in the field and whether the
- * person has acted (chosen a style, typed a prompt or tapped an example).
+ * 2026-11-11-034, ENG 2026-11-11-043): the style in the field, whether the
+ * person has acted (chosen a style, typed a prompt or tapped an example),
+ * and, with the style, "What's it for?"'s card and fine-tune rows (G2,
+ * generate-pass.md 2.3; createCards.ts).
  * The page rebuilds the form after every result and on every Create or
  * Animate switch; this lets it come back where the person was.
  *
@@ -16,6 +18,9 @@ export interface FormVisit {
   styleId: string | null;
   /** True once the person has acted; never cleared in the visit. */
   acted: boolean;
+  /** The card and rows last chosen, or null when none is remembered. Kept as
+   *  given; the form checks it (createCards.ts validChoice). */
+  choice: unknown;
 }
 
 type UserId = string | null | undefined;
@@ -25,16 +30,16 @@ export function createFormVisit() {
 
   /** This account's record, started empty when another account's was held. */
   const forUser = (userId: string) => {
-    if (!held || held.userId !== userId) held = { userId, styleId: null, acted: false };
+    if (!held || held.userId !== userId) held = { userId, styleId: null, acted: false, choice: null };
     return held;
   };
 
   return {
     /** What this account's form had. Another account's record is dropped. */
     read(userId: UserId): FormVisit {
-      if (!userId) return { styleId: null, acted: false };
+      if (!userId) return { styleId: null, acted: false, choice: null };
       if (held && held.userId !== userId) held = null;
-      return held ? { styleId: held.styleId, acted: held.acted } : { styleId: null, acted: false };
+      return held ? { styleId: held.styleId, acted: held.acted, choice: held.choice } : { styleId: null, acted: false, choice: null };
     },
     /** The style now in the field. */
     rememberStyle(userId: UserId, styleId: string): void {
@@ -43,6 +48,10 @@ export function createFormVisit() {
     /** The person acted. */
     rememberActed(userId: UserId): void {
       if (userId) forUser(userId).acted = true;
+    },
+    /** The card and rows now chosen. */
+    rememberChoice(userId: UserId, choice: unknown): void {
+      if (userId) forUser(userId).choice = choice;
     },
   };
 }

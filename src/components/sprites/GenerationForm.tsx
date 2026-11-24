@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
-import { Sparkles, X, Loader2, AlertCircle } from 'lucide-react';
+import { Sparkles, X, Loader2, AlertCircle, ChevronDown } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
@@ -18,6 +18,24 @@ import StepBadge, { StepWord } from './StepBadge';
 import { accountRecentStorage, pushRecent, readRecent, visibleRecent, writeRecent, type RecentStorage } from '@/lib/recentStyles';
 import { affordableNote, DEFAULT_STYLE_ID, OPENING_CANDIDATES, openingStyle } from '@/lib/affordableStyle';
 import { formVisit } from '@/lib/createFormVisit';
+import {
+  addsLine,
+  cardsApply,
+  cardsGreyed,
+  lastCreateFor,
+  shownAddsLine,
+  DESCRIBE_PLACEHOLDER,
+  FINE_TUNE_OPEN_KEY,
+  MORE_OPEN_KEY,
+  MORE_SETTINGS_LABEL,
+  sideViewLine,
+  specFor,
+  specToSend,
+  validChoice,
+  withCreateSpec,
+  type CreateChoice,
+} from '@/lib/createCards';
+import { useCreateWords } from '@/hooks/useCreateWords';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, isUpstreamFailure, providerFailureMessage } from '@/lib/generationPause';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
@@ -27,13 +45,15 @@ import { despillIfTransparent, decodedSize } from '@/lib/spriteUtils';
 import { StyleExamplesLightbox } from './StyleExamplesLightbox';
 import StyleField from './StyleField';
 import StylePicker from './StylePicker';
+import WhatsItFor from './WhatsItFor';
 
 /** The browser steps for finishing a job's result (see jobResult.ts). */
 const JOB_RESULT_IO: JobResultIO = { despill: despillIfTransparent, decodedSize };
 
-/** Each chip shows one word and fills its full prompt. */
+/** Each chip shows one word and fills the subject only (generate-pass.md
+ *  2.1): "What's it for?" says the rest. */
 const EXAMPLE_PROMPTS = [
-  { label: 'Knight', prompt: 'pixel art knight with sword' },
+  { label: 'Knight', prompt: 'knight with sword' },
   { label: 'Goblin', prompt: 'small goblin with wooden club' },
   { label: 'Wizard', prompt: 'wizard with blue robe and staff' },
   { label: 'Skeleton', prompt: 'skeleton warrior with shield' },
@@ -57,6 +77,20 @@ function recentStorage(userId: string | null | undefined): RecentStorage | null 
   }
 }
 
+/** Whether a section was left open in this browser (createCards.ts keys). */
+function readOpen(key: string): boolean {
+  try {
+    return typeof window !== 'undefined' && window.localStorage.getItem(key) === '1';
+  } catch {
+    return false;
+  }
+}
+function writeOpen(key: string, open: boolean): void {
+  try {
+    window.localStorage.setItem(key, open ? '1' : '0');
+  } catch { /* storage unavailable: kept for this form only */ }
+}
+
 /** Token numbers with thousands separators (10,021). */
 const formatCount = (n: number) => n.toLocaleString('en-US');
 /** "token" at exactly one, "tokens" otherwise. */
@@ -78,6 +112,7 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
   const setGeneratedImage = useSpriteStore((s) => s.setGeneratedImage);
   const setGenerationStyle = useSpriteStore((s) => s.setGenerationStyle);
   const setCurrentSheetMetadata = useSpriteStore((s) => s.setCurrentSheetMetadata);
+  const setLastCreate = useSpriteStore((s) => s.setLastCreate);
   const setRescueInfo = useSpriteStore((s) => s.setRescueInfo);
   const setOriginalCharacter = useSpriteStore((s) => s.setOriginalCharacter);
   const setTokenBalance = useSpriteStore((s) => s.setTokenBalance);
@@ -154,6 +189,13 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
   const [customHeight, setCustomHeight] = useState(256);
   const [removeBg, setRemoveBg] = useState(true);
   const [referenceImages, setReferenceImages] = useState<string[]>([]);
+  // "What's it for?" (G2, generate-pass.md 2.2 and 2.3): the card and the
+  // fine-tune rows, kept for the visit with the style (createFormVisit.ts);
+  // a reload starts at the default card.
+  const [choice, setChoice] = useState<CreateChoice>(() => validChoice(visitAtMount.choice));
+  // Fine-tune and More settings, open or closed, kept per browser.
+  const [fineTuneOpen, setFineTuneOpen] = useState(() => readOpen(FINE_TUNE_OPEN_KEY));
+  const [moreOpen, setMoreOpen] = useState(() => readOpen(MORE_OPEN_KEY));
 
   // Style whose examples are open in the lightbox carousel. null = closed.
   const [lightboxStyle, setLightboxStyle] = useState<GenerationStyle | null>(null);
@@ -177,6 +219,13 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
     actedRef.current = true;
     formVisit.rememberActed(userId);
   }, [userId]);
+
+  // A card or a fine-tune chip: it sets the latch, as a style pick does.
+  const chooseCreate = useCallback((next: CreateChoice) => {
+    markActed();
+    formVisit.rememberChoice(userId, next);
+    setChoice(next);
+  }, [markActed, userId]);
 
   // Every style change goes through here: the picker, a Recent badge and the
   // lightbox's Use this style. Recent is computed from the current values, not
@@ -214,6 +263,24 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
 
   const referencesEnabled = selectedStyle.supportsReferenceImages === true;
 
+  // "What's it for?" (G2): whether the cards apply to this style, the ids a
+  // press sends, and the "Adds" line's words from the private service
+  // (HQ 2026-11-18-049, -056; createCards.ts). No answer from the service:
+  // nothing is added and no ids are sent; the cards grey only for a style
+  // they do not apply to (AUDIT g2-page-r1 M2).
+  const cardsOn = cardsApply(selectedStyle);
+  const spec = specFor(choice, selectedStyle);
+  const { words, renew: renewWords } = useCreateWords(selectedStyle.promptStyle, spec, getToken);
+  const toSend = specToSend(spec, words);
+  const greyed = cardsGreyed(cardsOn);
+  const adds = addsLine(cardsOn, choice.card, words);
+  // While a new choice's lookup is out, the last line stays, marked as
+  // checking, so nothing below it moves (AUDIT g2-page-r1 M1).
+  const [heldAdds, setHeldAdds] = useState(adds);
+  if (adds !== '' && adds !== heldAdds) setHeldAdds(adds);
+  const addsShown = shownAddsLine(adds, words, heldAdds);
+  const sideLine = sideViewLine(selectedStyle, choice);
+
   const tokenCost = selectedStyle.tokenCost;
   const insufficientTokens = tokenBalance < tokenCost;
   const tokensNeeded = tokenCost - tokenBalance;
@@ -246,6 +313,8 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
     // Capture click-time context for the poll-success effect.
     const capturedPrompt = prompt.trim();
     const capturedStyleId = selectedStyleId;
+    const capturedSend = toSend;
+    const capturedLast = lastCreateFor(selectedStyle, choice, capturedPrompt);
 
     let tookPollPath = false;
 
@@ -272,8 +341,13 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
       const idempotencyKey = crypto.randomUUID();
       body.idempotencyKey = idempotencyKey;
 
+      // G2: the card's ids and the version the "Adds" line showed, when they
+      // apply (createCards.ts withCreateSpec). Ids, never words.
+      const sent = withCreateSpec(body, capturedSend);
       const sessionToken = await getToken();
-      const result = await fetchGeneration(body, sessionToken);
+      const result = await fetchGeneration(sent, sessionToken);
+      // Accepted: what the result card reads (G0's setLastCreate; DESIGN -016).
+      setLastCreate(capturedLast.facing, capturedLast.subject);
 
       if (result.mode === 'poll') {
         // Queue path. The poll effect drives the rest of the lifecycle —
@@ -324,6 +398,15 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
         setTokenBalance(errObj.balance);
         return;
       }
+      if (errObj.error === 'create_spec_refused' || errObj.error === 'create_words_unavailable' || errObj.error === 'create_words_changed') {
+        // G2 (ENG, PR #81): the card's ids were refused before any debit; the
+        // server's words say nothing was charged. Shown as they are. When the
+        // words changed, the page forgets its kept answers and asks again, so
+        // the next press carries the new version (AUDIT g2-page-r1 H1).
+        if (errObj.error === 'create_words_changed') renewWords();
+        setGenerationError(msg);
+        return;
+      }
       if (errObj.error === 'submission_failed' || errObj.error === 'money_paused') {
         // The server's message states what happened to the tokens (refunded,
         // to be returned by hand, or never charged): surface it verbatim, do
@@ -343,7 +426,7 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
     }
   }, [
     prompt, selectedStyle, selectedStyleId, effectiveWidth, effectiveHeight,
-    removeBg, referenceImages, referencesEnabled, isGenerating, tokenCost, getToken,
+    removeBg, referenceImages, referencesEnabled, isGenerating, tokenCost, getToken, toSend, choice, renewWords, setLastCreate,
     setGenerating, setGeneratingAction, setGenerationError, setGeneratedImage,
     setGenerationStyle, setTokenBalance, fetchBalance, onGenerated, poll,
   ]);
@@ -436,12 +519,19 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
     : null;
   const bgLabelId = useId();
   const bgValueId = useId();
+  const moreId = useId();
+  const styleBoxRef = useRef<HTMLDivElement>(null);
+  // The side-view line's offers (2.5): a choice, never a switch, and never
+  // offered without the balance for it.
+  const sideOffers = (sideLine?.offers ?? [])
+    .map((id) => getStyleById(id))
+    .filter((s): s is GenerationStyle => !!s && STYLE_IDS.includes(s.id) && serverBalanceKnown && tokenBalance >= s.tokenCost);
 
-  // The steps: 1 Describe it (required), 2 Style (has a default, so done);
-  // Generate is the bar's step 3 (generate-pass.md section 1; G2 inserts
-  // "What's it for?" as step 2).
-  const [describeBadge, styleBadge] = badgeStates(
-    [{ required: true, done: prompt.trim() !== '' }, { required: true, done: true }],
+  // The steps: 1 Describe it (required), 2 What's it for? and 3 Style (each
+  // has a default, so done); Generate is the bar's step 4 (generate-pass.md
+  // section 1 and 2).
+  const [describeBadge, forBadge, styleBadge] = badgeStates(
+    [{ required: true, done: prompt.trim() !== '' }, { required: true, done: true }, { required: true, done: true }],
     guideShowing,
   );
 
@@ -482,7 +572,7 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
       </>
     );
   } else if (row === 'ready') {
-    disabledReason = 'Step 3: Generate.';
+    disabledReason = 'Step 4: Generate.';
   }
 
   // The bar's coin, cost and balance. A short balance reads "16 tokens ·
@@ -532,7 +622,7 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
           }}
           placeholder={
             asksForCharacter
-              ? 'e.g. a small knight in a blue cape, full body, facing down'
+              ? DESCRIBE_PLACEHOLDER
               : "Describe what you want to generate. Be specific about style and details."
           }
           rows={3}
@@ -540,6 +630,12 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
             text-sm font-mono text-text-primary placeholder:text-text-muted resize-none
             focus:outline-none focus:border-accent-amber"
         />
+        {/* The "Adds" line (2.1): what "What's it for?" adds, from the
+            private service; one line's height kept while a lookup is out. */}
+        <p data-adds-line="" aria-live="polite" aria-busy={addsShown.checking || undefined}
+          className={`mt-2 min-h-[18px] text-xs font-mono text-accent-teal leading-normal transition-opacity ${addsShown.checking ? 'opacity-60' : ''}`}>
+          {addsShown.text}
+        </p>
         <ExampleChips
           onPick={(example) => {
             markActed();
@@ -548,8 +644,24 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
         />
       </div>
 
+      {/* What's it for? and its fine-tune rows (2.2, 2.3) */}
+      <WhatsItFor
+        choice={choice}
+        onChoose={chooseCreate}
+        style={selectedStyle}
+        applies={cardsOn}
+        greyed={greyed}
+        badge={forBadge}
+        fineTuneOpen={fineTuneOpen}
+        onToggleFineTune={() => {
+          const next = !fineTuneOpen;
+          writeOpen(FINE_TUNE_OPEN_KEY, next);
+          setFineTuneOpen(next);
+        }}
+      />
+
       {/* Style: the chosen style, Change style and Recent */}
-      <div>
+      <div ref={styleBoxRef}>
         <StyleField
           ref={changeStyleRef}
           style={selectedStyle}
@@ -558,16 +670,63 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
           onOpenPicker={() => setPickerOpen(true)}
           onViewExamples={setLightboxStyle}
           onChooseRecent={chooseStyle}
-          step={{ n: 2, state: styleBadge }}
+          step={{ n: 3, state: styleBadge }}
         />
         {balanceNote && (
           <p className="text-[13px] font-mono text-text-secondary mt-2">{balanceNote}</p>
+        )}
+        {/* The side-view line (2.5), while the card or the View row is Side. */}
+        {sideLine && !greyed && (
+          <div className="mt-2" data-side-line="">
+            <p className="text-xs font-mono text-accent-teal leading-normal">{sideLine.text}</p>
+            {sideOffers.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {sideOffers.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => {
+                      chooseStyle(s.id);
+                      // The offer goes with the line it sat in: the focus moves
+                      // to the style just chosen (AUDIT g2-page-r1 L4).
+                      requestAnimationFrame(() => styleBoxRef.current?.querySelector<HTMLElement>('button[aria-haspopup="dialog"]')?.focus());
+                    }}
+                    className="inline-flex items-center gap-1.5 min-h-8 pointer-coarse:min-h-11 px-3 rounded-lg border border-border-strong text-xs font-mono text-text-primary
+                      cursor-pointer hover:bg-bg-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber"
+                  >
+                    Use {s.label} &middot; <PixelCoin /> {formatCount(s.tokenCost)}
+                    <span className="sr-only"> tokens</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
         <p className="sr-only" role="status" aria-live="polite">
           {styleAnnouncement}
         </p>
       </div>
 
+      {/* More settings: size, background, reference images (2.4), closed by
+          default, open or closed per browser. */}
+      <div className="border-t border-border-default pt-3">
+        <button
+          type="button"
+          aria-expanded={moreOpen}
+          aria-controls={moreOpen ? moreId : undefined}
+          onClick={() => {
+            const next = !moreOpen;
+            writeOpen(MORE_OPEN_KEY, next);
+            setMoreOpen(next);
+          }}
+          className="flex items-center gap-2 w-full text-left min-h-11 text-[13px] font-mono text-text-secondary cursor-pointer rounded
+            hover:text-text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber"
+        >
+          <ChevronDown size={16} aria-hidden="true" className={`flex-shrink-0 transition-transform ${moreOpen ? 'rotate-180' : ''}`} />
+          {MORE_SETTINGS_LABEL}
+        </button>
+        {moreOpen && (
+      <div id={moreId} className="space-y-6 mt-3">
       {/* Reference Images — Pro styles only */}
       <ReferenceImagesPanel
         referenceImages={referenceImages}
@@ -653,6 +812,9 @@ export default function GenerationForm({ onGenerated, guideShowing = false }: Ge
           <p className="text-[13px] font-mono text-text-secondary mt-2">
             Larger canvas = more room for detail and extended poses.
           </p>
+        )}
+      </div>
+      </div>
         )}
       </div>
 

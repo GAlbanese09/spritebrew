@@ -127,7 +127,7 @@ const say = (...a) => console.log('[create-words-route-test]', ...a);
 
 const ADDS = 'stub-adds-a, stub-adds-b';
 const VERSION = 'v-test-1';
-function okBinding({ length = 77, reason = null, status = 200, raw = null, throws = false, hang = false } = {}) {
+function okBinding({ length = 77, reason = null, status = 200, raw = null, throws = false, hang = false, version = VERSION } = {}) {
   return {
     fetch: async (url, init) => {
       const req = typeof url === 'string' ? { url, ...init } : url;
@@ -138,10 +138,10 @@ function okBinding({ length = 77, reason = null, status = 200, raw = null, throw
         return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted'))));
       }
       if (raw !== null) return new Response(raw, { status });
-      if (reason) return new Response(JSON.stringify({ ok: false, reason, version: VERSION }), { status });
+      if (reason) return new Response(JSON.stringify({ ok: false, reason, version }), { status });
       const b = JSON.parse(init.body);
       return new Response(JSON.stringify(b.description === undefined
-        ? { ok: true, adds: ADDS, version: VERSION } : { ok: true, adds: ADDS, length, version: VERSION }), { status });
+        ? { ok: true, adds: ADDS, version } : { ok: true, adds: ADDS, length, version }), { status });
     },
   };
 }
@@ -265,10 +265,10 @@ check('M2: a route without G2 refuses a spec\'d request before any money ("Promp
 
 reset(); seedBalance(START);
 r = await post({ promptSpec: SPEC, wordsVersion: 'v-old' });
-const changed = r.res.status === 409 && r.body?.error === 'create_words_changed' && nothingMoved();
+const changed = r.res.status === 409 && r.body?.error === 'create_words_changed' && r.body?.version === VERSION && nothingMoved();
 reset(); seedBalance(START);
 r = await post({ promptSpec: SPEC, wordsVersion: VERSION });
-check('generate: the "Adds" line\'s version must match the service\'s, or 409 with nothing charged (L3)', changed && r.res.status === 202);
+check('generate: the "Adds" line\'s version must match the service\'s, or 409 with nothing charged and the current version (L3, H1)', changed && r.res.status === 202);
 
 reset(okBinding({ status: 413 })); seedBalance(START);
 r = await post({ promptSpec: SPEC });
@@ -324,15 +324,19 @@ check('words: signed out is 401 and never asks the binding', r.res.status === 40
 }
 
 r = await get({ style: 'rd_plus__classic', card: 'platformer', view: '', framing: '' });
-check('words: an accepted spec answers the binding\'s words and version, kept by the browser for ten minutes',
+check('words: an accepted spec answers the binding\'s words and version, and the browser keeps nothing (H1)',
   r.res.status === 200 && r.body?.success === true && r.body?.adds === ADDS && r.body?.version === VERSION
-    && r.res.headers.get('cache-control') === 'private, max-age=600' && bindingCalls.length === 1 && !('description' in bindingCalls[0].body));
+    && r.res.headers.get('cache-control') === 'no-store' && bindingCalls.length === 1 && !('description' in bindingCalls[0].body));
 r = await get({ style: 'rd_plus__classic', card: 'platformer' });
-check('words: the same ids again are answered from this isolate without asking the binding', r.body?.adds === ADDS && bindingCalls.length === 1);
+check('words: the same ids again ask the binding again; nothing is kept in this isolate (H1)', r.body?.adds === ADDS && bindingCalls.length === 2);
+binding = okBinding({ version: 'v-next' }); process.env.CREATE_WORDS = binding;
+r = await get({ style: 'rd_plus__classic', card: 'platformer' });
+check('words: a words change shows at the very next lookup (H1)', r.res.status === 200 && r.body?.version === 'v-next');
 
 reset(okBinding({ reason: 'framing_style' })); W.resetCreateWordsRouteState();
 r = await get({ style: 'rd_plus__classic', card: 'portrait', framing: 'waist' });
-check('words: a refusal answers success false with its reason', r.res.status === 200 && r.body?.success === false && r.body?.reason === 'framing_style');
+check('words: a refusal answers success false with its reason and version, kept by no one',
+  r.res.status === 200 && r.body?.success === false && r.body?.reason === 'framing_style' && r.body?.version === VERSION && r.res.headers.get('cache-control') === 'no-store');
 
 reset(okBinding({ throws: true })); W.resetCreateWordsRouteState();
 r = await get({ style: 'rd_plus__classic', card: 'platformer' });
@@ -352,7 +356,7 @@ reset(); W.resetCreateWordsRouteState();
     statuses.push(x.res.status);
     if (statuses.length > W.RATE_LIMIT_PER_MINUTE) { last = x; break outer; }
   }
-  check(`words: past ${W.RATE_LIMIT_PER_MINUTE} uncached lookups a minute an account gets 429`,
+  check(`words: past ${W.RATE_LIMIT_PER_MINUTE} lookups a minute an account gets 429`,
     statuses.slice(0, W.RATE_LIMIT_PER_MINUTE).every((s) => s === 200) && last?.res.status === 429);
 }
 

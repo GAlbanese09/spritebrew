@@ -386,7 +386,9 @@ export async function POST(request: Request) {
     }
     if (body.wordsVersion !== undefined && body.wordsVersion !== answer.version) {
       return Response.json(
-        { success: false, error: 'create_words_changed', message: CREATE_SPEC_MESSAGES.changed },
+        // The current version, so the page can ask for the words again once
+        // and show the ones that will be sent (H1; HQ 2026-11-24-053).
+        { success: false, error: 'create_words_changed', message: CREATE_SPEC_MESSAGES.changed, version: answer.version },
         { status: 409 }
       );
     }

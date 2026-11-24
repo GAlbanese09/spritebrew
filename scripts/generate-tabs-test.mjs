@@ -234,7 +234,10 @@ check('3s: Animate from Text words a provider failure as the other forms do, in 
 check('3t: the chosen card is kept for its account; a card change keeps Background and the VFX size; VFX\'s size clamps on leaving the field (L2, L8, L4)',
   /const textStyleId = textCard\.account === userId \? textCard\.id : DEFAULT_TEXT_ANIMATION_ID;/.test(page) && !text.includes('sizedFor') && /onBlur=\{\(\) => setCustomWidth\(effectiveWidth\)\}/.test(text) && /onBlur=\{\(\) => setCustomHeight\(effectiveHeight\)\}/.test(text));
 check('3u: placeholders at 4.5 to 1 and the Dismiss at 44 px by touch on Animate from Text (L9)', text.includes('placeholder:text-text-secondary') && !text.includes('placeholder:text-text-muted') && /pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:-m-3 text-red-400/.test(text));
-check('3v: the page does not wire the text-animation request; G4 does, with its button (L14)', !page.includes('textAnimationRequest'));
+check('3v: G4 wires the text-animation request with its button: a request opens Animate from Text as the person\'s pick, the form area first, and that form takes and clears it; the page never clears it (L14; AUDIT g4-animate-r1 M3)',
+  /useSpriteStore\.subscribe\(\(state, before\) => \{\s*if \(!state\.textAnimationRequest \|\| state\.textAnimationRequest === before\.textAnimationRequest\) return;\s*setShowForm\(true\);\s*handleTabChange\('text'\);\s*\}\),\s*\[handleTabChange\]/.test(page)
+  && !/clearTextAnimationRequest/.test(page) && /<AnimateForm onGenerated=\{handleGenerated\} guideShowing=\{guideShowing\} \/>/.test(page));
+check('3z: "Make a side view" waits for G2: Create Sprite does not take its request yet, so the flag is off (AUDIT g4-animate-r1 M3; G2 turns it on with its receiver)', /export const SIDE_VIEW_REQUEST_TAKEN = false;/.test(read('src/lib/generateTabs.ts')) && !page.includes('createRequest'));
 check('3w: the guide also closes at the first input in a form and at a press of Generate, and then the focus stays put (DESIGN -097, L5)',
   /onInputCapture=\{closeGuideOnInput\}/.test(page) && /if \(\(e\.target as Element\)\.closest\('button, a, \[role=radio\], \[role=switch\], input'\)\) closeGuideOnInput\(\);/.test(page)
   && /if \(guideShowing\) closeGuide\(null\);/.test(page) && /if \(focusTab\) tabRefs\.current\[focusTab\]\?\.focus\(\);/.test(page));

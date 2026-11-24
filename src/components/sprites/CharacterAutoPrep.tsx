@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { Wand2, Check, Loader2, AlertCircle, Info, Pencil } from 'lucide-react';
+import { useEffect, useRef, useState, useCallback, useId } from 'react';
+import { Check, Loader2, AlertCircle, Info, Pencil, ChevronDown } from 'lucide-react';
 import {
   loadImage,
   imageToCanvas,
@@ -12,6 +12,8 @@ import {
   type DetectedSprite,
 } from '@/lib/spriteUtils';
 import Button from '@/components/ui/Button';
+import { prepPictureBox, prepPictureDims } from '@/lib/prepPicture';
+import { DIMMED_GENERATE } from '@/lib/generateTabs';
 import PixelEditor from './PixelEditor';
 import {
   DEFAULT_BG_TOLERANCE,
@@ -69,9 +71,20 @@ interface CharacterAutoPrepProps {
    *  cancel button then reads "Keep WxH", and when that character carries
    *  pixel edits a note says they do not carry over. */
   replacing?: { width: number; height: number; edited: boolean } | null;
+  /** "Change size" under the pictures: opens More settings and focuses
+   *  Resolution (generate-pass.md 5.3). Without it the link is not shown. */
+  onChangeSize?: () => void;
+  /** The id of the panel's heading, "Check your character", so the form can
+   *  move focus to it on arrival (5.3, item 4). */
+  headingId?: string;
 }
 
 type Stage = 'processing' | 'ready' | 'error';
+
+/** A secondary button that cannot be pressed: full opacity, so its label
+ *  stays readable (with the secondary text colour); only the cursor and
+ *  the colour say it is off. */
+const DIMMED_SECONDARY = { opacity: 1 } as const;
 
 export default function CharacterAutoPrep({
   sourceDataUrl,
@@ -87,7 +100,13 @@ export default function CharacterAutoPrep({
   initialSkipBgRemoval,
   initialTolerance,
   replacing,
+  onChangeSize,
+  headingId: headingIdProp,
 }: CharacterAutoPrepProps) {
+  const ownHeadingId = useId();
+  const headingId = headingIdProp ?? ownHeadingId;
+  // "Adjust the prep": closed on every open of the panel (5.3).
+  const [adjustOpen, setAdjustOpen] = useState(false);
   const [stage, setStage] = useState<Stage>('processing');
   // The fitted image on display, with what it was fitted for (stage 2).
   const [prepared, setPrepared] = useState<PreparedFit | null>(null);
@@ -98,6 +117,23 @@ export default function CharacterAutoPrep({
   const [tolerance, setTolerance] = useState(initialTolerance ?? DEFAULT_BG_TOLERANCE);
   const [skipBgRemoval, setSkipBgRemoval] = useState(initialSkipBgRemoval ?? false);
   const [editorOpen, setEditorOpen] = useState(false);
+  // The pictures' box side, from the row's width: at most 160 px from 768 px
+  // up and 132 below, and two always fit side by side (5.3).
+  const picturesRef = useRef<HTMLDivElement>(null);
+  const [pictureBox, setPictureBox] = useState(132);
+  useEffect(() => {
+    const row = picturesRef.current;
+    if (!row) return;
+    const measure = () => {
+      const wide = window.matchMedia('(min-width: 768px)').matches;
+      setPictureBox(prepPictureBox(row.clientWidth, wide ? 24 : 8, wide ? 160 : 132));
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const watch = new ResizeObserver(measure);
+    watch.observe(row);
+    return () => watch.disconnect();
+  }, [stage]);
 
   // The user's manually edited image: the displayed image at save time, so
   // it carries that moment's size and padding. When set, a size or padding
@@ -361,24 +397,58 @@ export default function CharacterAutoPrep({
     [editedBaseDataUrl]
   );
 
-  const previewScale = Math.max(1, Math.floor(256 / shownSize));
-
   return (
-    <div className="rounded-lg border border-accent-amber/30 bg-bg-surface p-5 space-y-4">
-      {/* Header */}
-      <div className="flex items-start gap-2">
-        <Wand2 size={16} className="text-accent-amber mt-0.5 flex-shrink-0" />
-        <div className="flex-1">
-          <h3 className="text-xs font-mono font-semibold text-text-primary uppercase tracking-wider mb-1">
-            Auto-prep Character
-          </h3>
-          <p className="text-[10px] font-mono text-text-secondary leading-relaxed">
-            Detecting your character, cropping, removing the background, and
-            resizing to {targetSize}x{targetSize}. Adjust the tolerance or
-            use the pixel editor to fix details.
-          </p>
+    <section
+      className="rounded-lg border border-accent-teal/40 bg-bg-surface p-3 md:p-5 space-y-4"
+      aria-labelledby={headingId}
+    >
+      {/* Top row: the decision first (generate-pass.md 5.3, G4). Under 768 px
+          the buttons sit under the heading. */}
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <h3
+          id={headingId}
+          tabIndex={-1}
+          className="text-sm font-mono font-semibold text-text-primary focus:outline-none"
+        >
+          Check your character
+        </h3>
+        <div className="flex items-center gap-2">
+          {stage === 'ready' && preparedDataUrl && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setEditorOpen(true)}
+              disabled={!fitCurrent}
+              // Dimmed, the label stays readable (section 1; AUDIT g4-animate-r1 M5).
+              className="pointer-coarse:min-h-11 disabled:text-text-secondary"
+              style={fitCurrent ? undefined : DIMMED_SECONDARY}
+            >
+              <Pencil size={14} />
+              Edit
+            </Button>
+          )}
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleAccept}
+            disabled={stage !== 'ready' || !fitCurrent}
+            className="pointer-coarse:min-h-11"
+            style={stage === 'ready' && fitCurrent ? undefined : DIMMED_GENERATE}
+          >
+            <Check size={14} />
+            Use This
+          </Button>
         </div>
       </div>
+
+      {/* On a re-prep of a character with pixel edits: those edits were made
+          at the old size and are not in this prep. Said beside Use This,
+          since it is the click that replaces that character. */}
+      {replacing?.edited && (
+        <p className="text-xs font-mono text-amber-400">
+          Your pixel edits are on the {replacing.width}x{replacing.height} version and do not carry over. Use This replaces it.
+        </p>
+      )}
 
       {/* Processing spinner */}
       {stage === 'processing' && (
@@ -396,228 +466,198 @@ export default function CharacterAutoPrep({
         </div>
       )}
 
-      {/* Ready — before/after preview */}
       {stage === 'ready' && (
         <>
-          <div className="flex items-center gap-6 justify-center py-2">
-            {/* Original */}
-            <div className="text-center">
-              <p className="text-[9px] font-mono text-text-secondary mb-1.5 uppercase tracking-wider">
-                Original ({sourceWidth}x{sourceHeight})
-              </p>
-              <div
-                className="inline-block rounded border border-border-subtle overflow-hidden"
-                style={{
-                  backgroundImage:
-                    'linear-gradient(45deg, #2a2725 25%, transparent 25%), linear-gradient(-45deg, #2a2725 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2725 75%), linear-gradient(-45deg, transparent 75%, #2a2725 75%)',
-                  backgroundSize: '6px 6px',
-                  backgroundPosition: '0 0, 0 3px, 3px -3px, -3px 0',
-                }}
-              >
-                <img
-                  src={sourceDataUrl}
-                  alt="Original"
-                  className="block pixel-art-render"
-                  style={{ maxWidth: 128, maxHeight: 128 }}
-                />
-              </div>
-            </div>
-
-            <span className="text-text-secondary text-lg font-mono">&rarr;</span>
-
-            {/* Prepared */}
-            <div className="text-center">
-              <p className="text-[9px] font-mono text-accent-amber mb-1.5 uppercase tracking-wider">
-                {editedBaseDataUrl ? 'Edited' : 'Prepared'}
-                {/* The size of the image on display, which is the target
-                    size except for the moment a fit is pending. */}
-                {cropBBox && !editedBaseDataUrl && ` (${shownSize}x${shownSize})`}
-              </p>
-              <div
-                className="inline-block rounded border border-accent-amber/40 overflow-hidden"
-                style={{
-                  backgroundImage:
-                    'linear-gradient(45deg, #2a2725 25%, transparent 25%), linear-gradient(-45deg, #2a2725 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2725 75%), linear-gradient(-45deg, transparent 75%, #2a2725 75%)',
-                  backgroundSize: '6px 6px',
-                  backgroundPosition: '0 0, 0 3px, 3px -3px, -3px 0',
-                }}
-              >
-                {preparedDataUrl && (
-                  <img
-                    src={preparedDataUrl}
-                    alt="Prepared character"
-                    className="block pixel-art-render"
-                    style={{
-                      width: shownSize * previewScale,
-                      height: shownSize * previewScale,
-                    }}
-                  />
-                )}
-              </div>
-              {fitCurrent ? (
-                <p className="text-[9px] font-mono text-green-400 mt-1.5">
-                  Ready for animation ({prepared.size}x{prepared.size})
-                </p>
-              ) : (
-                <p className="text-[9px] font-mono text-accent-amber mt-1.5">
-                  Preparing character...
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* Background removal: skip checkbox + tolerance slider */}
-          {!sourceHasAlpha && (
-            <div className="rounded border border-border-default bg-bg-elevated p-3 space-y-3">
-              <label
-                className="flex items-center gap-2 cursor-pointer"
-                title="Keep the original background instead of removing it. Useful when the character shares colors with the background (e.g. white beard on white background)."
-              >
-                <input
-                  type="checkbox"
-                  checked={skipBgRemoval}
-                  onChange={(e) => setSkipBgRemoval(e.target.checked)}
-                  className="accent-[var(--accent-amber)] cursor-pointer"
-                />
-                <span className="text-[11px] font-mono font-semibold text-text-primary">
-                  Skip background removal (keep original background)
-                </span>
-                <Info size={11} className="text-text-secondary" />
-              </label>
-              {!skipBgRemoval && (
-                <>
-                  <div className="flex items-center gap-3">
-                    <label className="text-[10px] font-mono text-text-secondary w-20 flex-shrink-0">
-                      BG Removal
-                    </label>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={tolerance}
-                      onChange={(e) => handleToleranceChange(Number(e.target.value))}
-                      className="flex-1 accent-[var(--accent-amber)]"
-                    />
-                    <span className="text-[10px] font-mono text-text-primary w-8 text-right">
-                      {tolerance}
-                    </span>
-                  </div>
-                  <p className="text-[9px] font-mono text-text-secondary">
-                    Increase if background pixels remain. Decrease if character pixels are being removed.
-                    {editedBaseDataUrl && (
-                      <span className="text-amber-400 ml-1">(changing will reset manual edits)</span>
-                    )}
-                  </p>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* Detection details */}
-          <div className="rounded border border-border-default bg-bg-elevated p-3 space-y-1">
-            <DetailRow
-              label="Detected sprites"
-              value={spriteCount === 0 ? 'None (used full image)' : `${spriteCount}`}
-            />
-            {cropBBox && (
-              <DetailRow
-                label="Cropped to"
-                value={`${cropBBox.width}x${cropBBox.height} at (${cropBBox.x}, ${cropBBox.y})`}
+          {/* The pictures side by side, each in a square box at a whole-number
+              zoom, never squashed: boxes of at most 160 px at 768 px and up and
+              132 below, smaller where the row is narrower. The boxes line up at
+              the bottom, so a label that wraps moves nothing; their outline
+              takes no room. */}
+          <div ref={picturesRef} className="flex items-end gap-2 md:gap-6">
+            <PrepPicture label={`Original (${sourceWidth}x${sourceHeight})`} src={sourceDataUrl} alt="Original" width={sourceWidth} height={sourceHeight} box={pictureBox} />
+            {preparedDataUrl && (
+              <PrepPicture
+                label={editedBaseDataUrl ? 'Edited' : 'Prepared'}
+                src={preparedDataUrl}
+                alt="Prepared character"
+                width={shownSize}
+                height={shownSize}
+                box={pictureBox}
+                accent
               />
             )}
-            <DetailRow
-              label="Background"
-              value={
-                sourceHasAlpha
-                  ? 'Already transparent'
-                  : skipBgRemoval
-                    ? 'Kept (no removal)'
-                    : `Removed (tolerance ${tolerance})`
-              }
-            />
-            {editedBaseDataUrl && (
-              <DetailRow label="Manual edits" value="Applied" />
-            )}
-            <DetailRow
-              label="Character size"
-              value={
-                paddingEnabled
-                  ? `${characterSizePct}% (${Math.round(targetSize * (characterSizePct / 100))}x${Math.round(targetSize * (characterSizePct / 100))} of ${targetSize}x${targetSize})`
-                  : `100% (fills ${targetSize}x${targetSize})`
-              }
-            />
           </div>
 
-          {/* Animation Padding control */}
-          <div className="rounded border border-border-default bg-bg-elevated p-3 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <label className="flex items-center gap-2 cursor-pointer"
-                title="Shrinks character to leave room for weapon swings and motion effects">
-                <input
-                  type="checkbox"
-                  checked={paddingEnabled}
-                  onChange={(e) => onPaddingEnabledChange(e.target.checked)}
-                  className="accent-[var(--accent-amber)] cursor-pointer"
-                />
-                <span className="text-[11px] font-mono font-semibold text-text-primary">
-                  Animation Padding
-                </span>
-                <Info size={11} className="text-text-secondary" />
-              </label>
-              {paddingEnabled && (
-                <span className="text-[10px] font-mono text-accent-amber">{characterSizePct}%</span>
+          {/* The size line, and the way to change it (More settings). */}
+          {fitCurrent ? (
+            <p className="text-xs font-mono text-text-secondary">
+              Prepared at {prepared.size} by {prepared.size} px.
+              {onChangeSize && (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    onClick={onChangeSize}
+                    className="relative inline-block underline text-accent-amber hover:text-text-primary cursor-pointer after:absolute after:inset-x-0 after:-inset-y-1 after:content-[''] pointer-coarse:after:-inset-y-[14px]"
+                  >
+                    Change size
+                  </button>
+                </>
               )}
-            </div>
-            <p className="text-[9px] font-mono text-text-secondary leading-relaxed">
-              Shrinks character to leave room for weapon swings and motion effects.
-              Recommended for attack, jump, and destroy animations.
             </p>
-            {paddingEnabled && (
-              <div className="space-y-1">
-                <div className="flex items-center gap-3">
-                  <span className="text-[9px] font-mono text-text-secondary w-16">Character Size</span>
+          ) : (
+            <p className="text-xs font-mono text-accent-amber">Preparing character...</p>
+          )}
+
+          {/* Today's controls, unchanged in what they do, behind one closed
+              disclosure. */}
+          <div className="border-t border-border-subtle pt-2">
+            <button
+              type="button"
+              aria-expanded={adjustOpen}
+              aria-controls={`${headingId}-adjust`}
+              onClick={() => setAdjustOpen((o) => !o)}
+              className="flex items-center gap-2 pointer-coarse:min-h-11 py-2 text-xs font-mono text-text-secondary hover:text-text-primary cursor-pointer"
+            >
+              <ChevronDown size={16} className={`transition-transform ${adjustOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+              Adjust the prep
+            </button>
+          </div>
+          {adjustOpen && (
+            <div id={`${headingId}-adjust`} className="space-y-3">
+            {/* Background removal: skip checkbox + tolerance slider */}
+            {!sourceHasAlpha && (
+              <div className="rounded border border-border-default bg-bg-elevated p-3 space-y-3">
+                <label
+                  className="flex items-center gap-2 cursor-pointer"
+                  title="Keep the original background instead of removing it. Useful when the character shares colors with the background (e.g. white beard on white background)."
+                >
                   <input
-                    type="range" min={50} max={95} step={5}
-                    value={characterSizePct}
-                    onChange={(e) => onCharacterSizePctChange(Number(e.target.value))}
-                    className="flex-1 accent-[var(--accent-amber)]"
+                    type="checkbox"
+                    checked={skipBgRemoval}
+                    onChange={(e) => setSkipBgRemoval(e.target.checked)}
+                    className="accent-[var(--accent-amber)] cursor-pointer"
                   />
-                  <span className="text-[10px] font-mono text-text-primary w-10 text-right">
-                    {characterSizePct}%
+                  <span className="text-xs font-mono font-semibold text-text-primary">
+                    Skip background removal (keep original background)
                   </span>
-                </div>
+                  <Info size={11} className="text-text-secondary" />
+                </label>
+                {!skipBgRemoval && (
+                  <>
+                    <div className="flex items-center gap-3">
+                      <label className="text-xs font-mono text-text-secondary w-20 flex-shrink-0">
+                        BG Removal
+                      </label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={tolerance}
+                        onChange={(e) => handleToleranceChange(Number(e.target.value))}
+                        className="flex-1 accent-[var(--accent-amber)]"
+                      />
+                      <span className="text-xs font-mono text-text-primary w-8 text-right">
+                        {tolerance}
+                      </span>
+                    </div>
+                    <p className="text-xs font-mono text-text-secondary">
+                      Increase if background pixels remain. Decrease if character pixels are being removed.
+                      {editedBaseDataUrl && (
+                        <span className="text-amber-400 ml-1">(changing will reset manual edits)</span>
+                      )}
+                    </p>
+                  </>
+                )}
               </div>
             )}
-          </div>
+
+            {/* Detection details */}
+            <div className="rounded border border-border-default bg-bg-elevated p-3 space-y-1">
+              <DetailRow
+                label="Detected sprites"
+                value={spriteCount === 0 ? 'None (used full image)' : `${spriteCount}`}
+              />
+              {cropBBox && (
+                <DetailRow
+                  label="Cropped to"
+                  value={`${cropBBox.width}x${cropBBox.height} at (${cropBBox.x}, ${cropBBox.y})`}
+                />
+              )}
+              <DetailRow
+                label="Background"
+                value={
+                  sourceHasAlpha
+                    ? 'Already transparent'
+                    : skipBgRemoval
+                      ? 'Kept (no removal)'
+                      : `Removed (tolerance ${tolerance})`
+                }
+              />
+              {editedBaseDataUrl && (
+                <DetailRow label="Manual edits" value="Applied" />
+              )}
+              <DetailRow
+                label="Character size"
+                value={
+                  paddingEnabled
+                    ? `${characterSizePct}% (${Math.round(targetSize * (characterSizePct / 100))}x${Math.round(targetSize * (characterSizePct / 100))} of ${targetSize}x${targetSize})`
+                    : `100% (fills ${targetSize}x${targetSize})`
+                }
+              />
+            </div>
+
+            {/* Animation Padding control */}
+            <div className="rounded border border-border-default bg-bg-elevated p-3 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <label className="flex items-center gap-2 cursor-pointer"
+                  title="Shrinks character to leave room for weapon swings and motion effects">
+                  <input
+                    type="checkbox"
+                    checked={paddingEnabled}
+                    onChange={(e) => onPaddingEnabledChange(e.target.checked)}
+                    className="accent-[var(--accent-amber)] cursor-pointer"
+                  />
+                  <span className="text-xs font-mono font-semibold text-text-primary">
+                    Animation Padding
+                  </span>
+                  <Info size={11} className="text-text-secondary" />
+                </label>
+                {paddingEnabled && (
+                  <span className="text-xs font-mono text-accent-amber">{characterSizePct}%</span>
+                )}
+              </div>
+              <p className="text-xs font-mono text-text-secondary leading-relaxed">
+                Shrinks character to leave room for weapon swings and motion effects.
+                Recommended for attack, jump, and destroy animations.
+              </p>
+              {paddingEnabled && (
+                <div className="space-y-1">
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-mono text-text-secondary w-16">Character Size</span>
+                    <input
+                      type="range" min={50} max={95} step={5}
+                      value={characterSizePct}
+                      onChange={(e) => onCharacterSizePctChange(Number(e.target.value))}
+                      className="flex-1 accent-[var(--accent-amber)]"
+                    />
+                    <span className="text-xs font-mono text-text-primary w-10 text-right">
+                      {characterSizePct}%
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+            </div>
+          )}
         </>
       )}
 
-      {/* On a re-prep of a character with pixel edits: those edits were made
-          at the old size and are not in this prep. Said before the buttons,
-          since Use This is the click that replaces that character. */}
-      {replacing?.edited && (
-        <p className="text-[10px] font-mono text-amber-400">
-          Your pixel edits are on the {replacing.width}x{replacing.height} version and do not carry over. Use This replaces it.
-        </p>
-      )}
-
-      {/* Actions. On a re-prep the cancel keeps the accepted character. */}
-      <div className="flex items-center justify-between gap-2 pt-2 border-t border-border-subtle">
-        <Button variant="ghost" size="sm" onClick={onCancel}>
+      {/* Last: the way out. On a re-prep the cancel keeps the accepted character. */}
+      <div className="flex items-center">
+        <Button variant="ghost" size="sm" onClick={onCancel} className="pointer-coarse:min-h-11">
           {replacing ? `Keep ${replacing.width}x${replacing.height}` : 'Upload Different'}
         </Button>
-        <div className="flex items-center gap-2">
-          {stage === 'ready' && preparedDataUrl && (
-            <Button variant="secondary" size="sm" onClick={() => setEditorOpen(true)} disabled={!fitCurrent}>
-              <Pencil size={14} />
-              Edit
-            </Button>
-          )}
-          <Button variant="primary" size="sm" onClick={handleAccept} disabled={stage !== 'ready' || !fitCurrent}>
-            <Check size={14} />
-            Use This
-          </Button>
-        </div>
       </div>
 
       {/* Pixel Editor modal */}
@@ -632,6 +672,33 @@ export default function CharacterAutoPrep({
           refusalPlace="plain"
         />
       )}
+    </section>
+  );
+}
+
+function PrepPicture({ label, src, alt, width, height, box, accent = false }: { label: string; src: string; alt: string; width: number; height: number; box: number; accent?: boolean }) {
+  const [shownWidth, shownHeight] = prepPictureDims(width, height, box);
+  return (
+    <div className="shrink-0" style={{ width: box }}>
+      <p className={`text-xs font-mono mb-1.5 break-words ${accent ? 'text-accent-amber' : 'text-text-secondary'}`}>{label}</p>
+      <div
+        className="flex items-center justify-center rounded ring-1 ring-border-subtle"
+        style={{
+          backgroundImage:
+            'linear-gradient(45deg, #2a2725 25%, transparent 25%), linear-gradient(-45deg, #2a2725 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2725 75%), linear-gradient(-45deg, transparent 75%, #2a2725 75%)',
+          backgroundSize: '6px 6px',
+          backgroundPosition: '0 0, 0 3px, 3px -3px, -3px 0',
+          width: box,
+          height: box,
+        }}
+      >
+        <img
+          src={src}
+          alt={alt}
+          className="block pixel-art-render"
+          style={{ width: shownWidth, height: shownHeight }}
+        />
+      </div>
     </div>
   );
 }
@@ -639,10 +706,10 @@ export default function CharacterAutoPrep({
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-start justify-between gap-3">
-      <span className="text-[10px] font-mono text-text-secondary uppercase tracking-wider flex-shrink-0">
+      <span className="text-xs font-mono text-text-secondary uppercase tracking-wider flex-shrink-0">
         {label}
       </span>
-      <span className="text-[11px] font-mono text-text-primary text-right">{value}</span>
+      <span className="text-xs font-mono text-text-primary text-right">{value}</span>
     </div>
   );
 }

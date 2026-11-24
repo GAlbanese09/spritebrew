@@ -239,7 +239,7 @@ export function motionPlaceholder(action: string): string {
 
 /** The motion box's label. */
 export function motionLabel(required: boolean): string {
-  return required ? 'Motion description (required)' : 'Motion description (optional, less is more)';
+  return required ? 'How it moves (required for Custom Action)' : 'How it moves (optional)';
 }
 
 /** The one help line under the box. */
@@ -250,19 +250,65 @@ export const MOTION_HELP = 'Say how it moves, not which way. The way it faces co
 export const SIDE_VIEW_STYLE_ID = 'pro-platformer';
 export const FOUR_ANGLE_STYLE_ID = 'anim-4angle-walking';
 
-/** The line for a direction word. Create has no "Side, facing right"
- *  control until the builder ships, so the line says what to type there
- *  (DESIGN, room 2026-11-14-028). The cost reads number first, like the
- *  action cards on the form, and a no-break space keeps the number and its
- *  coin on one line, and another keeps the cost with the style's name
- *  (DESIGN, room 2026-11-14-169). */
-export function directionLine(styleLabel: string, cost: number): string {
-  return `The animation keeps the way your character faces, so direction words in the motion box are ignored. To walk sideways, make a side view first: on Create, pick ${styleLabel}\u00A0(${cost}\u00A0\u{1FA99}) and start your description with "facing right, side view, full body".`;
+/** The lines' shared start (generate-pass.md 4.2). */
+const IGNORED = 'The animation keeps the way your character faces, so direction words in the motion box are ignored.';
+
+/** The line for a direction word, with "Make a side view" (4.2). */
+export const SIDE_LINE = `${IGNORED} To walk sideways, start from a side view.`;
+
+/** The line for left words before G3 ships: a new side view faces right,
+ *  so no button (4.2, "Left words"). */
+export const LEFT_LINE = `${IGNORED} Walks face the way your picture does.`;
+
+/** The line for a request for more than one direction, with "Open 4-Angle
+ *  Walking" (4.2). The 4-direction style draws a new character from text;
+ *  it cannot use the person's picture, and the line says so. The cost
+ *  follows in brackets, shown with its coin and read with its unit. */
+export function directionsLine(styleLabel: string): string {
+  return `One animation makes one direction. For each other direction, make a picture of your character facing that way and animate it. For a new character walking 4 ways, ${styleLabel} draws all four from a description`;
 }
 
-/** The line for a request for more than one direction. The 4-direction
- *  style draws a new character from text; it cannot use the person's
- *  picture, and the line says so. */
-export function directionsLine(styleLabel: string, cost: number): string {
-  return `One animation makes one direction. For each other direction, make a picture of your character facing that way and animate it. For a new character walking 4 ways, ${styleLabel} on Create\u00A0(${cost}\u00A0\u{1FA99}) draws all four from a description.`;
+/** Left words: "left", "leftward", "to the left" (4.2). */
+const LEFT_PATTERN = /\bleft(?:ward|wards)?\b/i;
+const RIGHT_PATTERN = /\bright(?:ward|wards)?\b/i;
+const FRONT_PATTERN = /\b(?:toward(?:s)? the (?:camera|viewer)|facing (?:the )?(?:camera|viewer|front)|front view|from the front)\b/i;
+
+/** The way the motion text asks the character to face or go, as far as a
+ *  facing can match it: right, left or front, or null for anything else
+ *  (north, away, up a slope). A side of the body ("left arm") is not a
+ *  facing, as in motionCatch. */
+export function askedFacing(text: string): 'right' | 'left' | 'front' | null {
+  const t = text.toLowerCase().replace(BODY_SIDE, (side: string, before: string) => (afterTravel(before) ? side : `${before} `));
+  const left = LEFT_PATTERN.test(t);
+  const right = RIGHT_PATTERN.test(t);
+  if (left && !right) return 'left';
+  if (right && !left) return 'right';
+  if (!left && !right && FRONT_PATTERN.test(t)) return 'front';
+  return null;
+}
+
+/** The line under the motion box and its button (4.2), or null.
+ *  - "directions": the many-directions line and "Open 4-Angle Walking".
+ *  - "direction": none when a handed-over character's facing is known and
+ *    the text asks for that same facing; the left line (no button) for left
+ *    words; otherwise the side line and "Make a side view". */
+export interface MotionLine {
+  kind: 'side' | 'left' | 'directions';
+  text: string;
+  button: 'side-view' | 'four-angle' | null;
+}
+export function motionLine(
+  caught: MotionCatch,
+  text: string,
+  facing: 'right' | 'left' | 'front' | null,
+  fourAngleLabel: string | null
+): MotionLine | null {
+  if (caught === 'directions') {
+    return fourAngleLabel === null ? null : { kind: 'directions', text: directionsLine(fourAngleLabel), button: 'four-angle' };
+  }
+  if (caught !== 'direction') return null;
+  const asked = askedFacing(text);
+  if (facing !== null && asked === facing) return null;
+  if (asked === 'left') return { kind: 'left', text: LEFT_LINE, button: null };
+  return { kind: 'side', text: SIDE_LINE, button: 'side-view' };
 }

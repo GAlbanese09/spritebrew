@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect, useId, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect, useId, useMemo, type ReactNode } from 'react';
 import {
   UploadCloud,
   X,
@@ -10,12 +10,15 @@ import {
   Play,
   Lock,
   Save,
-  Info,
+  ChevronDown,
+  Gamepad2,
+  Film,
 } from 'lucide-react';
 import { useAuth } from '@clerk/react';
 import { useSpriteStore, type RescueInfo } from '@/stores/spriteStore';
 import Button from '@/components/ui/Button';
 import CharacterAutoPrep from './CharacterAutoPrep';
+import StepBadge, { StepWord } from './StepBadge';
 import { despillIfTransparent, decodedSize, imageCharacterColours } from '@/lib/spriteUtils';
 import {
   getTokenCost,
@@ -27,8 +30,7 @@ import {
   motionCatch,
   motionLabel,
   motionPlaceholder,
-  directionLine,
-  directionsLine,
+  motionLine,
   MOTION_HELP,
   MOTION_CATCH_DELAY_MS,
   MOTION_SPEAK_AGAIN_MS,
@@ -52,6 +54,7 @@ import {
 } from '@/lib/animateCharacter';
 import { fetchGeneration, consumeSSEStream, type Payload } from '@/lib/sseClient';
 import { GENERATION_PAUSED, GENERATION_PAUSED_MESSAGE, isUpstreamFailure, providerFailureMessage } from '@/lib/generationPause';
+import { badgeStates, DIMMED_GENERATE, GUIDE_HINT, PAUSED_HINT, SIDE_VIEW_REQUEST_TAKEN, type BadgeState } from '@/lib/generateTabs';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
 import { ANIMATE_FILL, finishJob, type JobResultIO } from '@/lib/jobResult';
 import { ANIMATE_INPUT_B64_CLIENT_MAX } from '@/lib/constants';
@@ -113,6 +116,37 @@ const decodeImage: DecodeImage = (dataUrl, onLoad, onError) => {
 /** The browser steps for finishing a job's result (see jobResult.ts). */
 const JOB_RESULT_IO: JobResultIO = { despill: despillIfTransparent, decodedSize };
 
+// Generate page pass, G4 (design/generate-pass/generate-pass.md 4.1, 5.3).
+/** More settings' open state, per browser. */
+const MORE_OPEN_KEY = 'spritebrew_animate_more_open_v1';
+/** The failure text's advice names More settings; when it shows, the section
+ *  opens (4.1). generationPause.ts writes these words. */
+const MORE_SETTINGS_ADVICE = 'under More settings';
+/** Said by touch on arrival from "Animate this" (5.3, item 4). */
+const ARRIVAL_SPOKEN = 'Your sprite is in step 1. Check it, then press Use This.';
+
+const tokensWord = (n: number) => (n === 1 ? 'token' : 'tokens');
+
+/** A form step's label with G1's number badge (StepBadge, generate-pass.md
+ *  section 1). The badge is hidden from screen readers; the label carries
+ *  "Step n:". A note in brackets keeps its own case. */
+function StepLabel({ n, state, htmlFor, className = 'mb-2', children }: { n: number; state: BadgeState; htmlFor?: string; className?: string; children: string }) {
+  const at = children.indexOf(' (');
+  const main = at < 0 ? children : children.slice(0, at);
+  const note = at < 0 ? '' : children.slice(at);
+  const Tag = htmlFor ? 'label' : 'div';
+  return (
+    <Tag htmlFor={htmlFor} className={`flex items-center gap-2 text-xs font-mono text-text-secondary ${className}`}>
+      <StepBadge n={n} state={state} />
+      <span>
+        <StepWord n={n} />
+        <span className="uppercase tracking-wider">{main}</span>
+        {note}
+      </span>
+    </Tag>
+  );
+}
+
 /**
  * Animate-specific context for the onGenerated handoff. Passed as an
  * optional 4th arg so the shared callback in generate/page.tsx can build
@@ -140,9 +174,11 @@ interface AnimateFormProps {
     animateContext?: AnimateGeneratedContext,
     jobId?: string
   ) => void;
+  /** G1's first-visit guide is open: every badge plain, the bar says so. */
+  guideShowing?: boolean;
 }
 
-export default function AnimateForm({ onGenerated }: AnimateFormProps) {
+export default function AnimateForm({ onGenerated, guideShowing = false }: AnimateFormProps) {
   const { userId, getToken } = useAuth();
   const setGenerating = useSpriteStore((s) => s.setGenerating);
   const setGeneratingAction = useSpriteStore((s) => s.setGeneratingAction);
@@ -263,7 +299,6 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const characterDataUrl = character?.dataUrl ?? null;
   const charWidth = character?.width ?? 0;
   const charHeight = character?.height ?? 0;
-  const pendingDataUrl = pendingPrep?.dataUrl ?? null;
   // bgColor + transparentBg state, refs, effects, and UI removed July 15.
   // Fill is now the DEFAULT_BG_COLOR module constant; remove_bg is
   // unconditional on every animate request. SavedAnimateConfig still
@@ -489,7 +524,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
 
     // Manual upload: Auto-Prep opens with its defaults (no lingering handoff
     // preference). The new image replaces any accepted character once it has
-    // decoded, unless a newer upload, handoff or Remove came first.
+    // decoded, unless a newer upload, handoff or Remove came first. It is not
+    // a handed-over sprite, so its facing and subject are unknown (G0).
+    useSpriteStore.getState().setHandoff(null, null);
     beginUpload(
       { clock: intentClockRef.current, update: setCharState, decode: decodeImage },
       (onRead, onReadError) => {
@@ -517,6 +554,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   // any upload or handoff decode still in flight stale.
   const handleRemoveChar = useCallback(() => {
     removeAll({ clock: intentClockRef.current, update: setCharState });
+    useSpriteStore.getState().setHandoff(null, null);
   }, []);
 
   // Unmount: a decode that finishes afterwards is stale too.
@@ -541,6 +579,136 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const handleAutoPrepCancel = useCallback(() => {
     setCharState(cancelPrep);
   }, []);
+
+  // ---- Generate page pass, G4 (design/generate-pass/generate-pass.md) ----
+
+  // The accepted character is kept for the visit, keyed by account (4.5,
+  // G0's store field): restored once on mount when nothing else is coming
+  // (no handoff waiting, nothing chosen yet), then every change of the
+  // accepted character is written back: Use This keeps it, Remove and a new
+  // upload or handoff (which clear it first) drop it. When another account
+  // becomes the signed-in one under a mounted form, the form's character is
+  // removed, as by Remove, and nothing is written for the new account in
+  // that commit (AUDIT g4-animate-r1 M4): it is never kept or sent as theirs.
+  const readKeptCharacter = useSpriteStore((s) => s.readKeptCharacter);
+  const keepCharacter = useSpriteStore((s) => s.keepCharacter);
+  const keptRestoredRef = useRef(false);
+  useEffect(() => {
+    if (keptRestoredRef.current || !userId) return;
+    keptRestoredRef.current = true;
+    if (pendingAnimatorHandoff || charState.character || charState.pending) return;
+    const kept = readKeptCharacter(userId);
+    if (kept) setCharState((s) => (s.character || s.pending ? s : { ...s, character: kept }));
+  }, [userId, pendingAnimatorHandoff, charState.character, charState.pending, readKeptCharacter]);
+  const formAccountRef = useRef(userId);
+  const accountChangedRef = useRef(false);
+  useEffect(() => {
+    const before = formAccountRef.current;
+    formAccountRef.current = userId;
+    if (!before || before === userId) return;
+    accountChangedRef.current = true;
+    handleRemoveChar();
+  }, [userId, handleRemoveChar]);
+  useEffect(() => {
+    if (!keptRestoredRef.current) return;
+    if (accountChangedRef.current) {
+      accountChangedRef.current = false;
+      return;
+    }
+    keepCharacter(userId, character);
+  }, [userId, character, keepCharacter]);
+
+  // Auto-Prep open in step 1, waiting for Use This (5.3): the result card
+  // reads it. Never left set by a form that has gone.
+  const setAnimatePrepPending = useSpriteStore((s) => s.setAnimatePrepPending);
+  useEffect(() => {
+    setAnimatePrepPending(pendingPrep !== null);
+  }, [pendingPrep, setAnimatePrepPending]);
+  useEffect(() => () => setAnimatePrepPending(false), [setAnimatePrepPending]);
+
+  // More settings (4.1): closed by default, its state kept per browser.
+  // "Change size" and the failure text's advice open it without writing.
+  const moreId = useId();
+  const resolutionGroupId = `${moreId}-resolution`;
+  const [moreOpen, setMoreOpen] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(MORE_OPEN_KEY) === '1') setMoreOpen(true);
+    } catch {
+      // Storage unreadable: closed, as by default.
+    }
+  }, []);
+  const setMore = useCallback((open: boolean) => {
+    setMoreOpen(open);
+    try {
+      if (open) localStorage.setItem(MORE_OPEN_KEY, '1');
+      else localStorage.removeItem(MORE_OPEN_KEY);
+    } catch {
+      // Storage unwritable: the choice holds for this visit only.
+    }
+  }, []);
+  // "Change size" moves the focus to the chosen size on every press: at
+  // once when More settings is open, after it opens when it is closed
+  // (AUDIT g4-animate-r1 M1). The flag never outlives that one opening.
+  const focusResolutionRef = useRef(false);
+  const focusResolution = useCallback(() => {
+    const group = document.getElementById(resolutionGroupId);
+    // The chosen size first; a locked size has no button, so the group itself.
+    const target = group?.querySelector<HTMLElement>('[aria-pressed="true"]') ?? group;
+    target?.focus();
+  }, [resolutionGroupId]);
+  const handleChangeSize = useCallback(() => {
+    if (moreOpen) {
+      focusResolutionRef.current = false;
+      focusResolution();
+      return;
+    }
+    focusResolutionRef.current = true;
+    setMoreOpen(true);
+  }, [moreOpen, focusResolution]);
+  useEffect(() => {
+    if (!moreOpen) {
+      focusResolutionRef.current = false;
+      return;
+    }
+    if (!focusResolutionRef.current) return;
+    focusResolutionRef.current = false;
+    focusResolution();
+  }, [moreOpen, focusResolution]);
+  useEffect(() => {
+    if (generationError && generationError.includes(MORE_SETTINGS_ADVICE)) setMoreOpen(true);
+  }, [generationError]);
+
+  // Arrival from "Animate this" (5.3, items 3 and 4): when a handoff opens
+  // Auto-Prep, <main> scrolls so step 1's label sits 12 px under the header,
+  // and focus moves to the panel's heading by mouse or keyboard. By touch
+  // focus stays, and a polite live region says where the sprite went.
+  const prepHeadingId = useId();
+  const step1Ref = useRef<HTMLDivElement>(null);
+  const arrivalRef = useRef(false);
+  const [arrivalSpoken, setArrivalSpoken] = useState('');
+  useEffect(() => {
+    if (pendingAnimatorHandoff) arrivalRef.current = true;
+  }, [pendingAnimatorHandoff]);
+  useEffect(() => {
+    if (!pendingPrep || !arrivalRef.current) return;
+    arrivalRef.current = false;
+    const label = step1Ref.current;
+    const main = label?.closest('main');
+    if (label && main) {
+      const header = document.querySelector('header');
+      const headerBottom = header ? header.getBoundingClientRect().bottom : main.getBoundingClientRect().top;
+      main.scrollTop += label.getBoundingClientRect().top - headerBottom - 12;
+    }
+    const touch = typeof window !== 'undefined' && window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+    if (touch) setArrivalSpoken(ARRIVAL_SPOKEN);
+    else document.getElementById(prepHeadingId)?.focus({ preventScroll: true });
+  }, [pendingPrep, prepHeadingId]);
+  // Once Auto-Prep closes (Use This, Upload Different, Remove), the words
+  // leave the live region, so the next arrival is said again (L5).
+  useEffect(() => {
+    if (!pendingPrep) setArrivalSpoken('');
+  }, [pendingPrep]);
 
   // Template handlers (v0.5.12 Piece B).
   //
@@ -1054,16 +1222,37 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
   const motionCaught = motionCatch(motionText, selectedAction);
   const sideViewStyle = getStyleById(SIDE_VIEW_STYLE_ID);
   const fourAngleStyle = getStyleById(FOUR_ANGLE_STYLE_ID);
+  // The line and its button (generate-pass.md 4.2). A handed-over sprite's
+  // facing, when known, quiets the line for that same facing.
+  const handoffFacing = useSpriteStore((s) => s.handoffFacing);
+  const handoffSubject = useSpriteStore((s) => s.handoffSubject);
+  const motionLineNow = sideViewStyle
+    ? motionLine(motionCaught, motionText, handoffFacing, fourAngleStyle?.label ?? null)
+    : null;
+  // The line as words, for the read-out: the cost with its unit.
   const motionCaughtLine =
-    motionCaught === 'directions' && fourAngleStyle
-      ? directionsLine(fourAngleStyle.label, fourAngleStyle.tokenCost)
-      : motionCaught === 'direction' && sideViewStyle
-        ? directionLine(sideViewStyle.label, sideViewStyle.tokenCost)
-        : null;
+    motionLineNow === null
+      ? null
+      : motionLineNow.kind === 'directions' && fourAngleStyle
+        ? `${motionLineNow.text} (${fourAngleStyle.tokenCost} tokens).`
+        : motionLineNow.text;
+  // "Make a side view" and "Open 4-Angle Walking" leave this tab; the page
+  // takes the request (G0, G1). The accepted character stays kept (4.5).
+  // Each button asks the page for another tab (G0's store requests). Create
+  // Sprite takes "Make a side view" only once G2's "What's it for?" card is
+  // in, so until then that button is not shown (SIDE_VIEW_REQUEST_TAKEN,
+  // generateTabs.ts; AUDIT g4-animate-r1 M3). The page opens Animate from
+  // Text for "Open 4-Angle Walking", and its form takes the request.
+  const handleMakeSideView = useCallback(() => {
+    useSpriteStore.getState().requestCreate({ card: 'side', subject: handoffSubject });
+  }, [handoffSubject]);
+  const handleOpenFourAngle = useCallback(() => {
+    useSpriteStore.getState().requestTextAnimation({ styleId: FOUR_ANGLE_STYLE_ID, subject: handoffSubject });
+  }, [handoffSubject]);
   // Once a line has shown, the room it took stays (a min-height that only
   // grows). A page that gets shorter while it is scrolled to its end pulls
   // everything down, and the person's next click lands on another control.
-  const motionLineRef = useRef<HTMLParagraphElement>(null);
+  const motionLineRef = useRef<HTMLDivElement>(null);
   const [motionLineRoom, setMotionLineRoom] = useState(0);
   useEffect(() => {
     const line = motionLineRef.current;
@@ -1108,9 +1297,8 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     return () => clearTimeout(clear);
   }, [motionSpoken]);
   // sizeWarning: the character is present and not the selected size.
-  // generateBlockedReason: the first reason Generate is disabled, in
-  // canGenerate's order; null while generating or when Generate is enabled.
-  // A generation pause (src/lib/generationPause.ts) comes before all of them.
+  // The reason Generate is disabled is the bar's hint, below; a generation
+  // pause (src/lib/generationPause.ts) comes before all of them.
   const gate = generateGate({
     character,
     selectedResolution,
@@ -1121,17 +1309,73 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     isGenerating,
   });
   const { sizeWarning } = gate;
-  const canGenerate = !GENERATION_PAUSED && gate.canGenerate;
-  const generateBlockedReason = GENERATION_PAUSED && !isGenerating ? GENERATION_PAUSED_MESSAGE : gate.blockedReason;
+  // Generate is off while Auto-Prep is open, as the bar's hint says: the
+  // card's character is not the one being checked (AUDIT g4-animate-r1 L1).
+  const canGenerate = !GENERATION_PAUSED && gate.canGenerate && !pendingPrep;
+
+  // The steps and the bar (generate-pass.md section 1, Animate rows), with
+  // G1's rules (badgeStates): step 1 is done once a character is accepted
+  // and Auto-Prep is closed (a size mismatch is the bar's own row 6, not a
+  // step); step 2 has a default, so it is done; step 3 is required only for
+  // Custom Action, and otherwise counts as done (5.3 item 5). The next step
+  // is the first required one not done, the same step the hint names.
+  const step1Done = !!character && !pendingPrep;
+  const step3Needed = isCustomAction && !motionPrompt.trim();
+  const [badge1, badge2, badge3] = badgeStates(
+    [{ required: true, done: step1Done }, { required: true, done: true }, { required: isCustomAction, done: !step3Needed }],
+    guideShowing,
+  );
+  const stepState = (n: 1 | 2 | 3): BadgeState => (n === 1 ? badge1 : n === 2 ? badge2 : badge3);
+  const actionName = ACTIONS.find((a) => a.id === selectedAction)?.name ?? '';
+  const barSummary = `${actionName} · ${selectedResolution} px · ${frameCount} frames · ${
+    insufficientTokens ? `${tokenCost} tokens · you have ${tokenBalance.toLocaleString('en-US')}` : `${tokenCost} of ${tokenBalance.toLocaleString('en-US')} tokens`
+  }`;
+  // The bar's hint: the first row that applies (row 1 is the button's own).
+  // Paused, screen readers get the whole message, as on Create Sprite.
+  const barShort = !isGenerating && !GENERATION_PAUSED && !guideShowing && !pendingPrep && !!character && !step3Needed && !sizeWarning && insufficientTokens;
+  const barHint: ReactNode = isGenerating
+    ? null
+    : GENERATION_PAUSED
+      ? (
+        <>
+          <span aria-hidden="true">{PAUSED_HINT}</span>
+          <span className="sr-only">{GENERATION_PAUSED_MESSAGE}</span>
+        </>
+      )
+      : guideShowing
+        ? GUIDE_HINT
+        : pendingPrep
+          ? 'Step 1: check your character, then press Use This.'
+          : !character
+            ? 'Step 1: add your character.'
+            : step3Needed
+              ? 'Step 3: describe the action.'
+              : sizeWarning
+                ? `This character is ${charWidth}x${charHeight}. Choose ${charWidth} or prepare it again.`
+                : barShort
+                  ? (
+                    <>
+                      You need {tokensNeeded} more {tokensWord(tokensNeeded)} for this action.{' '}
+                      <a
+                        href="/buy-tokens"
+                        className="inline-flex items-center pointer-coarse:min-h-11 lg:pointer-coarse:-my-3 text-accent-amber underline hover:text-accent-amber-strong"
+                      >
+                        Get tokens
+                      </a>
+                    </>
+                  )
+                  : 'Step 4: Generate.';
 
   return (
     <>
     <div className="space-y-6">
-      {/* Character upload */}
-      <div>
-        <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2">
-          Your Character
-        </label>
+      {/* Step 1: the character */}
+      <div ref={step1Ref}>
+        <StepLabel n={1} state={stepState(1)}>Your character</StepLabel>
+        {/* Always in the page, so a screen reader hears the arrival once. */}
+        <p role="status" aria-live="polite" className="sr-only">
+          {arrivalSpoken}
+        </p>
 
         {characterDataUrl ? (
           <div className="rounded-lg border border-border-default bg-bg-surface p-4">
@@ -1192,7 +1436,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
               </Button>
             )}
           </div>
-        ) : pendingDataUrl ? null : (
+        ) : pendingPrep ? null : (
           <div
             onClick={() => fileInputRef.current?.click()}
             className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed
@@ -1224,6 +1468,35 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
           </div>
         )}
 
+        {/* Auto-Prep inside step 1 (generate-pass.md 5.3): in place of the drop
+            zone, or under the card on a re-prep from its "Prepare at N" (the
+            card stays until Use This replaces it). Resizes to
+            selectedResolution x selectedResolution. */}
+        <div className={character && pendingPrep ? 'mt-3' : undefined}>
+        {pendingPrep && (
+          <CharacterAutoPrep
+            // A new source always gets a fresh Auto-Prep, so a fit made for
+            // the previous source can never count as current (audit r2).
+            key={pendingPrep.dataUrl}
+            sourceDataUrl={pendingPrep.dataUrl}
+            sourceWidth={pendingPrep.width}
+            sourceHeight={pendingPrep.height}
+            targetSize={selectedResolution}
+            onAccept={handleAutoPrepAccept}
+            onCancel={handleAutoPrepCancel}
+            paddingEnabled={paddingEnabled}
+            characterSizePct={characterSizePct}
+            onPaddingEnabledChange={setPaddingEnabled}
+            onCharacterSizePctChange={setCharacterSizePct}
+            initialSkipBgRemoval={pendingPrep.skipBgRemoval}
+            initialTolerance={pendingPrep.tolerance}
+            replacing={character ? { width: charWidth, height: charHeight, edited: character.edited } : null}
+            onChangeSize={handleChangeSize}
+            headingId={prepHeadingId}
+          />
+        )}
+        </div>
+
         <input
           ref={fileInputRef}
           type="file"
@@ -1233,193 +1506,9 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         />
       </div>
 
-      {/* Resolution picker — placed before Auto-Prep so users choose size first.
-          Picker rendering depends on the selected style's resolutionMode:
-          - locked  → non-editable label
-          - variable / variable_special → preset buttons */}
-      <div>
-        <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2">
-          Resolution
-        </label>
-        {currentMode.kind === 'locked' ? (
-          <div className="inline-flex items-center gap-2 px-3 py-2 rounded bg-bg-elevated border border-border-default text-xs font-mono text-text-secondary">
-            <Lock size={12} className="text-text-secondary" />
-            {currentMode.size}&times;{currentMode.size}
-            <span className="text-[10px] text-text-secondary">(locked for this style by Retro Diffusion)</span>
-          </div>
-        ) : (
-          <div className="flex gap-1.5">
-            {(currentMode.kind === 'variable_special'
-              ? currentMode.presets
-              : (ADVANCED_ANIM_RESOLUTION_PRESETS as readonly number[])
-            ).map((res) => (
-              <button
-                key={res}
-                onClick={() => handleResolutionChange(res)}
-                className={`px-3 py-1.5 rounded text-xs font-mono cursor-pointer transition-colors
-                  ${selectedResolution === res
-                    ? 'bg-accent-amber text-bg-primary'
-                    : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
-                  }`}
-              >
-                {res}
-              </button>
-            ))}
-          </div>
-        )}
-        <p className="text-[9px] font-mono text-text-secondary mt-1">
-          {currentMode.kind === 'locked'
-            ? 'Retro Diffusion locks this style at this resolution. For higher resolutions, choose a Walking/Idle/Attack style instead.'
-            : 'Larger = more detail. Cost is flat per generation. No resolution surcharge.'}
-        </p>
-        {/* Fallback promise, static copy. Only the true part stays: a large
-            animation that fails is redone at 64px (see the RescueInfo notice
-            in GenerationResult). */}
-        {currentMode.kind !== 'locked' && (selectedResolution === 128 || selectedResolution === 256) && (
-          <p className="text-[9px] font-mono text-text-secondary mt-1">
-            If a large animation doesn&apos;t finish, we&apos;ll automatically make a 64px version so you still get one.
-          </p>
-        )}
-      </div>
-
-      {/* Auto-prep pipeline: resizes to selectedResolution x selectedResolution.
-          With a character present this is a re-prep from the card's "Prepare
-          at N": the card stays above until Use This replaces it. */}
-      {pendingPrep && (
-        <CharacterAutoPrep
-          // A new source always gets a fresh Auto-Prep, so a fit made for
-          // the previous source can never count as current (audit r2).
-          key={pendingPrep.dataUrl}
-          sourceDataUrl={pendingPrep.dataUrl}
-          sourceWidth={pendingPrep.width}
-          sourceHeight={pendingPrep.height}
-          targetSize={selectedResolution}
-          onAccept={handleAutoPrepAccept}
-          onCancel={handleAutoPrepCancel}
-          paddingEnabled={paddingEnabled}
-          characterSizePct={characterSizePct}
-          onPaddingEnabledChange={setPaddingEnabled}
-          onCharacterSizePctChange={setCharacterSizePct}
-          initialSkipBgRemoval={pendingPrep.skipBgRemoval}
-          initialTolerance={pendingPrep.tolerance}
-          replacing={character ? { width: charWidth, height: charHeight, edited: character.edited } : null}
-        />
-      )}
-
-      {/* Saved templates (v0.5.12) — character-agnostic, persisted to
-          spritebrew:animate:templates. Click a pill to load all 7 form
-          fields; X to delete. Save current as a new template via the
-          inline input below.
-          NB: two orphan JSX-only comment blocks lived here through
-          d1feb76 (a July-15 "transparency toggle removed" note + this
-          one). On the Turbopack production build they correlated with
-          symptom A of the July-16 regression report: every JSX sibling
-          after these two adjacent comment-only expressions failed to
-          render. Merged into a single comment as a defensive fix; there
-          is nothing runtime-load-bearing in either block. */}
-      <div>
-        <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2">
-          Saved Templates
-        </label>
-
-        {templates.length === 0 ? (
-          <p className="text-[10px] font-mono text-text-secondary mb-2">
-            No saved templates yet. Save the current config below to start a library.
-          </p>
-        ) : (
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {templates.map((tpl) => (
-              <div
-                key={tpl.id}
-                className="inline-flex items-center rounded border border-border-default bg-bg-surface hover:border-border-strong overflow-hidden transition-colors"
-              >
-                <button
-                  onClick={() => handleLoadTemplate(tpl)}
-                  className="px-2.5 py-1 text-[11px] font-mono text-text-primary hover:text-accent-amber cursor-pointer max-w-[180px] truncate"
-                  title={`Load "${tpl.name}"`}
-                >
-                  {tpl.name}
-                </button>
-                <button
-                  onClick={() => handleDeleteTemplate(tpl.id)}
-                  className="px-1.5 py-1 text-text-secondary hover:text-red-400 cursor-pointer border-l border-border-subtle"
-                  title={`Delete "${tpl.name}"`}
-                  aria-label={`Delete template ${tpl.name}`}
-                >
-                  <X size={11} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {showSaveInput ? (
-          <div className="flex items-center gap-1.5">
-            <input
-              type="text"
-              value={saveInputValue}
-              onChange={(e) => {
-                setSaveInputValue(e.target.value);
-                if (templateError) setTemplateError(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  handleSaveTemplate();
-                } else if (e.key === 'Escape') {
-                  e.preventDefault();
-                  handleCancelSaveInput();
-                }
-              }}
-              autoFocus
-              maxLength={MAX_TEMPLATE_NAME_LEN}
-              placeholder="Template name…"
-              className="flex-1 min-w-0 rounded bg-bg-elevated border border-border-default px-2.5 py-1
-                text-[11px] font-mono text-text-primary placeholder:text-text-secondary
-                focus:outline-none focus:border-accent-amber"
-            />
-            <button
-              onClick={handleSaveTemplate}
-              disabled={!saveInputValue.trim()}
-              className="px-2.5 py-1 rounded text-[11px] font-mono bg-accent-amber text-bg-primary
-                hover:bg-accent-amber/90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
-            >
-              Save
-            </button>
-            <button
-              onClick={handleCancelSaveInput}
-              className="p-1 text-text-secondary hover:text-text-primary cursor-pointer"
-              aria-label="Cancel"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={() => setShowSaveInput(true)}
-            disabled={templates.length >= MAX_TEMPLATES}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-mono
-              bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle
-              disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
-            title={templates.length >= MAX_TEMPLATES ? `Template limit reached (${MAX_TEMPLATES})` : 'Save current config as a named template'}
-          >
-            <Save size={11} />
-            Save current as template…
-          </button>
-        )}
-
-        {templateError && (
-          <p className="text-[10px] font-mono text-red-400 mt-1.5">
-            {templateError}
-          </p>
-        )}
-      </div>
-
       {/* Action selector */}
       <div>
-        <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-3">
-          Animation Action
-        </label>
+        <StepLabel n={2} state={stepState(2)} className="mb-3">Action</StepLabel>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {ACTIONS.map((action) => {
             const active = selectedAction === action.id;
@@ -1441,47 +1530,22 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
                     {action.name}
                   </h3>
                   {active && <Check size={12} className="text-accent-amber" />}
-                  <span className={`ml-auto text-[9px] font-mono ${active ? 'text-text-primary' : 'text-text-secondary'}`}>{actionCost} 🪙</span>
+                  <span className={`ml-auto text-xs font-mono ${active ? 'text-text-primary' : 'text-text-secondary'}`}>{actionCost} 🪙</span>
                 </div>
-                <p className={`text-[10px] font-mono ${active ? 'text-text-primary' : 'text-text-secondary'}`}>{action.desc}</p>
+                <p className={`text-xs font-mono ${active ? 'text-text-primary' : 'text-text-secondary'}`}>{action.desc}</p>
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Frame count */}
-      <div>
-        <label className="block text-[10px] font-mono text-text-secondary mb-2">
-          Frame count
-        </label>
-        <div className="flex gap-1.5">
-          {FRAME_COUNTS.map((fc) => (
-            <button
-              key={fc}
-              onClick={() => setFrameCount(fc)}
-              className={`px-3 py-1.5 rounded text-xs font-mono cursor-pointer transition-colors
-                ${frameCount === fc
-                  ? 'bg-accent-amber text-bg-primary'
-                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
-                }`}
-            >
-              {fc}
-            </button>
-          ))}
-        </div>
-        <p className="text-[9px] font-mono text-text-secondary mt-1">
-          More frames = smoother animation, longer generation time
-        </p>
-      </div>
-
       {/* Motion prompt. "relative" keeps the hidden read-out paragraph inside
           this block; without it that paragraph is laid out against the
           document and the whole window scrolls. */}
       <div className="relative">
-        <label htmlFor={motionBoxId} className="block text-xs font-mono text-text-secondary mb-1">
+        <StepLabel n={3} state={stepState(3)} htmlFor={motionBoxId} className="mb-1">
           {motionLabel(isCustomAction)}
-        </label>
+        </StepLabel>
         <textarea
           id={motionBoxId}
           value={motionPrompt}
@@ -1504,24 +1568,252 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
         <p id={motionHelpId} className="text-xs font-mono text-text-secondary mt-1">
           {MOTION_HELP}
         </p>
-        {/* The line. Empty when the text asks for nothing an animation cannot
-            do; its room stays once a line has shown (motionLineRoom). */}
-        <p
+        {/* The line and its button (4.2). Empty when the text asks for
+            nothing an animation cannot do; its room stays once a line has
+            shown (motionLineRoom). It holds a button, so it is not a status
+            box: its words are read once by the region below. */}
+        <div
           ref={motionLineRef}
           style={motionLineRoom > 0 ? { minHeight: motionLineRoom } : undefined}
-          className="text-xs font-mono text-accent-amber"
         >
-          {motionCaughtLine !== null && (
-            <span className="pt-1 flex items-start gap-1.5">
-              <Info size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
-              <span>{motionCaughtLine}</span>
-            </span>
+          {motionLineNow !== null && (
+            <div className="mt-2 rounded-lg border border-accent-amber/50 bg-accent-amber/10 p-3 space-y-3">
+              <p className="text-xs font-mono text-text-primary">
+                {motionLineNow.text}
+                {motionLineNow.kind === 'directions' && fourAngleStyle && (
+                  <>
+                    {' ('}
+                    {fourAngleStyle.tokenCost}
+                    <span aria-hidden="true">{'\u00A0'}🪙</span>
+                    <span className="sr-only"> tokens</span>
+                    {').'}
+                  </>
+                )}
+              </p>
+              {motionLineNow.button === 'side-view' && SIDE_VIEW_REQUEST_TAKEN && (
+                <Button type="button" variant="secondary" size="sm" onClick={handleMakeSideView} className="pointer-coarse:min-h-11">
+                  <Gamepad2 size={14} aria-hidden="true" />
+                  Make a side view
+                </Button>
+              )}
+              {motionLineNow.button === 'four-angle' && (
+                <Button type="button" variant="secondary" size="sm" onClick={handleOpenFourAngle} className="pointer-coarse:min-h-11">
+                  <Film size={14} aria-hidden="true" />
+                  Open 4-Angle Walking
+                </Button>
+              )}
+            </div>
           )}
-        </p>
+        </div>
         {/* Always in the page, so a screen reader hears a new line once. */}
         <p role="status" aria-live="polite" className="sr-only">
           {motionSpoken}
         </p>
+      </div>
+
+      {/* More settings: resolution, frame count and saved templates, closed
+          by default and kept per browser (generate-pass.md 4.1). "Change size"
+          in step 1 and the failure text's advice open it. */}
+      <div className="border-t border-border-subtle pt-2">
+        <button
+          type="button"
+          aria-expanded={moreOpen}
+          aria-controls={moreId}
+          onClick={() => setMore(!moreOpen)}
+          className="flex items-center gap-2 pointer-coarse:min-h-11 py-2 text-xs font-mono text-text-secondary hover:text-text-primary cursor-pointer"
+        >
+          <ChevronDown size={16} className={`transition-transform ${moreOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+          More settings: resolution, frame count, templates
+        </button>
+        {moreOpen && (
+          <div id={moreId} className="space-y-6 pt-3">
+          {/* Resolution picker, in More settings (G4). Its rendering depends on
+              the selected style's resolutionMode:
+              - locked  → non-editable label
+              - variable / variable_special → preset buttons */}
+          <div id={resolutionGroupId} tabIndex={-1} className="focus:outline-none">
+            <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2">
+              Resolution
+            </label>
+            {currentMode.kind === 'locked' ? (
+              <div className="inline-flex items-center gap-2 px-3 py-2 rounded bg-bg-elevated border border-border-default text-xs font-mono text-text-secondary">
+                <Lock size={12} className="text-text-secondary" />
+                {currentMode.size}&times;{currentMode.size}
+                <span className="text-xs text-text-secondary">(locked for this style by Retro Diffusion)</span>
+              </div>
+            ) : (
+              <div className="flex gap-1.5">
+                {(currentMode.kind === 'variable_special'
+                  ? currentMode.presets
+                  : (ADVANCED_ANIM_RESOLUTION_PRESETS as readonly number[])
+                ).map((res) => (
+                  <button
+                    key={res}
+                    type="button"
+                    aria-pressed={selectedResolution === res}
+                    onClick={() => handleResolutionChange(res)}
+                    className={`px-3 py-1.5 rounded text-xs font-mono cursor-pointer transition-colors
+                      ${selectedResolution === res
+                        ? 'bg-accent-amber text-bg-primary'
+                        : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
+                      }`}
+                  >
+                    {res}
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="text-xs font-mono text-text-secondary mt-1">
+              {currentMode.kind === 'locked'
+                ? 'Retro Diffusion locks this style at this resolution. For higher resolutions, choose a Walking/Idle/Attack style instead.'
+                : 'Larger = more detail. Cost is flat per generation. No resolution surcharge.'}
+            </p>
+            {/* Fallback promise, static copy. Only the true part stays: a large
+                animation that fails is redone at 64px (see the RescueInfo notice
+                in GenerationResult). */}
+            {currentMode.kind !== 'locked' && (selectedResolution === 128 || selectedResolution === 256) && (
+              <p className="text-xs font-mono text-text-secondary mt-1">
+                If a large animation doesn&apos;t finish, we&apos;ll automatically make a 64px version so you still get one.
+              </p>
+            )}
+          </div>
+
+          {/* Frame count */}
+          <div>
+            <label className="block text-xs font-mono text-text-secondary mb-2">
+              Frame count
+            </label>
+            <div className="flex gap-1.5">
+              {FRAME_COUNTS.map((fc) => (
+                <button
+                  key={fc}
+                  onClick={() => setFrameCount(fc)}
+                  className={`px-3 py-1.5 rounded text-xs font-mono cursor-pointer transition-colors
+                    ${frameCount === fc
+                      ? 'bg-accent-amber text-bg-primary'
+                      : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle'
+                    }`}
+                >
+                  {fc}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs font-mono text-text-secondary mt-1">
+              More frames = smoother animation, longer generation time
+            </p>
+          </div>
+
+          {/* Saved templates (v0.5.12): character-agnostic, persisted to
+              spritebrew:animate:templates. Click a pill to load all 7 form
+              fields; X to delete. Save current as a new template via the
+              inline input below.
+              NB: two orphan JSX-only comment blocks lived here through
+              d1feb76 (a July-15 "transparency toggle removed" note + this
+              one). On the Turbopack production build they correlated with
+              symptom A of the July-16 regression report: every JSX sibling
+              after these two adjacent comment-only expressions failed to
+              render. Merged into a single comment as a defensive fix; there
+              is nothing runtime-load-bearing in either block. */}
+          <div>
+            <label className="block text-xs font-mono text-text-secondary uppercase tracking-wider mb-2">
+              Saved Templates
+            </label>
+
+            {templates.length === 0 ? (
+              <p className="text-xs font-mono text-text-secondary mb-2">
+                No saved templates yet. Save the current config below to start a library.
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {templates.map((tpl) => (
+                  <div
+                    key={tpl.id}
+                    className="inline-flex items-center rounded border border-border-default bg-bg-surface hover:border-border-strong overflow-hidden transition-colors"
+                  >
+                    <button
+                      onClick={() => handleLoadTemplate(tpl)}
+                      className="px-2.5 py-1 text-xs font-mono text-text-primary hover:text-accent-amber cursor-pointer max-w-[180px] truncate"
+                      title={`Load "${tpl.name}"`}
+                    >
+                      {tpl.name}
+                    </button>
+                    <button
+                      onClick={() => handleDeleteTemplate(tpl.id)}
+                      className="px-1.5 py-1 text-text-secondary hover:text-red-400 cursor-pointer border-l border-border-subtle"
+                      title={`Delete "${tpl.name}"`}
+                      aria-label={`Delete template ${tpl.name}`}
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {showSaveInput ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  value={saveInputValue}
+                  onChange={(e) => {
+                    setSaveInputValue(e.target.value);
+                    if (templateError) setTemplateError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSaveTemplate();
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      handleCancelSaveInput();
+                    }
+                  }}
+                  autoFocus
+                  maxLength={MAX_TEMPLATE_NAME_LEN}
+                  placeholder="Template name…"
+                  className="flex-1 min-w-0 rounded bg-bg-elevated border border-border-default px-2.5 py-1
+                    text-xs font-mono text-text-primary placeholder:text-text-secondary
+                    focus:outline-none focus:border-accent-amber"
+                />
+                <button
+                  onClick={handleSaveTemplate}
+                  disabled={!saveInputValue.trim()}
+                  className="px-2.5 py-1 rounded text-xs font-mono bg-accent-amber text-bg-primary
+                    hover:bg-accent-amber/90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={handleCancelSaveInput}
+                  className="p-1 text-text-secondary hover:text-text-primary cursor-pointer"
+                  aria-label="Cancel"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowSaveInput(true)}
+                disabled={templates.length >= MAX_TEMPLATES}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-mono
+                  bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle
+                  disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                title={templates.length >= MAX_TEMPLATES ? `Template limit reached (${MAX_TEMPLATES})` : 'Save current config as a named template'}
+              >
+                <Save size={11} />
+                Save current as template…
+              </button>
+            )}
+
+            {templateError && (
+              <p className="text-xs font-mono text-red-400 mt-1.5">
+                {templateError}
+              </p>
+            )}
+          </div>
+
+          </div>
+        )}
       </div>
 
       {/* Error */}
@@ -1548,7 +1840,7 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
           {/top up/i.test(generationError) && (
             <a
               href="/buy-tokens"
-              className="inline-block mt-2 ml-6 px-3 py-1.5 rounded text-[10px] font-mono
+              className="inline-block mt-2 ml-6 px-3 py-1.5 rounded text-xs font-mono
                 bg-accent-amber text-bg-primary hover:bg-accent-amber/90 transition-colors"
             >
               Buy Tokens
@@ -1561,8 +1853,11 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
       <div className="h-20" aria-hidden="true" />
     </div>
 
-    {/* Sticky generate bar — viewport-fixed at bottom, sidebar-offset on desktop */}
+    {/* Sticky generate bar: viewport-fixed at bottom, sidebar-offset on desktop.
+        Marked for G1's AppShell, which keeps room and scroll padding as tall
+        as the bar (AUDIT g4-animate-r1 M2; DESIGN 2026-11-18-072 items 1 and 4). */}
     <div
+      data-generate-bar=""
       className="fixed bottom-0 left-0 right-0 lg:left-[var(--sidebar-width)] z-40 px-4 py-3 backdrop-blur-md border-t isolate transform-gpu overscroll-none"
       style={{
         backgroundColor: 'rgba(20, 18, 16, 0.92)',
@@ -1572,44 +1867,39 @@ export default function AnimateForm({ onGenerated }: AnimateFormProps) {
     >
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
-          <p className="text-[10px] font-mono text-text-secondary">
-            {charWidth > 0 ? `${selectedResolution}x${selectedResolution} · ${frameCount} frames · ${tokenCost} tokens` : `Upload a character to begin (${selectedResolution}x${selectedResolution})`}
-            {userId && (
-              <span className={`ml-2 ${insufficientTokens ? 'text-red-400' : 'text-accent-amber'}`}>
-                &middot; Balance: {tokenBalance} 🪙
-              </span>
-            )}
+          <p className="text-xs font-mono text-text-secondary">
+            {barSummary}
           </p>
-          <Button
-            size="lg"
-            onClick={handleGenerate}
-            disabled={!canGenerate || isGenerating}
-            className={`w-full sm:w-auto whitespace-nowrap ${!isGenerating && canGenerate ? 'animate-pulse' : ''}`}
-            title={generateBlockedReason ?? (insufficientTokens ? `Need ${tokensNeeded} more tokens` : undefined)}
-            aria-describedby={generateBlockedReason ? 'animate-generate-blocked-reason' : undefined}
-          >
-            {isGenerating ? (
-              <>
-                <Loader2 size={16} className="animate-spin" />
-                Brewing...
-              </>
-            ) : insufficientTokens ? (
-              <>
-                <Play size={16} />
-                Need {tokensNeeded} more 🪙
-              </>
-            ) : (
-              <>
-                <Play size={16} />
-                Generate Animation ({tokenCost} 🪙)
-              </>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+            {barHint && (
+              <p id="animate-generate-hint" className="text-xs font-mono text-text-primary">
+                {barHint}
+              </p>
             )}
-          </Button>
-          {generateBlockedReason && (
-            <span id="animate-generate-blocked-reason" className="sr-only">
-              {generateBlockedReason}
-            </span>
-          )}
+            <Button
+              size="lg"
+              onClick={handleGenerate}
+              disabled={!canGenerate || isGenerating}
+              className={`w-full sm:w-auto whitespace-nowrap pointer-coarse:min-h-11 ${!isGenerating && canGenerate ? 'animate-pulse motion-reduce:animate-none' : ''}`}
+              // Dimmed: the fill dims, the label stays at full strength (G1's DIMMED_GENERATE; AUDIT g4-animate-r1 M5).
+              style={!isGenerating && canGenerate ? undefined : DIMMED_GENERATE}
+              aria-describedby={barHint ? 'animate-generate-hint' : undefined}
+            >
+              {isGenerating ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" />
+                  Brewing...
+                </>
+              ) : (
+                <>
+                  <Play size={16} />
+                  Generate animation · {tokenCost}
+                  <span aria-hidden="true">{' '}🪙</span>
+                  <span className="sr-only"> tokens</span>
+                </>
+              )}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

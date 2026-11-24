@@ -51,6 +51,14 @@ binding = "LEDGER_DB"
 database_name = "spritebrew-ledger"
 database_id = "4d433421-a669-4fc0-909c-993f6d6cd15b"
 
+# G2 (HQ 2026-11-18-049, -056): the private generation service answers the
+# Create words through this binding. Missing or failing, the "Adds" line is
+# hidden and a Create with a card is refused before any debit.
+[[env.production.services]]
+binding = "CREATE_WORDS"
+service = "spritebrew-rd-consumer"
+entrypoint = "CreateWords"
+
 # === Preview (dev branch) ===
 [env.preview]
 compatibility_flags = [ "nodejs_compat" ]
@@ -89,3 +97,9 @@ database_id = "c7ca1a93-a1f9-477b-b056-1b4f7b434a95"
 binding = "LEDGER_DB"
 database_name = "spritebrew-ledger-dev"
 database_id = "19f96577-407d-4404-8afa-bfa1b931d276"
+
+# G2: the dev generation service answers the Create words on preview builds.
+[[env.preview.services]]
+binding = "CREATE_WORDS"
+service = "spritebrew-rd-consumer-dev"
+entrypoint = "CreateWords"

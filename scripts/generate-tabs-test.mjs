@@ -201,9 +201,10 @@ check('3f: each tab its own form; the forms and the result card are told the tab
   /tab === 'create' \? \(\s*<GenerationForm onGenerated=\{handleGenerated\} guideShowing=\{guideShowing\} \/>\s*\) : tab === 'text' \? \(\s*<TextAnimationForm/.test(page)
   && /<GenerationResult onReset=\{handleReset\} tab=\{tab\} textStyleId=\{textStyleId\} \/>/.test(page));
 const form = formSrc;
-check('3g: Create Sprite: step badges 1 and 2, the bar\'s hint by its row, "Step 3: Generate." when ready',
-  /<StepBadge n=\{1\} state=\{describeBadge\} \/>/.test(form) && /step=\{\{ n: 2, state: styleBadge \}\}/.test(form)
-  && form.includes("disabledReason = 'Step 1: describe your sprite.';") && form.includes("disabledReason = 'Step 3: Generate.';") && form.includes('disabledReason = GUIDE_HINT;'));
+// G2 inserts "What's it for?" as step 2 and renumbers (generate-pass.md 2, 7).
+check('3g: Create Sprite: step badges 1, 2 (What\'s it for?) and 3 (Style), the bar\'s hint by its row, "Step 4: Generate." when ready',
+  /<StepBadge n=\{1\} state=\{describeBadge\} \/>/.test(form) && /badge=\{forBadge\}/.test(form) && /step=\{\{ n: 3, state: styleBadge \}\}/.test(form)
+  && form.includes("disabledReason = 'Step 1: describe your sprite.';") && form.includes("disabledReason = 'Step 4: Generate.';") && form.includes('disabledReason = GUIDE_HINT;'));
 check('3g2: Create Sprite\'s button reads "Generate sprite" with its cost, and "tokens" for screen readers (2.7; DESIGN -072)',
   /Generate sprite\s*<span className="inline-flex items-center gap-1\.5 tabular-nums">\s*&middot; <PixelCoin \/> \{formatCount\(tokenCost\)\}\s*<span className="sr-only"> tokens<\/span>/.test(form));
 check('3h: Animate from Text: badges 1 and 2, its hints, "Generate animation" with the cost and "tokens" for screen readers',
@@ -252,6 +253,10 @@ check('3x: below 1100 px Animate from Text\'s bar stacks as on a phone; from 110
     && /SHORT_FOR_ANIMATION\.test\(generationError\) \? \(\s*<>\s*\{generationError\}\{' '\}\s*<a href="\/buy-tokens"[^>]*>Get tokens<\/a>/.test(text));
 }
 const DASH = String.fromCharCode(0x2014);
+check('3o: VFX Effects\' two tips (DESIGN -098, HQ -102; AUDIT g2-page-r1 L8); every other text style keeps its own',
+  same(T.tipsFor('text', 'anim-vfx').tips, ['Describe the effect: its colors, its shape and how it moves.', 'One effect per animation.', 'Want your own picture to move? Use Animate My Character.'])
+  && same(T.tipsFor('text', 'anim-any').tips.slice(0, 2), ['For Custom Animation, describe the character and what it does.', 'One character per animation.'])
+  && same(T.tipsFor('text', null).tips.slice(0, 2), ['Describe the character, not the motion: the card you pick is the motion.', 'One character per animation.']));
 check('3n: no em dash in the new files', ['src/lib/generateTabs.ts', 'src/lib/createBody.ts', 'src/components/sprites/TextAnimationForm.tsx', 'src/components/sprites/StepBadge.tsx',
   'src/components/layout/useGenerateBarHeight.ts', 'scripts/generate-tabs-test.mjs'].every((f) => !read(f).includes(DASH)));
 

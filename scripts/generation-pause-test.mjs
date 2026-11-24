@@ -66,10 +66,11 @@ const BEFORE = {
 };
 const NOTE = ' Your tokens have been refunded.';
 
-// The refusal words (design/generate-pass/failure-lines.md, HQ 2026-11-17-236). Animate's
-// carry " under More settings" (G4); Create Sprite's wait for that section (G2).
+// The refusal words (design/generate-pass/failure-lines.md, HQ 2026-11-17-236), with
+// " under More settings" on Create Sprite (G2) and on Animate My Character (G4).
 const REFUSAL = {
-  generation: (note) => `Generation failed: the AI service could not make this one.${note} You can try again, or change the description or the style, or the size.`,
+  // G2: Create Sprite's size now sits under More settings, so its line ends with those words (failure-lines.md; HQ 2026-11-18-056).
+  generation: (note) => `Generation failed: the AI service could not make this one.${note} You can try again, or change the description or the style, or the size under More settings.`,
   'text-animation': (note) => `Animation failed: the AI service could not make this one.${note} You can try again, or change the description or the animation.`,
   animation: (note) => `Animation failed: the AI service could not make this one.${note} You can try again, or change the picture or the action, or the frame count under More settings.`,
 };

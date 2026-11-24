@@ -138,11 +138,14 @@ export function tipsFor(tab: GenerateTab, textStyleId?: string | null): { lead: 
     return {
       lead: 'Your animation will appear here',
       heading: 'Tips for good descriptions',
+      // VFX Effects' two tips: DESIGN room 2026-11-18-098, approved by HQ in -102.
       tips: [
         textStyleId === CUSTOM_ANIMATION_ID
           ? 'For Custom Animation, describe the character and what it does.'
-          : 'Describe the character, not the motion: the card you pick is the motion.',
-        'One character per animation.',
+          : textStyleId === VFX_ID
+            ? 'Describe the effect: its colors, its shape and how it moves.'
+            : 'Describe the character, not the motion: the card you pick is the motion.',
+        textStyleId === VFX_ID ? 'One effect per animation.' : 'One character per animation.',
         'Want your own picture to move? Use Animate My Character.',
       ],
     };

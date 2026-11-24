@@ -201,7 +201,31 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   // the poll effect decides with isUpstreamFailure(rawMessage, poll.error?.errorCode) and words
   // the failure with providerFailureMessage('generation', refundedNote, poll.error?.errorCode).
   // Before it: 0eb0e0a68994...
-  check('1d: handleGenerate, the poll effects and the size effect are byte-identical to main', sha256(logicPart ?? '') === 'b06885e60cedd8b37c31e4b56a4004adbf6b761de6a9c45d56c66ace84674276');
+  // G2 (generate-pass.md 2.2 and 2.3; HQ 2026-11-18-049, -056; ENG's PR #81):
+  // main's lines plus exactly G2's insertions, each once: the card's ids and
+  // the "Adds" line's answer (createCards.ts, useCreateWords.ts); the ids
+  // captured at the press; the body sent through withCreateSpec; PR #81's
+  // three refusals shown as the server words them; toSend in the
+  // dependencies. Taken out again, the lines are main's (b06885e6...).
+  // Round 1's fixes (AUDIT g2-page-r1 H1, M1, M2; DESIGN -016): the hook's
+  // renew and the held "Adds" line in the first insertion, the facing and
+  // subject captured at the press and written once the press is accepted
+  // (setLastCreate), renew on create_words_changed, and the three in the
+  // dependencies.
+  const G2_INSERTED = [
+    "\n  // \"What's it for?\" (G2): whether the cards apply to this style, the ids a\n  // press sends, and the \"Adds\" line's words from the private service\n  // (HQ 2026-11-18-049, -056; createCards.ts). No answer from the service:\n  // nothing is added and no ids are sent; the cards grey only for a style\n  // they do not apply to (AUDIT g2-page-r1 M2).\n  const cardsOn = cardsApply(selectedStyle);\n  const spec = specFor(choice, selectedStyle);\n  const { words, renew: renewWords } = useCreateWords(selectedStyle.promptStyle, spec, getToken);\n  const toSend = specToSend(spec, words);\n  const greyed = cardsGreyed(cardsOn);\n  const adds = addsLine(cardsOn, choice.card, words);\n  // While a new choice's lookup is out, the last line stays, marked as\n  // checking, so nothing below it moves (AUDIT g2-page-r1 M1).\n  const [heldAdds, setHeldAdds] = useState(adds);\n  if (adds !== '' && adds !== heldAdds) setHeldAdds(adds);\n  const addsShown = shownAddsLine(adds, words, heldAdds);\n  const sideLine = sideViewLine(selectedStyle, choice);\n",
+    "    const capturedSend = toSend;\n    const capturedLast = lastCreateFor(selectedStyle, choice, capturedPrompt);\n",
+    "      // G2: the card's ids and the version the \"Adds\" line showed, when they\n      // apply (createCards.ts withCreateSpec). Ids, never words.\n      const sent = withCreateSpec(body, capturedSend);\n",
+    "      // Accepted: what the result card reads (G0's setLastCreate; DESIGN -016).\n      setLastCreate(capturedLast.facing, capturedLast.subject);\n",
+    "      if (errObj.error === 'create_spec_refused' || errObj.error === 'create_words_unavailable' || errObj.error === 'create_words_changed') {\n        // G2 (ENG, PR #81): the card's ids were refused before any debit; the\n        // server's words say nothing was charged. Shown as they are. When the\n        // words changed, the page forgets its kept answers and asks again, so\n        // the next press carries the new version (AUDIT g2-page-r1 H1).\n        if (errObj.error === 'create_words_changed') renewWords();\n        setGenerationError(msg);\n        return;\n      }\n",
+  ];
+  let mainLogic = logicPart ?? '';
+  const g2Once = G2_INSERTED.every((x) => mainLogic.split(x).length === 2)
+    && mainLogic.split('fetchGeneration(sent, sessionToken)').length === 2
+    && mainLogic.split('getToken, toSend, choice, renewWords, setLastCreate,').length === 2;
+  for (const x of G2_INSERTED) mainLogic = mainLogic.replace(x, '');
+  mainLogic = mainLogic.replace('fetchGeneration(sent, sessionToken)', 'fetchGeneration(body, sessionToken)').replace('getToken, toSend, choice, renewWords, setLastCreate,', 'getToken,');
+  check('1d: handleGenerate, the poll effects and the size effect are main\'s plus exactly G2\'s named insertions', g2Once && sha256(mainLogic) === 'b06885e60cedd8b37c31e4b56a4004adbf6b761de6a9c45d56c66ace84674276');
 }
 
 // ── 2. ENG condition 2: the purchase banner ──
@@ -323,7 +347,9 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
       '@/components/sprites/ReferenceImagesPanel', '@/lib/styleRegistry', '@/lib/recentStyles', '@/lib/sseClient', '@/lib/generationPause',
       '@/hooks/useGenerationPoll', '@/lib/pollResume', '@/lib/jobResult', '@/lib/spriteUtils', './StyleExamplesLightbox', './StyleField', './StylePicker',
       // G1 (the Generate page pass): the tabs' rules and the step badge; neither is a money path.
-      '@/lib/generateTabs', './StepBadge'];
+      '@/lib/generateTabs', './StepBadge',
+      // G2: "What's it for?" (ids and page words), its lookup hook and its section; none is a money path.
+      '@/lib/createCards', '@/hooks/useCreateWords', './WhatsItFor'];
     const sources = (text) => [...text.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
     const added = sources(form).filter((src) => !S1.includes(src));
     const affordable = sources(stripComments(read('src/lib/affordableStyle.ts')));
@@ -424,8 +450,12 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
   check('6: opening the picker is not an act', /onOpenPicker=\{\(\) => setPickerOpen\(true\)\}/.test(form));
   // Every effect at the component's top level, by its two-space indent.
   const effects = [...form.matchAll(/^ {2}use(?:Layout)?Effect\([\s\S]*?^ {2}\}?[^\n]*\);$/gm)].map((m) => m[0]);
-  check('6: the latch is set by those seven calls only, through markActed, and in no effect',
-    (form.match(/markActed\(\)/g) ?? []).length === 7 && (form.match(/actedRef\.current = /g) ?? []).length === 1
+  // G2: a card or a fine-tune chip sets the latch too (generate-pass.md 2.3), in chooseCreate, before the choice changes.
+  check('6: a card or chip sets the latch in chooseCreate, before the choice changes',
+    /const chooseCreate = useCallback\(\(next: CreateChoice\) => \{\s*markActed\(\);\s*formVisit\.rememberChoice\(userId, next\);\s*setChoice\(next\);\s*\}, \[markActed, userId\]\);/.test(form)
+    && /onChoose=\{chooseCreate\}/.test(form) && (form.match(/setChoice\(/g) ?? []).length === 1);
+  check('6: the latch is set by those eight calls only, through markActed, and in no effect',
+    (form.match(/markActed\(\)/g) ?? []).length === 8 && (form.match(/actedRef\.current = /g) ?? []).length === 1
     && /const markActed = useCallback\(\(\) => \{\s*actedRef\.current = true;\s*formVisit\.rememberActed\(userId\);\s*\}, \[userId\]\);/.test(form)
     && effects.length >= 6 && effects.every((e) => !/markActed|actedRef\.current = |rememberActed/.test(e)), effects.length);
   check('6: the prompt changes in those two handlers only, so no render has a typed prompt without the latch',
@@ -614,7 +644,8 @@ const MAIN_BODY_SHA = '1ef149e1d628de43f07921a4ba195e0c900e8f24e6d5c9839985b52ce
     // G1: Create Sprite's picker and STYLE_IDS leave out the animation styles (Animate from Text has them).
     /for \(const style of OFFERED_STYLES\.filter\(\(s\) => !s\.isAnimation\)\) \{/.test(picker) && !/for \(const style of GENERATION_STYLES\)/.test(picker)
     && /^const STYLE_IDS = OFFERED_STYLES\.filter\(\(s\) => !s\.isAnimation\)\.map\(\(s\) => s\.id\);$/m.test(form) && !/GENERATION_STYLES\.map\(/.test(form)
-    && (form.match(/STYLE_IDS/g) ?? []).length === 4);
+    // G2: the side-view line offers only styles Create offers (STYLE_IDS.includes in sideOffers).
+    && (form.match(/STYLE_IDS/g) ?? []).length === 5 && /!!s && STYLE_IDS\.includes\(s\.id\) && serverBalanceKnown && tokenBalance >= s\.tokenCost/.test(form));
   check('7: every opening candidate (affordableStyle.ts) is an offered style',
     OPENING_CANDIDATES.length === 2 && OPENING_CANDIDATES.every((id) => offeredIds.includes(id)), OPENING_CANDIDATES);
   check('7: anim-8dir still answers every lookup and price as before: getStyleById, getTokenCost 50, getResolutionMode locked at 80, the pro free-tier bucket',

@@ -77,8 +77,9 @@ export function isProviderRefusal(errorCode?: string): boolean {
  * otherwise upstreamFailureMessage's. `text-animation` is Animate from Text,
  * the tab G1 adds; until then its jobs come through the Create Sprite form as
  * `generation`, and its other failures keep the generation words, as today.
- * " under More settings" is left out until that section exists on each form
- * (G2 for Create Sprite, G4 for Animate My Character). Paused, the advice is
+ * Create Sprite's line ends " under More settings", where its size now sits
+ * (G2; AUDIT rd-swap-r3's note, HQ 2026-11-18-056). Animate My Character's
+ * gets the same words when G4 adds its More settings. Paused, the advice is
  * left out, as in upstreamFailureMessage.
  */
 export function providerFailureMessage(
@@ -94,7 +95,7 @@ export function providerFailureMessage(
   const lead = `${head}: the AI service could not make this one.${refundedNote}`;
   if (paused) return lead;
   if (kind === 'generation') {
-    return `${lead} You can try again, or change the description or the style, or the size.`;
+    return `${lead} You can try again, or change the description or the style, or the size under More settings.`;
   }
   if (kind === 'text-animation') {
     return `${lead} You can try again, or change the description or the animation.`;

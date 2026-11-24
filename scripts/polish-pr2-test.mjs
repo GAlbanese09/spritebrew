@@ -349,7 +349,8 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
 
 {
   const form = stripComments(read('src/components/sprites/GenerationForm.tsx'));
-  const CHIPS = [['Knight', 'pixel art knight with sword'], ['Goblin', 'small goblin with wooden club'], ['Wizard', 'wizard with blue robe and staff'],
+  // G2 (generate-pass.md 2.1): the chips fill the subject only; "pixel art" is off the Knight's.
+  const CHIPS = [['Knight', 'knight with sword'], ['Goblin', 'small goblin with wooden club'], ['Wizard', 'wizard with blue robe and staff'],
     ['Skeleton', 'skeleton warrior with shield'], ['Slime', 'cute slime monster'], ['Robot', 'robot with laser gun']];
   check('7: the six chips: one word each, paired with its full prompt',
     CHIPS.every(([label, prompt]) => form.includes(`{ label: '${label}', prompt: '${prompt}' }`))
@@ -744,8 +745,10 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     visit2.rememberStyle('user_a', 'pro-fantasy');
     visit2.rememberStyle(null, 'fast-retro');
     visit2.rememberActed(undefined);
-    const empty = JSON.stringify(visit2.read(null)) === '{"styleId":null,"acted":false}' && JSON.stringify(visit2.read(undefined)) === '{"styleId":null,"acted":false}';
-    const kept = JSON.stringify(visit2.read('user_a')) === '{"styleId":"pro-fantasy","acted":false}';
+    // G2: the visit also holds "What's it for?"'s choice (null until one is remembered).
+    visit2.rememberChoice(null, { card: 'raw', view: null, framing: null });
+    const empty = JSON.stringify(visit2.read(null)) === '{"styleId":null,"acted":false,"choice":null}' && JSON.stringify(visit2.read(undefined)) === '{"styleId":null,"acted":false,"choice":null}';
+    const kept = JSON.stringify(visit2.read('user_a')) === '{"styleId":"pro-fantasy","acted":false,"choice":null}';
     const visit3 = createFormVisit();
     visit3.rememberStyle('user_a', 'not-a-style');
     const unknown = mountForm(visit3, 'user_a');

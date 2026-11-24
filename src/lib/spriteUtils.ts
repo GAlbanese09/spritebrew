@@ -1,6 +1,8 @@
 import { SLICER_FRAME_PRESETS, SLICER_DETECT_TRY_SIZES } from '@/lib/constants';
 import { countGridCuts, detectCleanGrid, findCleanGrid } from '@/lib/gridDetect';
-import { MAGENTA_FILL, characterColours, cleanAnimation, cornersOpaque, despillRim } from '@/lib/fillCleanup';
+import { MAGENTA_FILL, characterColours, cornersOpaque, despillRim } from '@/lib/fillCleanup';
+import { cleanAnimationSheet, cleanupChanged } from '@/lib/animationCleanup';
+import type { JobGuards } from '@/lib/jobGuards';
 
 // Square-only canonical sizes derived from the single-source-of-truth presets.
 // Used by detectFrameGrid's findBestStandardSize fallback.
@@ -1058,11 +1060,12 @@ export function despillChromaEdges(canvas: HTMLCanvasElement, fillHex: string): 
 }
 
 /**
- * The pink cleanup on a canvas (src/lib/fillCleanup.ts): on a sheet that came
- * back with its background removed, the fill pockets are keyed (when `key`)
- * and the rim despilled (its bright rule when `bright`). A sheet whose four
- * corners are opaque (RD returned no transparency) is left as it is. Returns
- * whether any pixel changed.
+ * An Animate sheet's cleanup on a canvas (src/lib/animationCleanup.ts): on a
+ * sheet that came back with its background removed, the fill pockets are
+ * keyed (when `key`), the rim despilled (its bright rule when `bright`), and,
+ * when `bright`, the purple residue cleared. A sheet whose four corners are
+ * opaque (RD returned no transparency) is left as it is. Returns whether any
+ * pixel changed.
  */
 export function cleanAnimationCanvas(canvas: HTMLCanvasElement, fillHex: string, opts: { key: boolean; bright: boolean }): boolean {
   const W = canvas.width;
@@ -1071,8 +1074,7 @@ export function cleanAnimationCanvas(canvas: HTMLCanvasElement, fillHex: string,
   if (!ctx || W === 0 || H === 0) return false;
   const imgData = ctx.getImageData(0, 0, W, H);
   if (cornersOpaque(imgData.data, W, H)) return false;
-  const { keyed, despilled } = cleanAnimation(imgData.data, W, H, fillHex, opts);
-  if (keyed + despilled === 0) return false;
+  if (!cleanupChanged(cleanAnimationSheet(imgData.data, W, H, fillHex, opts))) return false;
   ctx.putImageData(imgData, 0, 0);
   return true;
 }
@@ -1101,17 +1103,21 @@ export async function despillIfTransparent(
 }
 
 /**
- * A Gallery animation sheet's cleanup (HQ 2026-10-28-005): the magenta fill,
- * the key always on and the bright rim rule off, since the Gallery does not
- * know the character that was sent (its own fill or mostly-magenta colours).
+ * A Gallery animation sheet's cleanup (HQ 2026-10-28-005): the magenta fill.
+ * For a job this device finished, its character's guards (jobGuards.ts; HQ
+ * 2026-11-24-018) set it as the result card did: keyed unless the character
+ * had fill-coloured pixels, the bright rule and the residue cleanup only when
+ * it had no mostly-magenta ones. Otherwise the Gallery does not know the
+ * character: the key on, the bright rule and the residue cleanup off.
  * A cleaned PNG, or null when nothing changed or the sheet cannot be decoded
  * (the caller keeps the original).
  */
-export async function cleanGallerySheet(blob: Blob): Promise<Blob | null> {
+export async function cleanGallerySheet(blob: Blob, guards: JobGuards | null = null): Promise<Blob | null> {
   const url = URL.createObjectURL(blob);
   try {
     const canvas = imageToCanvas(await loadImage(url));
-    if (!cleanAnimationCanvas(canvas, MAGENTA_FILL, { key: true, bright: false })) return null;
+    const opts = guards ? { key: !guards.fill, bright: !guards.magenta } : { key: true, bright: false };
+    if (!cleanAnimationCanvas(canvas, MAGENTA_FILL, opts)) return null;
     return await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
   } catch {
     return null;

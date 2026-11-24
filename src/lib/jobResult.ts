@@ -10,6 +10,7 @@
 import type { PollSuccessResult } from '@/hooks/useGenerationPoll';
 import type { RescueInfo } from '@/stores/spriteStore';
 import { finishedJob, isAnimateContext, type FinishedJob, type JobContext } from '@/lib/pollResume';
+import { rememberJobGuards } from '@/lib/jobGuards';
 
 /** The fill every animate request is flattened onto (AnimateForm's
  *  DEFAULT_BG_COLOR); the despill removes its rim from the returned sheet. */
@@ -112,6 +113,11 @@ export async function finishJob(
   sink: JobFinishSink
 ): Promise<void> {
   const { dataUrl, rescueInfo, finished } = await prepareJobResult(job.result, job.mode, job.context, io);
+  // The character's guards stay on this device with the job, so the Gallery
+  // cleans its sheet as this card did (HQ 2026-11-24-018, B).
+  if (job.mode === 'animate' && job.jobId && isAnimateContext(job.context)) {
+    rememberJobGuards(job.jobId, { fill: job.context.inputHasFill, magenta: job.context.inputHasMagenta });
+  }
   sink.setRescueInfo(rescueInfo);
   if (job.mode !== 'animate') sink.setOriginalCharacter(null);
   sink.setGeneratedImage(dataUrl, dataUrl);

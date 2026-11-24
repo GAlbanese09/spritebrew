@@ -1,10 +1,15 @@
+import type { CreateSpecIds } from '@/lib/createWords';
+
 export interface JobMessage {
   jobId: string;
   userId: string;
   idempotencyKey: string;
   tokenCost: number;
   mode: 'create' | 'animate';
-  body: unknown;
+  /** The provider body. Absent on a spec'd Create, which carries createBody. */
+  body?: unknown;
+  /** Create with promptSpec only: the provider body (G2; AUDIT g2 r1 M2). */
+  createBody?: unknown;
   enqueuedAt: number;
   /**
    * Optional 64×64 opaque PNG base64 (no `data:` prefix). Consumer-side
@@ -15,6 +20,9 @@ export interface JobMessage {
    * (deterministic 400 on animation__any_animation).
    */
   fallbackInputImage?: string;
+  /** Create only (G2): the page's card and fine-tune ids, already checked by
+   *  the private side. The consumer builds the provider's prompt from them. */
+  promptSpec?: CreateSpecIds;
 }
 
 interface QueueBinding {

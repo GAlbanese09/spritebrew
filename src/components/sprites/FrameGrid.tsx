@@ -4,15 +4,25 @@ import { useCallback, useMemo, useState } from 'react';
 import { Pencil } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import PixelEditor, { type OnionSources } from './PixelEditor';
+import LeftoverBackground, { type CleanedSheet } from './LeftoverBackground';
+import type { KeyName } from '@/lib/keyResidue';
 import { DRAG_TILE_STYLE, startFrameDrag, useFrameDrag, useLastFrameDrop, useLastMissedFrameDrop } from './frameDrag';
 import { onionFrameList, onionNeighbours } from '@/lib/onionSkin';
 
 interface FrameGridProps {
   /** Map from frame ID → data URL for display */
   frameDataUrls: Map<string, string>;
+  /** The page's guarded commit (the one Align frames uses). With it, the
+   *  card shows the leftover background strip, whose Clean and Undo write
+   *  the frames through it. */
+  onCommit?: (prepare: () => Promise<CleanedSheet | null>) => Promise<boolean>;
+  /** The keys the page knows were the background, for the strip. */
+  knownBackground?: ReadonlySet<KeyName>;
 }
 
-export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
+const NOTHING_KNOWN: ReadonlySet<KeyName> = new Set();
+
+export default function FrameGrid({ frameDataUrls, onCommit, knownBackground = NOTHING_KNOWN }: FrameGridProps) {
   const spriteSheet = useSpriteStore((s) => s.spriteSheet);
   const selectedFrames = useSpriteStore((s) => s.selectedFrames);
   const setSelectedFrames = useSpriteStore((s) => s.setSelectedFrames);
@@ -20,6 +30,9 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
   const updateFrameData = useSpriteStore((s) => s.updateFrameData);
 
   const [editingFrameId, setEditingFrameId] = useState<string | null>(null);
+  // The strip's "Show where" marks, one image per frame id, drawn over the
+  // thumbnails; null when they are off.
+  const [leftoverMarks, setLeftoverMarks] = useState<Map<string, string> | null>(null);
   const drag = useFrameDrag();
   const draggingFrameId = drag?.source.kind === 'grid' ? drag.source.frameId : null;
   // After the first drag that ends over nothing, say where to drop, until a
@@ -118,6 +131,18 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
         </p>
       )}
 
+      {onCommit && spriteSheet && (
+        <LeftoverBackground
+          key={spriteSheet.id}
+          sheet={spriteSheet}
+          frameDataUrls={frameDataUrls}
+          selectedFrames={selectedFrames}
+          onCommit={onCommit}
+          onMarks={setLeftoverMarks}
+          knownBackground={knownBackground}
+        />
+      )}
+
       <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))' }}>
         {allFrames.map((frame, idx) => {
           const selected = selectedFrames.includes(frame.id);
@@ -164,6 +189,14 @@ export default function FrameGrid({ frameDataUrls }: FrameGridProps) {
                       draggable={false}
                       className="absolute inset-0 w-full h-full object-contain pixel-art-render"
                       style={{ imageRendering: 'pixelated' }}
+                    />
+                  )}
+                  {leftoverMarks?.get(frame.id) && (
+                    <span
+                      aria-hidden
+                      data-leftover-marks
+                      className="absolute inset-0 pointer-events-none bg-contain bg-center bg-no-repeat"
+                      style={{ backgroundImage: `url(${leftoverMarks.get(frame.id)})`, imageRendering: 'pixelated' }}
                     />
                   )}
                 </div>

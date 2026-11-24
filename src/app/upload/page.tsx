@@ -28,6 +28,7 @@ import {
 import type { SpriteFrame, SpriteSheet } from '@/lib/types';
 import { exportRawFrames } from '@/lib/exportEngine';
 import { allFramesGroup } from '@/lib/allFramesGroup';
+import { KEY_NAMES, keyIndexOf, type KeyName } from '@/lib/keyResidue';
 import { createSheetOwnership, noteStale, type SheetToken } from '@/lib/sheetOwnership';
 
 type SliceMode = 'grid' | 'auto';
@@ -81,6 +82,9 @@ export default function UploadPage() {
   // the user picks or drops clears it. (fromGenerated above also
   // marks images held as data URLs, such as a resize or a background removal.)
   const [fromSlicerHandoff, setFromSlicerHandoff] = useState(false);
+  // The color Remove background took, and the image it made: known as the
+  // background while that image is the one loaded.
+  const [bgRemoved, setBgRemoved] = useState<{ url: string; color: { r: number; g: number; b: number } } | null>(null);
   // True once the user has either resized or chosen to keep the original size
   const [sizeAcknowledged, setSizeAcknowledged] = useState(false);
   // Pre-populated frame size after a FrameSizeResizer accept
@@ -333,7 +337,7 @@ export default function UploadPage() {
    *  sheet keeps its frame grid: every frame is re-cut from the cleaned image
    *  at the same rect and id, so groups survive. */
   const handleBgRemoved = useCallback(
-    (cleanedDataUrl: string) => {
+    (cleanedDataUrl: string, color: { r: number; g: number; b: number }) => {
       if (!uploaded) return;
       ownership.bump();
       const token = ownership.capture();
@@ -349,6 +353,7 @@ export default function UploadPage() {
         const swapImage = () => {
           if (!fromGenerated) URL.revokeObjectURL(uploaded.blobUrl);
           setUploaded({ ...uploaded, blobUrl: cleanedDataUrl, width, height });
+          setBgRemoved({ url: cleanedDataUrl, color });
           setFromGenerated(true); // data URL, don't revoke
           setBgBannerDismissed(true);
         };
@@ -398,6 +403,19 @@ export default function UploadPage() {
   /** Align frames and its Undo. As in handleBgRemoved, the new pixels go only
    *  onto the sheet they were made from (replaceSheetSource's version guard).
    *  The uploaded image stays as it was: slicing again starts from it. */
+  // The keys the page knows were the background, for the leftover strip: a
+  // sheet Send to Slicer brought (SpriteBrew's #FF00FF fill), and the color
+  // Remove background took from the image now loaded (HQ 2026-11-24-109).
+  const knownBackground = useMemo(() => {
+    const keys = new Set<KeyName>();
+    if (fromSlicerHandoff) keys.add('magenta');
+    if (bgRemoved && uploaded && bgRemoved.url === uploaded.blobUrl) {
+      const k = keyIndexOf(bgRemoved.color.r, bgRemoved.color.g, bgRemoved.color.b);
+      if (k >= 0) keys.add(KEY_NAMES[k]);
+    }
+    return keys;
+  }, [fromSlicerHandoff, bgRemoved, uploaded]);
+
   const handleAlignCommit = useCallback(
     async (prepare: () => Promise<AlignedSheet | null>) => {
       ownership.bump();
@@ -790,7 +808,7 @@ export default function UploadPage() {
       {/* Frame grid — shown after slicing */}
       {spriteSheet && (
         <div className="rounded-lg border border-border-default bg-bg-surface p-6">
-          <FrameGrid frameDataUrls={frameDataUrls} />
+          <FrameGrid frameDataUrls={frameDataUrls} onCommit={handleAlignCommit} knownBackground={knownBackground} />
         </div>
       )}
 

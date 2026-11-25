@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useAuth } from '@clerk/react';
-import { useEditorStore } from './editorStore';
+import { useEditorStore, selectHasPixelChanges } from './editorStore';
 import {
   IndexedDbDraftStore,
   isRecoveryAvailable,
@@ -14,6 +14,7 @@ import {
   type SaveReason,
 } from '@/lib/editorRecovery';
 import type { SpriteProjectV1 } from '@/lib/spriteProject';
+import type { LeaveSaveState } from '@/lib/editorCopy';
 import { isDevHost } from '@/lib/isDevHost';
 
 /** The full-page editor's draft key from before every session had its own
@@ -45,6 +46,59 @@ const openSessions = new Set<string>();
 /** True while an editor in this tab is working on the draft. */
 export function isEditorSessionOpen(key: string): boolean {
   return openSessions.has(key);
+}
+
+// How an open session's work is kept, for the leave question (SB-25, the
+// outside audit of Nov 24, 2026: it promised a saved copy when the save had
+// failed). Revisions are the editor store's: the newest write that landed,
+// the last write that finished and whether it landed, the writes still on
+// their way, and the newest revision with nothing to keep.
+interface SaveTrack {
+  available: boolean | undefined;
+  landed: number;
+  settled: { revision: number; ok: boolean } | null;
+  pending: number;
+  nothing: number;
+}
+const tracks = new Map<string, SaveTrack>();
+const trackListeners = new Set<() => void>();
+const notifyTracks = () => trackListeners.forEach((l) => l());
+
+/** How the session's work under `key` is kept right now: "saved" once the
+ *  write of what is on screen has landed (or there is nothing to keep),
+ *  "unsaved" when that write failed or this browser cannot keep drafts,
+ *  else "saving". Never "saved" on a guess. */
+export function leaveSaveState(key: string): LeaveSaveState {
+  const t = tracks.get(key);
+  if (!t) return 'saving';
+  if (t.available === false) return 'unsaved';
+  const revision = useEditorStore.getState().revision;
+  if (t.nothing === revision) return 'saved';
+  // A write on its way decides nothing yet: saving, even when an earlier
+  // write of the same picture landed, so the words never say saved and then
+  // not saved (AUDIT data-loss r2, L1). Writes run in order, so one on its
+  // way is of what is on screen or of an older picture.
+  if (t.pending > 0) return 'saving';
+  // The newest finished write of what is on screen decides: a later write of
+  // the same picture that failed outweighs an earlier one that landed (AUDIT
+  // data-loss r1, L3).
+  if (t.settled?.revision === revision && !t.settled.ok) return 'unsaved';
+  if (t.landed === revision) return 'saved';
+  return 'saving';
+}
+
+/** Calls `onChange` whenever leaveSaveState may have changed: a write
+ *  asked for or finished, or the editor's state moved. */
+export function subscribeLeaveSaveState(onChange: () => void): () => void {
+  trackListeners.add(onChange);
+  const unsub = useEditorStore.subscribe(onChange);
+  return () => { trackListeners.delete(onChange); unsub(); };
+}
+
+/** Saves the session's newest state now rather than after the usual wait
+ *  (the leave question asks for it as it opens). */
+export function flushEditorDraft(key: string): void {
+  flushers.get(key)?.();
 }
 
 const settle = (p: Promise<void> | undefined) => (p ?? Promise.resolve()).catch(() => {});
@@ -155,6 +209,8 @@ export function useEditorRecovery({
     const clerkTimer = setTimeout(() => { clerkWaitOver = true; }, CLERK_WAIT_MS);
     // True once this session has asked for a write (it had edits).
     let wrote = false;
+    const track: SaveTrack = { available: undefined, landed: -1, settled: null, pending: 0, nothing: -1 };
+    tracks.set(projectKey, track);
     // A session that starts under a key (a restore) may write it again.
     ended.delete(projectKey);
     openSessions.add(projectKey);
@@ -169,13 +225,21 @@ export function useEditorRecovery({
 
     // Synchronous snapshot: read envelope and raw bytes back-to-back so they
     // describe the same frame, then merge the live palette. Null when there is
-    // nothing worth saving (not dirty / reset / empty). Reading synchronously
-    // and handing the bytes straight to saveDraft (which copies them) is what
-    // makes this safe against the unmount reset() that nulls the store while a
-    // save is still in flight.
+    // nothing worth saving (reset / empty, or the picture as it was loaded
+    // with no draft of this session's to bring back in line). Reading
+    // synchronously and handing the bytes straight to saveDraft (which copies
+    // them) is what makes this safe against the unmount reset() that nulls
+    // the store while a save is still in flight.
+    //
+    // What is on screen is what is saved, whatever the history index says
+    // (SB-26, the outside audit of Nov 24, 2026): an Undo back to the start,
+    // or to the oldest step history keeps (index 0 after MAX_HISTORY steps,
+    // with edits still on the canvas), used to save nothing, so a restore
+    // brought back the edits the user had undone.
     const snapshot = (): { project: SpriteProjectV1; bytes: Uint8ClampedArray } | null => {
       const s = useEditorStore.getState();
-      if (s.historyIndex <= 0) return null;
+      if (s.historyIndex < 0) return null;
+      if (!wrote && !selectHasPixelChanges(s)) return null;
       const project = s.toProject();
       if (!project) return null;
       const bytes = s.getFramePixels(project.frames[0].id);
@@ -207,18 +271,32 @@ export function useEditorRecovery({
         scheduleSave();
         return;
       }
+      const revision = useEditorStore.getState().revision;
       const snap = snapshot();
-      if (!snap) return;
+      if (!snap) {
+        track.nothing = revision;
+        notifyTracks();
+        return;
+      }
       wrote = true;
+      track.pending++;
+      notifyTracks();
       // Queued behind the writes already asked for, so a Discard or a close
       // asked for after this write comes after it too.
       void afterWrites(projectKey, async () => {
+        let ok = false;
         try {
           await store.saveDraft({ projectKey, project: snap.project, bytes: snap.bytes, reason, owner, surface });
+          ok = true;
           void store.prune(MAX_DRAFTS, projectKey).catch(() => { /* best-effort */ });
           if (!persistRequested) { persistRequested = true; void requestPersistentStorage(); }
         } catch (err) {
           if (isDevHost()) console.warn('[editorRecovery] save failed', err);
+        } finally {
+          track.pending--;
+          track.settled = { revision, ok };
+          if (ok && revision > track.landed) track.landed = revision;
+          notifyTracks();
         }
       });
     };
@@ -246,8 +324,11 @@ export function useEditorRecovery({
     const unsub = useEditorStore.subscribe((s) => s.revision, () => {
       // An edit after a close or a Discard while this editor is still open
       // (a Leave whose Back had nowhere to go, say): the session goes on, so
-      // its work is saved again, until the next close or Discard.
-      if (ended.has(projectKey) && useEditorStore.getState().historyIndex > 0) ended.delete(projectKey);
+      // its work is saved again, until the next close or Discard. An Undo
+      // back to index 0 counts too when it leaves something to keep (SB-26);
+      // a reset (index -1) never does.
+      const s = useEditorStore.getState();
+      if (ended.has(projectKey) && (s.historyIndex > 0 || (s.historyIndex === 0 && (wrote || selectHasPixelChanges(s))))) ended.delete(projectKey);
       scheduleSave();
     });
 
@@ -264,12 +345,19 @@ export function useEditorRecovery({
     void isRecoveryAvailable().then((ok) => {
       if (disposed) return;
       available = ok;
+      track.available = ok;
+      notifyTracks();
       if (!ok) {
         if (isDevHost()) console.warn('[editorRecovery] unavailable in this browser context');
         return;
       }
-      if (useEditorStore.getState().historyIndex > 0) scheduleSave();
-    }).catch(() => { /* no recovery in this context */ });
+      if (selectHasPixelChanges(useEditorStore.getState())) scheduleSave();
+    }).catch(() => {
+      // No recovery in this context.
+      if (disposed) return;
+      track.available = false;
+      notifyTracks();
+    });
 
     return () => {
       // The editor goes without a close or a Discard (a sign-out, or the
@@ -284,6 +372,7 @@ export function useEditorRecovery({
       disposed = true;
       available = false;
       openSessions.delete(projectKey);
+      if (tracks.get(projectKey) === track) tracks.delete(projectKey);
       unsub();
       clearTimeout(clerkTimer);
       if (flushers.get(projectKey) === flushExplicit) flushers.delete(projectKey);

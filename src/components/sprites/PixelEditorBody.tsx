@@ -108,7 +108,9 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 import { useSpriteStore } from '@/stores/spriteStore';
 import { extractPaletteFromImageData } from '@/lib/imagePalette';
-import { useEditorRecovery, closeEditorDraft } from './useEditorRecovery';
+import { useEditorRecovery, closeEditorDraft, flushEditorDraft } from './useEditorRecovery';
+import { useLeaveSaveState } from './useLeaveSaveState';
+import DraftDiscardDialog from './DraftDiscardDialog';
 import { useEditorHistoryGuard } from './useEditorHistoryGuard';
 import { useLeaveByBack } from './useLeaveByBack';
 import EditorLeaveDialog from './EditorLeaveDialog';
@@ -116,7 +118,7 @@ import EditorRefusalText from './EditorRefusalText';
 import { isDevHost } from '@/lib/isDevHost';
 import { devRecoverySelfTest } from '@/lib/editorRecovery';
 import { pixelsToPngDataUrl } from '@/lib/editorImage';
-import { DOWNLOAD_PNG_LABEL, DOWNLOAD_PNG_SHORT, downloadPngHint } from '@/lib/editorCopy';
+import { DOWNLOAD_PNG_LABEL, DOWNLOAD_PNG_SHORT, downloadPngHint, discardBrokenDraftText } from '@/lib/editorCopy';
 
 /** Module-scope so the dev self-test runs at most once per page load, even
  *  if the editor body remounts (e.g. Strict Mode double-invoke in dev). */
@@ -1794,6 +1796,20 @@ export default function PixelEditorBody({
   // iOS). The modal asks through its wrapper's confirm instead. The work is
   // already in the draft either way; this makes leaving a choice.
   const [leaveAsk, setLeaveAsk] = useState<null | { kind: 'back' } | { kind: 'dismiss' } | { kind: 'href'; href: string }>(null);
+  // What the leave question may promise (SB-25): it says the edits are
+  // saved only once the write of what is on screen has landed, so it asks
+  // for that write at once as it opens.
+  const leaveSaveState = useLeaveSaveState(draftKey);
+  // An Undo or Redo with the question open asks for a new write too (AUDIT
+  // data-loss r1, L7).
+  const leaveAsking = leaveAsk !== null;
+  useEffect(() => {
+    if (!leaveAsking) return;
+    flushEditorDraft(draftKey);
+    return useEditorStore.subscribe((s) => s.revision, () => flushEditorDraft(draftKey));
+  }, [leaveAsking, draftKey]);
+  // The broken-draft screen's Discard draft asks first (SB-04).
+  const [discardBrokenAsk, setDiscardBrokenAsk] = useState(false);
   const guardPage = layout === 'page' && isDirtyForGuard;
   const { rearm: rearmPageGuard, ownsTop: pageGuardOnTop } = useEditorHistoryGuard(guardPage, () => setLeaveAsk({ kind: 'back' }));
   // Going to another page: while the editor's own history entry is the
@@ -2352,12 +2368,19 @@ export default function PixelEditorBody({
                       landing banner offering the same broken draft — an
                       infinite loop with only the banner's Discard as exit. */}
                   {restore && onDiscardDraft && (
-                    <button
-                      onClick={onDiscardDraft}
-                      className="text-[10px] font-mono text-text-muted hover:text-text-primary cursor-pointer underline"
-                    >
-                      Discard draft
-                    </button>
+                    <>
+                      <button
+                        onClick={() => setDiscardBrokenAsk(true)}
+                        className="text-[10px] font-mono text-text-muted hover:text-text-primary cursor-pointer underline"
+                      >
+                        Discard draft
+                      </button>
+                      <DraftDiscardDialog
+                        text={discardBrokenAsk ? discardBrokenDraftText(frameWidth, frameHeight) : null}
+                        onKeep={() => setDiscardBrokenAsk(false)}
+                        onDiscard={() => { setDiscardBrokenAsk(false); onDiscardDraft(); }}
+                      />
+                    </>
                   )}
                 </div>
               </div>
@@ -2813,7 +2836,7 @@ export default function PixelEditorBody({
       </div>
     </div>
     {layout === 'page' && (
-      <EditorLeaveDialog open={leaveAsk !== null} onStay={stayInEditor} onLeave={leaveEditor} />
+      <EditorLeaveDialog open={leaveAsk !== null} saveState={leaveSaveState} onStay={stayInEditor} onLeave={leaveEditor} onDownload={doSaveAsDownload} />
     )}
     </>
   );

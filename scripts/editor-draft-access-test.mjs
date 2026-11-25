@@ -18,7 +18,8 @@
 // useEditorRecovery module and the real stores, are bundled with esbuild
 // into local/.editor-draft-access-test/ (gitignored) with react, its JSX
 // runtime, @clerk/react, next/navigation, the editor body, the page's
-// landing, the upload zone, react-hotkeys-hook, lucide-react, the Button
+// landing, the upload zone, react-hotkeys-hook, lucide-react, the Button,
+// the discard question (DraftDiscardDialog)
 // and @/lib/editorRecovery's IndexedDB store swapped for stand-ins written
 // there too. The stand-in store keeps drafts in memory and can hold a list,
 // an owner lookup or a load until the case lets it go. The stand-in React
@@ -187,6 +188,7 @@ const files = {
   'hotkeys.mjs': lines('export function HotkeysProvider(props) { return props.children; }'),
   'icons.mjs': lines(...['RotateCcw', 'UploadCloud', 'FilePlus', 'FolderOpen', 'Image', 'AlertCircle'].map((n) => `export function ${n}() { return null; }`)),
   'button.mjs': lines('export default function Button() { return null; }'),
+  'dialog.mjs': lines('export default function DraftDiscardDialog() { return null; }'),
   'landing.mjs': lines('export default function EditorLanding() { return null; }'),
   'body.mjs': lines('export default function PixelEditorBody() { return null; }'),
   'upload.mjs': lines('export default function UploadZone() { return null; }'),
@@ -201,6 +203,7 @@ const files = {
     `export { default as UploadZone } from ${JSON.stringify(path.join(DIR, 'upload.mjs'))};`,
     `export { useEditorStore } from ${JSON.stringify(path.join(ROOT, 'src/components/sprites/editorStore.ts'))};`,
     `export { default as Button } from ${JSON.stringify(path.join(DIR, 'button.mjs'))};`,
+    `export { default as DraftDiscardDialog } from ${JSON.stringify(path.join(DIR, 'dialog.mjs'))};`,
     `export { mount } from ${JSON.stringify(path.join(DIR, 'fake-react.mjs'))};`,
   ),
 };
@@ -210,6 +213,7 @@ const stubs = {
   '@clerk/react': 'clerk.mjs', 'next/navigation': 'navigation.mjs', 'react-hotkeys-hook': 'hotkeys.mjs',
   'lucide-react': 'icons.mjs', '@/components/ui/Button': 'button.mjs', '@/components/sprites/EditorLanding': 'landing.mjs',
   '@/components/sprites/PixelEditorBody': 'body.mjs', '@/lib/editorRecovery': 'recovery.mjs', './UploadZone': 'upload.mjs',
+  './DraftDiscardDialog': 'dialog.mjs',
 };
 globalThis.window = globalThis;
 globalThis.location = { hostname: 'localhost', pathname: '/editor' };
@@ -389,7 +393,29 @@ async function banner(user) {
   return c;
 }
 const restoreButton = (c) => (find(c.value, R.Button)[0] || { props: {} }).props.onClick;
-const discardButton = (c) => (find(c.value, 'button')[0] || { props: {} }).props.onClick;
+// Discard asks first (SB-04): a press of Discard, then, once the banner has
+// drawn the question, its answer Discard as that render drew it. The question
+// acts only on the draft it names (AUDIT data-loss r1, L6).
+const askDiscard = async (c) => {
+  (find(c.value, 'button')[0] || { props: { onClick: () => {} } }).props.onClick();
+  await settle();
+  return (find(c.value, R.DraftDiscardDialog)[0] || { props: {} }).props.onDiscard || (() => {});
+};
+const discardButton = (c) => async () => { const answer = await askDiscard(c); answer(); };
+{
+  world();
+  const c = await banner('user_a');
+  (find(c.value, 'button')[0] || { props: {} }).props.onClick();
+  await settle();
+  const asked = (find(c.value, R.DraftDiscardDialog)[0] || { props: {} }).props;
+  const askedText = asked.text;
+  asked.onKeep();
+  await settle();
+  const after = (find(c.value, R.DraftDiscardDialog)[0] || { props: {} }).props.text;
+  check("the banner's Discard alone deletes nothing: it asks, with the draft's size, and Keep draft keeps it (SB-04)",
+    typeof askedText === 'string' && askedText.startsWith(`8${String.fromCharCode(0xd7)}8 `) && after === null && db.manifests.has('modal:a1') && !db.log.some((e) => e[0] === 'delete'), { askedText, after, log: db.log });
+  c.unmountLayout(); c.unmountPassive();
+}
 {
   world();
   const c = await banner('user_a');
@@ -405,7 +431,7 @@ const discardButton = (c) => (find(c.value, 'button')[0] || { props: {} }).props
   world();
   const c = await banner('user_a');
   const restore = restoreButton(c);
-  const discard = discardButton(c);
+  const discard = await askDiscard(c);
   await switchTo(c, null);
   restore();
   discard();
@@ -423,7 +449,7 @@ const discardButton = (c) => (find(c.value, 'button')[0] || { props: {} }).props
   c.unmountLayout(); c.unmountPassive();
   world();
   const d = await banner('user_a');
-  discardButton(d)();
+  await discardButton(d)();
   await settle();
   check("for A, the banner's Restore hands A's draft to the Editor for A, and Discard deletes it",
     same(intent, { draftId: 'modal:a1', account: 'user_a' }) && !db.manifests.has('modal:a1'), { intent, log: db.log });
@@ -444,7 +470,7 @@ for (const passiveLater of [false, true]) {
   world();
   const c = await banner('user_a');
   db.hold.latest = true;
-  discardButton(c)();
+  await discardButton(c)();
   await settle();
   removeSignedOut(c, passiveLater);
   await release('latest');
@@ -467,7 +493,7 @@ for (const passiveLater of [false, true]) {
   world();
   const c = await banner('user_a');
   db.hold.latest = true;
-  discardButton(c)();
+  await discardButton(c)();
   restoreButton(c)();
   await settle();
   await switchTo(c, 'user_b');
@@ -503,7 +529,7 @@ for (const passiveLater of [false, true]) {
   world();
   const d = await banner('user_a');
   db.hold.latest = true;
-  discardButton(d)();
+  await discardButton(d)();
   await settle();
   await release('latest');
   check("with the banner still up, A's held Restore hands A's draft on and A's held Discard deletes it",
@@ -688,7 +714,7 @@ const fileOf = (name) => ({ name });
   const d = await banner('user_a');
   d.strictReplay();
   await settle();
-  discardButton(d)();
+  await discardButton(d)();
   await settle();
   const bannerDiscard = !db.manifests.has('modal:a1');
   d.unmountLayout(); d.unmountPassive();

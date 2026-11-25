@@ -5,18 +5,18 @@
 // which motion texts get a line, which do not, the words of the lines, and
 // the example text per action. Also pins what AnimateForm must keep, which
 // has no browser test here: the request is built exactly as it was before
-// Prompt help (ENG's condition for a display-only touch of a freeze file),
-// and the line never blocks Generate. Check D0 carries that condition
-// whole: with the display lines undone (the motion help, the background
-// advice in the drop zone, the 12 px lines), the form must be the freeze
-// baseline byte for byte: the file as it stood before Prompt help, with the
-// reviewed changes outside the regions noted at BASE_BLOB, git blob
-// BASE_BLOB. Each display region is pinned as it was reviewed. D0 cannot
-// say where a change outside the regions is: git diff does. After a
-// reviewed change to AnimateForm.tsx, MOTION_WORDS_PINS=1 prints the pins
-// as the file now stands; before any is copied in, compare the file with
-// the baseline yourself, because a new pin makes D0 pass whatever it was
-// given.
+// Prompt help (ENG's condition for a touch of a freeze file), and the line
+// never blocks Generate. D1 holds the callback that builds and sends the
+// request, byte for byte, and D22 and D23 hold, each by its own hash, the
+// parts that make the picture sent and finish the job (the decoder, the
+// encoder, the poll and its effects, the gate, Use This, and Auto-Prep's
+// two stages and its accept), as they were before G4. D0 only says the form
+// changed: since G4 moved its blocks (HQ 2026-11-18-051) its baseline is
+// G4's reviewed file, git blob BASE_BLOB, so any later change to
+// AnimateForm.tsx fails D0 until it is reviewed and the new blob is pinned.
+// MOTION_WORDS_PINS=1 prints the blob as the file now stands; compare the
+// file with the baseline yourself first, because a new pin makes D0 pass
+// whatever it was given.
 // Run from the repo root: `node scripts/motion-words-test.mjs`. Bundles with
 // esbuild into local/.motion-words-test/ (gitignored). Prints only case names
 // and pass or fail.
@@ -37,7 +37,7 @@ await build({
   alias: { '@': path.join(ROOT, 'src') },
 });
 const {
-  motionCatch, motionPlaceholder, motionLabel, directionLine, directionsLine, MOTION_HELP, MOTION_CATCH_DELAY_MS,
+  motionCatch, motionPlaceholder, motionLabel, directionsLine, motionLine, askedFacing, SIDE_LINE, LEFT_LINE, MOTION_HELP, MOTION_CATCH_DELAY_MS,
   MOTION_SPEAK_AGAIN_MS, MOTION_SPOKEN_CLEAR_MS, DIRECTION_ACTIONS, LOOSE_DIRECTIONS_ACTIONS, PAIR_QUIET_ACTIONS, SEEN_FROM_ACTIONS, SIDE_VIEW_STYLE_ID, FOUR_ANGLE_STYLE_ID,
   FORWARD_ACTIONS, TURN_ACTIONS,
 } = await import(pathToFileURL(path.join(OUT_DIR, 'motionWords.mjs')).href);
@@ -213,18 +213,43 @@ const all = (texts, action, want) => { const got = caught(texts, action); return
     'Required: what it does, e.g. waving hello',
   ]));
   check('C2: no example invites a direction', EVERY_ACTION.every((a) => motionCatch(motionPlaceholder(a), a) === null));
-  check('C3: the label says optional or required, with a comma, no dash', motionLabel(false) === 'Motion description (optional, less is more)' && motionLabel(true) === 'Motion description (required)');
+  check('C3: the label is the step\'s name, optional or required for Custom Action (generate-pass.md 4.3)', motionLabel(false) === 'How it moves (optional)' && motionLabel(true) === 'How it moves (required for Custom Action)');
   check('C4: the help line', MOTION_HELP === 'Say how it moves, not which way. The way it faces comes from the picture.');
-  const coin = String.fromCodePoint(0x1FA99), nbsp = String.fromCharCode(0xA0);
-  check('C5: the direction line says what to do on Create, with the style, its cost and the words to start the description with', directionLine('Platformer', 40) === `The animation keeps the way your character faces, so direction words in the motion box are ignored. To walk sideways, make a side view first: on Create, pick Platformer${nbsp}(40${nbsp}${coin}) and start your description with "facing right, side view, full body".`);
-  check('C6: the directions line says to make a picture for each direction, and that the 4-direction style draws a new character', directionsLine('4-Angle Walking', 25) === `One animation makes one direction. For each other direction, make a picture of your character facing that way and animate it. For a new character walking 4 ways, 4-Angle Walking on Create${nbsp}(25${nbsp}${coin}) draws all four from a description.`);
-  check('C7: both lines carry the name and the cost they are given; the cost stays with its coin and with the word before it', directionLine('Top-Down', 7).includes(`pick Top-Down${nbsp}(7${nbsp}${coin}) and`) && directionsLine('Walk Sheet', 9).includes(`Walk Sheet on Create${nbsp}(9${nbsp}${coin}) draws`) && !/ \(/.test(directionLine('x', 1) + directionsLine('x', 1)));
+  // The lines and their buttons (generate-pass.md 4.2, G4).
+  const IGNORED = 'The animation keeps the way your character faces, so direction words in the motion box are ignored.';
+  check('C5: the lines\' words: the side line, the left line (no button before G3), the many-directions line (its cost follows, shown with the coin)', SIDE_LINE === `${IGNORED} To walk sideways, start from a side view.` && LEFT_LINE === `${IGNORED} Walks face the way your picture does.` && directionsLine('4-Angle Walking') === 'One animation makes one direction. For each other direction, make a picture of your character facing that way and animate it. For a new character walking 4 ways, 4-Angle Walking draws all four from a description');
+  const ml = (caught, text, facing = null, four = '4-Angle Walking') => { const l = motionLine(caught, text, facing, four); return l === null ? null : `${l.kind}/${l.button}`; };
+  const lineCases = [
+    // [catch, text, facing, want]
+    ['directions', 'walk in all 4 directions', null, 'directions/four-angle'],
+    [null, 'heavy steps', null, null],
+    ['direction', 'walks to the right', null, 'side/side-view'],
+    ['direction', 'walks north', null, 'side/side-view'],
+    ['direction', 'walks left', null, 'left/null'],
+    ['direction', 'walking leftward slowly', null, 'left/null'],
+    ['direction', 'walk to the left', null, 'left/null'],
+    ['direction', 'walks to the right', 'right', null],
+    ['direction', 'walks left', 'left', null],
+    ['direction', 'walks left', 'right', 'left/null'],
+    ['direction', 'walks to the right', 'left', 'side/side-view'],
+    ['direction', 'walks toward the camera', 'front', null],
+    ['direction', 'walks toward the camera', 'right', 'side/side-view'],
+    ['direction', 'walks north', 'right', 'side/side-view'],
+    ['direction', 'swings the left arm and walks right', 'right', null],
+    ['direction', 'walks left then right', 'right', 'side/side-view'],
+  ];
+  const lineWrong = lineCases.filter(([c, t, f, want]) => ml(c, t, f) !== want).map(([c, t, f, want]) => `${c} "${t}" ${f}: ${ml(c, t, f)}, want ${want}`);
+  check('C6: each catch gets its line and button; a handed-over facing quiets the line for that same facing; left words get the left line; a side of the body is not a facing', lineWrong.length === 0, lineWrong);
+  check('C7: with no 4-direction style there is no many-directions line; the line takes the name it is given', motionLine('directions', 'all 4 directions', null, null) === null && motionLine('directions', 'all 4 directions', null, 'Walk Sheet').text.includes('Walk Sheet draws all four'));
   const side = getStyleById(SIDE_VIEW_STYLE_ID), four = getStyleById(FOUR_ANGLE_STYLE_ID);
   check('C8: both styles are in the registry, with a name and a cost, and Create offers them', !!side && !!four && side.label === 'Platformer' && four.label === '4-Angle Walking' && side.tokenCost > 0 && four.tokenCost > 0 && OFFERED_STYLES.includes(side) && OFFERED_STYLES.includes(four), [side?.label, four?.label]);
   const dash = String.fromCharCode(0x2014);
-  check('C9: no em dash in any string', ![MOTION_HELP, motionLabel(true), motionLabel(false), directionLine('x', 1), directionsLine('x', 1), ...EVERY_ACTION.map(motionPlaceholder)].some((t) => t.includes(dash)));
+  check('C9: no em dash in any string', ![MOTION_HELP, motionLabel(true), motionLabel(false), SIDE_LINE, LEFT_LINE, directionsLine('x'), ...EVERY_ACTION.map(motionPlaceholder)].some((t) => t.includes(dash)));
   check('C10: the line waits a moment after the last key; a line that comes back is said again only after a real gap', MOTION_CATCH_DELAY_MS === 400 && MOTION_SPEAK_AGAIN_MS === 3000 && MOTION_SPOKEN_CLEAR_MS === 1000 && MOTION_SPEAK_AGAIN_MS > 4 * MOTION_CATCH_DELAY_MS);
-  check('C11: neither line names a control Create does not have yet', !/Side, facing right/.test(directionLine('Platformer', 40) + directionsLine('4-Angle Walking', 25)));
+  check('C11: no line names a control Create does not have, or sends the person to type words', !/Side, facing right|on Create, pick|start your description/.test(SIDE_LINE + LEFT_LINE + directionsLine('4-Angle Walking')));
+  const facingCases = [['walks right', 'right'], ['walks to the left', 'left'], ['leftwards', 'left'], ['walks toward the camera', 'front'], ['walks north', null], ['left arm swings, walks on', null], ['left and right', null], ['RIGHT', 'right']];
+  const facingWrong = facingCases.filter(([t, want]) => askedFacing(t) !== want).map(([t, want]) => `${t}: ${askedFacing(t)}, want ${want}`);
+  check('C12: the facing a text asks for: right, left or front, or none; a side of the body asks for none', facingWrong.length === 0, facingWrong);
 }
 
 // ---- D. the form (source) ----
@@ -242,346 +267,22 @@ const all = (texts, action, want) => { const got = caught(texts, action); return
   // baseline has there. Undoing every region must give the baseline, byte
   // for byte (its git blob). So a change anywhere outside the regions fails
   // here, and so does a change inside one.
-  // Re-pinned for ENG's provider-error swap (HQ 2026-11-17-029, -033, -155; AUDIT rd-swap-r1
-  // M1). Three changes, all outside every display region: the generationPause import names
-  // isUpstreamFailure and providerFailureMessage; the poll effect's five-line check is one
-  // line calling isUpstreamFailure; and its failure words come from providerFailureMessage.
-  // So BASE_BLOB is no longer a committed blob: it is the file before Prompt help with those
-  // three changes. Before them: e2eb4625e398df77ca094991d780c282fd04d2bd, the file at the freeze.
-  const BASE_BLOB = '0a72086f9c364f292d2a2d43c74652b6f4b32c68';
-  const REGIONS = [
-    {
-      start: "import { useState, useCallback, useRef, useEffect, useId, useMemo } from 'react';",
-      end: "import { useState, useCallback, useRef, useEffect, useId, useMemo } from 'react';",
-      sha256: 'dfb9848df744d9ee875572252e30494deb44dd801c122a71fbbc5477555c2a31',
-      was: [
-        "import { useState, useCallback, useRef, useEffect, useMemo } from 'react';",
-      ],
-    },
-    {
-      start: "  Info,",
-      end: "  Info,",
-      sha256: 'c8b2e8a4b9a0a529af145e19bfdd934b49469f7e1fc815ec77da0af2bcf06479',
-      was: [],
-    },
-    {
-      start: "  getStyleById,",
-      end: "  getStyleById,",
-      sha256: '045365f369ea0160bc82f314747bb5baeea27ec4805d1da2dcadc92ac6155731',
-      was: [],
-    },
-    {
-      start: "} from '@/lib/styleRegistry';",
-      end: "} from '@/lib/motionWords';",
-      sha256: '1ffcd15af387683bcba41000dfbbb36e72034102001cd6a2a85de5cc51d3502d',
-      was: [
-        "} from '@/lib/styleRegistry';",
-      ],
-    },
-    {
-      start: "  const isCustomAction = selectedAction === 'custom_action';",
-      end: "  }, [motionSpoken]);",
-      sha256: 'dfbd680f0080e21330b27c68f606cc9eed6c319653ce5154e1e0e74728a1c482',
-      was: [
-        "  const isCustomAction = selectedAction === 'custom_action';",
-      ],
-    },
-    {
-      start: "            {/* Under 480 px the text takes a row of its own under the",
-      end: "            <div className=\"flex flex-wrap items-start gap-4\">",
-      sha256: 'e79346d50a2688e434db6aed8177bd7e4818222d7262d5c8f9bbbbd5ec89e3d1',
-      was: [
-        "            <div className=\"flex items-start gap-4\">",
-      ],
-    },
-    {
-      start: "              <div className=\"flex-1 min-w-0 max-[480px]:order-last max-[480px]:basis-full\">",
-      end: "              <div className=\"flex-1 min-w-0 max-[480px]:order-last max-[480px]:basis-full\">",
-      sha256: 'e33655d5636d17f3fedc51c95267038134cb422dc758264ae4328903eef5f6f0',
-      was: [
-        "              <div className=\"flex-1 min-w-0\">",
-      ],
-    },
-    {
-      start: "                <p className=\"text-xs font-mono text-text-secondary mt-1\">",
-      end: "                <p className=\"text-xs font-mono text-text-secondary mt-1\">",
-      sha256: '1035d31e76daa4c85cf1a121a24878da5fb5ddbb230bd3eef7abce8de1afa1af',
-      was: [
-        "                <p className=\"text-[10px] font-mono text-text-muted mt-1\">",
-      ],
-    },
-    {
-      start: "                  <p className=\"text-xs font-mono text-red-400 mt-1\">",
-      end: "                  <p className=\"text-xs font-mono text-red-400 mt-1\">",
-      sha256: '8c13ae29286b02b8e0fdfa64d1706b9c48767f32db4303c40c2fc0a5222a67fc',
-      was: [
-        "                  <p className=\"text-[10px] font-mono text-red-400 mt-1\">",
-      ],
-    },
-    {
-      start: "                  <p className=\"text-xs font-mono text-green-400 mt-1\">",
-      end: "                  <p className=\"text-xs font-mono text-green-400 mt-1\">",
-      sha256: '8b905396446eccbc22d6590f197e46d28028d6f0638dabf0da2d074196b85a7f',
-      was: [
-        "                  <p className=\"text-[10px] font-mono text-green-400 mt-1\">",
-      ],
-    },
-    {
-      start: "                className=\"ml-auto flex-shrink-0 p-1.5 rounded text-text-secondary hover:text-text-primary hover:bg-bg-hover cursor-pointer\"",
-      end: "                className=\"ml-auto flex-shrink-0 p-1.5 rounded text-text-secondary hover:text-text-primary hover:bg-bg-hover cursor-pointer\"",
-      sha256: '5908c9499982f5e55e110d4849ff78e1803223cf2726653aa444065f6de8254a',
-      was: [
-        "                className=\"flex-shrink-0 p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer\"",
-      ],
-    },
-    {
-      start: "              <UploadCloud size={28} className=\"text-text-secondary\" />",
-      end: "              <UploadCloud size={28} className=\"text-text-secondary\" />",
-      sha256: '6d80791ceac22ca7f9c6bda2f327975a6aa4cde8fca3ed23165fcad06a9a8076',
-      was: [
-        "              <UploadCloud size={28} className=\"text-text-muted\" />",
-      ],
-    },
-    {
-      start: "            <p className=\"text-sm font-mono text-text-secondary text-center mb-1\">",
-      end: "            <p className=\"text-sm font-mono text-text-secondary text-center mb-1\">",
-      sha256: '520c73147fe8ff2dbb27bed8f8891e26374d393d8605cbdae4336802bd5bc3aa',
-      was: [
-        "            <p className=\"text-sm font-mono text-text-secondary mb-1\">",
-      ],
-    },
-    {
-      start: "            <p className=\"text-xs font-mono text-text-secondary text-center text-balance mb-1\">",
-      end: "            <p className=\"text-xs font-mono text-text-secondary text-center mb-3\">",
-      sha256: '4d75e769b8d9c51b6eeef183b80382f75fac1ab87e1e9fd20895da09c93beece',
-      was: [
-        "            <p className=\"text-[10px] font-mono text-text-muted mb-3\">",
-      ],
-    },
-    {
-      start: "            <Lock size={12} className=\"text-text-secondary\" />",
-      end: "            <Lock size={12} className=\"text-text-secondary\" />",
-      sha256: '91cb36edc367ac48142c2a952e4ac5efa49e48d12e2c4180db57daf3f2348f87',
-      was: [
-        "            <Lock size={12} className=\"text-text-muted\" />",
-      ],
-    },
-    {
-      start: "            <span className=\"text-[10px] text-text-secondary\">(locked for this style by Retro Diffusion)</span>",
-      end: "            <span className=\"text-[10px] text-text-secondary\">(locked for this style by Retro Diffusion)</span>",
-      sha256: '39be069a1547550e5bec833dc13b2dcd585289dd7bd03ca2b66a1af33e1859e2',
-      was: [
-        "            <span className=\"text-[10px] text-text-muted\">(locked for this style by Retro Diffusion)</span>",
-      ],
-    },
-    {
-      start: "                {res}",
-      end: "        <p className=\"text-[9px] font-mono text-text-secondary mt-1\">",
-      sha256: '2b582d35db7fb3a9c1ef8b4c552c03806387360d5fff221c41eccb32e83fffe4',
-      was: [
-        "                {res}",
-        "              </button>",
-        "            ))}",
-        "          </div>",
-        "        )}",
-        "        <p className=\"text-[9px] font-mono text-text-muted/70 mt-1\">",
-      ],
-    },
-    {
-      start: "          <p className=\"text-[9px] font-mono text-text-secondary mt-1\">",
-      end: "          <p className=\"text-[9px] font-mono text-text-secondary mt-1\">",
-      sha256: 'ba0d31d816c1795208d48f2b1e01facfc637d0b7b268e79f4b7890c041ebda83',
-      was: [
-        "          <p className=\"text-[9px] font-mono text-text-muted/70 mt-1\">",
-      ],
-    },
-    {
-      start: "          <p className=\"text-[10px] font-mono text-text-secondary mb-2\">",
-      end: "          <p className=\"text-[10px] font-mono text-text-secondary mb-2\">",
-      sha256: '0996b833a2c63af2d8ab4048de195c9137dbe64d80471ce64272799682a439c2',
-      was: [
-        "          <p className=\"text-[10px] font-mono text-text-muted/70 mb-2\">",
-      ],
-    },
-    {
-      start: "                  className=\"px-1.5 py-1 text-text-secondary hover:text-red-400 cursor-pointer border-l border-border-subtle\"",
-      end: "                  className=\"px-1.5 py-1 text-text-secondary hover:text-red-400 cursor-pointer border-l border-border-subtle\"",
-      sha256: '213b23369747729e52ece1cce2ef8dfc7629c916f73245a66c6e14e25600f535',
-      was: [
-        "                  className=\"px-1.5 py-1 text-text-muted hover:text-red-400 cursor-pointer border-l border-border-subtle\"",
-      ],
-    },
-    {
-      start: "                text-[11px] font-mono text-text-primary placeholder:text-text-secondary",
-      end: "                text-[11px] font-mono text-text-primary placeholder:text-text-secondary",
-      sha256: '19e2934fd943e5023a4419e64cc79f702edce5c83e7981666acbcee3b7ce0e7e',
-      was: [
-        "                text-[11px] font-mono text-text-primary placeholder:text-text-muted",
-      ],
-    },
-    {
-      start: "              className=\"p-1 text-text-secondary hover:text-text-primary cursor-pointer\"",
-      end: "              className=\"p-1 text-text-secondary hover:text-text-primary cursor-pointer\"",
-      sha256: '372d42bfa6eac2e03bd01ee3114b421040388ecd507929c2ab29fea4d0b53c7f',
-      was: [
-        "              className=\"p-1 text-text-muted hover:text-text-primary cursor-pointer\"",
-      ],
-    },
-    {
-      start: "                  <span className={`ml-auto text-[9px] font-mono ${active ? 'text-text-primary' : 'text-text-secondary'}`}>{actionCost} \ud83e\ude99</span>",
-      end: "                  <span className={`ml-auto text-[9px] font-mono ${active ? 'text-text-primary' : 'text-text-secondary'}`}>{actionCost} \ud83e\ude99</span>",
-      sha256: '7b5124e55b575732f91667ddb15ef64b4d362f1dcf6fe9b8db92e485bec50401',
-      was: [
-        "                  <span className=\"ml-auto text-[9px] font-mono text-text-muted\">{actionCost} \ud83e\ude99</span>",
-      ],
-    },
-    {
-      start: "                <p className={`text-[10px] font-mono ${active ? 'text-text-primary' : 'text-text-secondary'}`}>{action.desc}</p>",
-      end: "                <p className={`text-[10px] font-mono ${active ? 'text-text-primary' : 'text-text-secondary'}`}>{action.desc}</p>",
-      sha256: 'bf21b6e5aff254ec77a76e4e94fb83135e55f093f011dff0240948c5f2e80541',
-      was: [
-        "                <p className=\"text-[10px] font-mono text-text-muted\">{action.desc}</p>",
-      ],
-    },
-    {
-      start: "        <label className=\"block text-[10px] font-mono text-text-secondary mb-2\">",
-      end: "        <label className=\"block text-[10px] font-mono text-text-secondary mb-2\">",
-      sha256: '6262354ac82c38533bb35bc9aa5e0b847d16009dbcd46061fdbb97e2c37f0008',
-      was: [
-        "        <label className=\"block text-[10px] font-mono text-text-muted mb-2\">",
-      ],
-    },
-    {
-      start: "          ))}",
-      end: "        <p className=\"text-[9px] font-mono text-text-secondary mt-1\">",
-      sha256: '3840216a96b1fc265d9e48a84b809ca5c34e59129322fa1fde3ceb3414edc003',
-      was: [
-        "          ))}",
-        "        </div>",
-        "        <p className=\"text-[9px] font-mono text-text-muted mt-1\">",
-      ],
-    },
-    {
-      start: "      {/* Motion prompt. \"relative\" keeps the hidden read-out paragraph inside",
-      end: "          {motionLabel(isCustomAction)}",
-      sha256: '73ef43cc9bc4f516194f0916773ea46ef7aefe167061e350c4318c8e9cdb4b4d',
-      was: [
-        "      {/* Motion prompt */}",
-        "      <div>",
-        "        <label className=\"block text-[10px] font-mono text-text-muted mb-1\">",
-        "          Motion description {isCustomAction ? '(required)' : '(optional \u2014 less is more)'}",
-      ],
-    },
-    {
-      start: "          id={motionBoxId}",
-      end: "          id={motionBoxId}",
-      sha256: 'e7248fdc31ed04d1872032b848e28452fb1cd047d9f12383c8b9a4d4d60511f9',
-      was: [],
-    },
-    {
-      start: "          onChange={(e) => {",
-      end: "          aria-required={isCustomAction}",
-      sha256: 'b40c2d272b26028ab3fa2a52c8e0ca246b8b5ecc3a2e77eec192ca427e8ee25e',
-      was: [
-        "          onChange={(e) => setMotionPrompt(e.target.value)}",
-        "          placeholder=\"Keep short (2-4 words) or leave blank. e.g., walking forward, sword swing\"",
-      ],
-    },
-    {
-      start: "            text-xs font-mono text-text-primary placeholder:text-text-secondary resize-none",
-      end: "            max-[340px]:min-h-[calc(3lh+1rem+2px)]\"",
-      sha256: '1b45b263354e183f5edff22ce5d70e9b8c0cbc1137de42062d439eb3a0a3dc7a',
-      was: [
-        "            text-xs font-mono text-text-primary placeholder:text-text-muted resize-none",
-        "            focus:outline-none focus:border-accent-amber\"",
-      ],
-    },
-    {
-      start: "        <p id={motionHelpId} className=\"text-xs font-mono text-text-secondary mt-1\">",
-      end: "          {MOTION_HELP}",
-      sha256: 'ae9d561cacf750db5456ea0b0c32f8d53cf3d3d70e78ac1ebff320b49b1ef480',
-      was: [
-        "        <p className=\"text-[9px] font-mono text-text-muted/70 mt-1\">",
-        "          For best character fidelity, leave blank or use minimal descriptions.",
-        "          Detailed prompts may alter your character&apos;s appearance.",
-      ],
-    },
-    {
-      start: "        {/* The line. Empty when the text asks for nothing an animation cannot",
-      end: "          )}",
-      sha256: 'ee0d1a2e5f3cd7a7d5daaacf3f87ac462f738bb54378ab04ab01bfd6a824048a',
-      was: [
-        "      </div>",
-        "",
-        "      {/* Note about constraints */}",
-        "      <div className=\"text-[9px] font-mono text-text-muted/70 border-t border-border-subtle pt-3 space-y-1\">",
-        "        <p>",
-        "          Generates a single-direction sprite strip \u2014 generate separately for each",
-        "          direction if you need a full 4-direction sheet.",
-      ],
-    },
-    {
-      start: "        {/* Always in the page, so a screen reader hears a new line once. */}",
-      end: "          {motionSpoken}",
-      sha256: 'be0b21c0618fb83337fce8a6d47a824d414735d89204d07c289418ccd7c49987',
-      was: [
-        "        <p>",
-        "          For best results, your character should be on a solid color background",
-        "          that contrasts with the character.",
-      ],
-    },
-    {
-      start: "          <p className=\"text-[10px] font-mono text-text-secondary\">",
-      end: "          <p className=\"text-[10px] font-mono text-text-secondary\">",
-      sha256: 'a408cd5c69367e576aace6d995c5458f2a93a889cc220ff622f04a5a6887161e',
-      was: [
-        "          <p className=\"text-[10px] font-mono text-text-muted\">",
-      ],
-    },
-    {
-      // DESIGN, room 2026-11-15-091: the Resolution note's em dash is a full stop.
-      start: "            : 'Larger = more detail. Cost is flat per generation. No resolution surcharge.'}",
-      end: "            : 'Larger = more detail. Cost is flat per generation. No resolution surcharge.'}",
-      sha256: '813ef0a729ca42713209588546ad0118b708c0c4d956fd0265545c9267c596a2',
-      was: [
-        "            : 'Larger = more detail. Cost is flat per generation \u2014 no resolution surcharge.'}",
-      ],
-    },
-    {
-      // HQ 2026-11-17-172, -194 (REV-M1): the Buy Tokens button under the form's error shows on "top up" in any case, as on Create.
-      start: "          {/* Case-blind, as on Create: the free-tier cap's message reads \"Top up\" (REV 2026-11-17-006, H1; REV-M1, 2026-11-17-012). */}",
-      end: "          {/top up/i.test(generationError) && (",
-      sha256: '91c5cb0a445be4547bd8877e9c210216f1ad7b18abed98b6f964bc853187a9f6',
-      was: [
-        "          {generationError.includes('top up') && (",
-      ],
-    },
-    {
-      // Em dash list rows 28 to 30 (HQ 2026-11-15-111, word for word; HQ 2026-11-17-219): the template error, the failure fallback and the free-tier cap.
-      start: "      setTemplateError(\"Couldn't save template. Storage may be full.\");",
-      end: "      setTemplateError(\"Couldn't save template. Storage may be full.\");",
-      sha256: '945c21af91b59b6e19dcb1f0020427d924deba93c59faa8b6b458aa7bacd8704',
-      was: [
-        "      setTemplateError(\"Couldn't save template \u2014 storage may be full.\");",
-      ],
-    },
-    {
-      start: "        setGenerationError(String(data.error ?? 'Animation failed. Try again.'));",
-      end: "        setGenerationError(String(data.error ?? 'Animation failed. Try again.'));",
-      sha256: '2a7f64b7f2e38de8d513999e3d09ec0462d2a8d612ff41afad879a15be637d99',
-      was: [
-        "        setGenerationError(String(data.error ?? 'Animation failed \u2014 try again.'));",
-      ],
-    },
-    {
-      start: "          `You've used all free ${tierLabel} generations on this account. Token packs start at $4.99. Top up to keep brewing.`",
-      end: "          `You've used all free ${tierLabel} generations on this account. Token packs start at $4.99. Top up to keep brewing.`",
-      sha256: '9051545ac6072972661a5409292d46397617e63b76ee1eb24a7269104950a458',
-      was: [
-        "          `You've used all free ${tierLabel} generations on this account. Token packs start at $4.99 \u2014 top up to keep brewing.`",
-      ],
-    },
-  ];
+  // Re-baselined for G4 (design/generate-pass/generate-pass.md 4 and 5.3): G4
+  // moves whole blocks of the form, so its display lines can no longer be
+  // undone one by one. In their place, as HQ ruled (room 2026-11-18-051, with
+  // ENG's -054 adding no condition): D1 holds the request callback and D22
+  // and D23 the parts around it, each byte for byte as before G4; G4's
+  // request body was compared with the one before in a browser (BUILD-2 and
+  // AUDIT, outside this repository); and the baseline here is G4's reviewed
+  // file, with no regions, so any later change to the form fails D0 until it
+  // is reviewed and pinned. D0 alone holds nothing else.
+  // G4 round 1 was 9a77281b79cb8dc50279960f4e054a1914b3ef78; round 2 (AUDIT
+  // g4-animate-r1's fixes) is the blob below.
+  // Before G4: 0a72086f9c364f292d2a2d43c74652b6f4b32c68 (the file at the freeze
+  // e2eb4625e398df77ca094991d780c282fd04d2bd, with the rd_ swap's three changes
+  // and the display regions of Prompt help, REV-M1 and the em dash rows).
+  const BASE_BLOB = 'e8265dece26b7b751696d4e4d2d6c9d997e63724';
+  const REGIONS = [];
   const sha256 = (t) => createHash('sha256').update(t).digest('hex');
   const gitBlob = (t) => { const b = Buffer.from(t, 'utf8'); return createHash('sha1').update(`blob ${b.length}\0`).update(b).digest('hex'); };
   const lines = raw.split('\n');
@@ -600,7 +301,7 @@ const all = (texts, action, want) => { const got = caught(texts, action); return
   const undone = gitBlob(lines.join('\n'));
   if (undone !== BASE_BLOB) wrong.push(`with the display lines undone the file is blob ${undone}, not the baseline`);
   if (process.env.MOTION_WORDS_PINS) console.log(`pins  ${JSON.stringify({ regions: pins, undone })}`);
-  check('D0: with the display lines undone, the form is the freeze baseline byte for byte, and each display region is as reviewed', wrong.length === 0, wrong);
+  check('D0: the form is the freeze baseline byte for byte (G4\'s reviewed file; HQ 2026-11-18-051)', wrong.length === 0, wrong);
 
   // The whole callback that builds and sends the request, byte for byte as
   // in the baseline (the blob BASE_BLOB), once its two shown messages are put
@@ -641,15 +342,20 @@ const all = (texts, action, want) => { const got = caught(texts, action); return
     }, [motionPrompt, selectedAction, motionWaits]);
     const motionText = motionWaits ? motionSettled.text : motionPrompt;
     const motionCaught = motionCatch(motionText, selectedAction);`) && !/motion(?:Caught|Settled|Spoken|Line|Text|Keys|Seen|Waits)/.test(raw.slice(a, b)) && (src.match(/setMotionSettled\(/g) ?? []).length === 1 && (src.match(/setMotionSeen\(/g) ?? []).length === 1);
-  check('D4: the right line for each catch, its names and costs from the registry', /const sideViewStyle = getStyleById\(SIDE_VIEW_STYLE_ID\);\s*const fourAngleStyle = getStyleById\(FOUR_ANGLE_STYLE_ID\);\s*const motionCaughtLine =\s*motionCaught === 'directions' && fourAngleStyle\s*\? directionsLine\(fourAngleStyle\.label, fourAngleStyle\.tokenCost\)\s*: motionCaught === 'direction' && sideViewStyle\s*\? directionLine\(sideViewStyle\.label, sideViewStyle\.tokenCost\)\s*: null;/.test(src));
-  check('D5: the box has its own id, its label and example from the library, the help line as its description, and says when it is required', /const motionBoxId = useId\(\);\s*const motionHelpId = useId\(\);/.test(src) && /<label htmlFor=\{motionBoxId\} className="block text-xs font-mono text-text-secondary mb-1">\s*\{motionLabel\(isCustomAction\)\}/.test(src) && /<textarea\s*id=\{motionBoxId\}/.test(src) && /placeholder=\{motionPlaceholder\(selectedAction\)\}\s*aria-describedby=\{motionHelpId\}\s*aria-required=\{isCustomAction\}/.test(src) && /<p id=\{motionHelpId\} className="text-xs font-mono text-text-secondary mt-1">\s*\{MOTION_HELP\}/.test(src));
-  check('D6: the line is amber, 12 px, with an icon a screen reader skips, in a paragraph that is always in the page', /<p\s*ref=\{motionLineRef\}\s*style=\{motionLineRoom > 0 \? \{ minHeight: motionLineRoom \} : undefined\}\s*className="text-xs font-mono text-accent-amber"\s*>\s*\{motionCaughtLine !== null && \(\s*<span className="pt-1 flex items-start gap-1\.5">\s*<Info size=\{14\} className="mt-0\.5 shrink-0" aria-hidden="true" \/>\s*<span>\{motionCaughtLine\}<\/span>/.test(src));
+  check('D4: the line and its button for each catch (G4, generate-pass.md 4.2): motionLine with the handed-over facing and the 4-direction style\'s name from the registry; the read-out carries its cost with the unit', /const sideViewStyle = getStyleById\(SIDE_VIEW_STYLE_ID\);\s*const fourAngleStyle = getStyleById\(FOUR_ANGLE_STYLE_ID\);/.test(src) && /const motionLineNow = sideViewStyle\s*\? motionLine\(motionCaught, motionText, handoffFacing, fourAngleStyle\?\.label \?\? null\)\s*: null;/.test(src) && /\? `\$\{motionLineNow\.text\} \(\$\{fourAngleStyle\.tokenCost\} tokens\)\.`/.test(src) && /requestCreate\(\{ card: 'side', subject: handoffSubject \}\)/.test(src) && /requestTextAnimation\(\{ styleId: FOUR_ANGLE_STYLE_ID, subject: handoffSubject \}\)/.test(src));
+  check('D5: the box has its own id, its label (step 3) and example from the library, the help line as its description, and says when it is required', /const motionBoxId = useId\(\);\s*const motionHelpId = useId\(\);/.test(src) && /<StepLabel n=\{3\} state=\{stepState\(3\)\} htmlFor=\{motionBoxId\} className="mb-1">\s*\{motionLabel\(isCustomAction\)\}\s*<\/StepLabel>/.test(src) && /<textarea\s*id=\{motionBoxId\}/.test(src) && /placeholder=\{motionPlaceholder\(selectedAction\)\}\s*aria-describedby=\{motionHelpId\}\s*aria-required=\{isCustomAction\}/.test(src) && /<p id=\{motionHelpId\} className="text-xs font-mono text-text-secondary mt-1">\s*\{MOTION_HELP\}/.test(src));
+  check('D6: the line is a 12 px box in the primary colour on amber, with its button, inside a block that is always in the page; "Make a side view" only once Create Sprite takes its request (G2; AUDIT g4-animate-r1 M3)', /<div\s*ref=\{motionLineRef\}\s*style=\{motionLineRoom > 0 \? \{ minHeight: motionLineRoom \} : undefined\}\s*>\s*\{motionLineNow !== null && \(\s*<div className="mt-2 rounded-lg border border-accent-amber\/50 bg-accent-amber\/10 p-3 space-y-3">\s*<p className="text-xs font-mono text-text-primary">\s*\{motionLineNow\.text\}/.test(src) && /motionLineNow\.button === 'side-view' && SIDE_VIEW_REQUEST_TAKEN && \(\s*<Button type="button" variant="secondary" size="sm" onClick=\{handleMakeSideView\} className="pointer-coarse:min-h-11">[\s\S]{0,80}Make a side view/.test(src) && /motionLineNow\.button === 'four-angle' && \(\s*<Button type="button" variant="secondary" size="sm" onClick=\{handleOpenFourAngle\} className="pointer-coarse:min-h-11">[\s\S]{0,80}Open 4-Angle Walking/.test(src));
   check('D7: the old example and the two small lines are gone', !/walking forward, sword swing/.test(raw) && !/For best character fidelity/.test(raw) && !/less is more\)'\}/.test(raw));
-  const block = src.slice(src.indexOf('<label htmlFor={motionBoxId}'), src.indexOf('{motionSpoken}'));
-  check('D8: nothing in the motion block is under 12 px: its label, box, help line and line are each 12 px, and no size is written in pixels', block.length > 200 && !/text-\[[^\]]*\]/.test(block) && !/text-(?:2xs|\[)/.test(block) && (block.match(/text-xs/g) ?? []).length >= 4 && /<label htmlFor=\{motionBoxId\} className="block text-xs /.test(block) && /text-xs font-mono text-text-primary placeholder:text-text-secondary/.test(block) && /<p id=\{motionHelpId\} className="text-xs /.test(block) && /className="text-xs font-mono text-accent-amber"/.test(block));
+  const block = src.slice(src.indexOf('<StepLabel n={3}'), src.indexOf('{motionSpoken}'));
+  check('D8: nothing in the motion block is under 12 px: its label (StepLabel, 12 px), box, help line and line are each 12 px, and no size is written in pixels', block.length > 200 && !/text-\[[^\]]*\]/.test(block) && !/text-(?:2xs|\[)/.test(block) && (block.match(/text-xs/g) ?? []).length >= 3 && /function StepLabel\([\s\S]{0,900}className=\{`flex items-center gap-2 text-xs font-mono text-text-secondary/.test(src) && /text-xs font-mono text-text-primary placeholder:text-text-secondary/.test(block) && /<p id=\{motionHelpId\} className="text-xs /.test(block) && /<p className="text-xs font-mono text-text-primary">\s*\{motionLineNow\.text\}/.test(block));
   check('D9: its words are readable: the label, the example and the help line use the secondary color, not the muted one', !/text-text-muted/.test(block) && /placeholder:text-text-secondary/.test(block));
   check('D10: the old one-direction sentence and the always-on background note under the form are gone, border and all', !/single-direction sprite strip/.test(raw) && !/full 4-direction sheet/.test(raw) && !/For best results/.test(raw) && !/solid color background/.test(raw) && !/Note about constraints/.test(raw) && !/border-t border-border-subtle pt-3/.test(raw));
-  check('D11: Generate does not look at the line', !/motion(?:Caught|Settled|Spoken|Line|Text)/.test(src.slice(src.indexOf('Generate Animation (') - 1500, src.indexOf('Generate Animation ('))) && !/disabled=\{[^}]*motion(?:Caught|Settled|Spoken|Line|Text)/.test(src) && !/canGenerate[^;\n]*motion(?:Caught|Settled|Spoken|Line|Text)/.test(src));
+  // The bar, from its mark to the end of the form, and the lines that decide
+  // its hint and whether Generate may be pressed (AUDIT g4-animate-r1 M6: the
+  // old anchor, 'Generate Animation (', went with G4).
+  const barPart = src.slice(src.indexOf('data-generate-bar=""'));
+  const barRules = src.slice(src.indexOf('  const canGenerate = '), src.indexOf('  return (\n    <>\n    <div className="space-y-6">'));
+  check('D11: Generate does not look at the line: not the bar, not its hint, not whether it may be pressed', src.indexOf('data-generate-bar=""') > 0 && barPart.length > 1000 && /Generate animation · \{tokenCost\}/.test(barPart) && barRules.length > 1000 && !/motion(?:Caught|Settled|Spoken|Line|Text)/.test(barPart) && !/motion(?:Caught|Settled|Spoken|Line|Text)/.test(barRules) && !/disabled=\{[^}]*motion(?:Caught|Settled|Spoken|Line|Text)/.test(src) && !/canGenerate[^;\n]*motion(?:Caught|Settled|Spoken|Line|Text)/.test(src));
   check('D12: the room a line took stays: a min-height that only grows, the real height rounded up, kept current while the line shows', /const keepRoom = \(\) => setMotionLineRoom\(\(room\) => Math\.max\(room, Math\.ceil\(line\.getBoundingClientRect\(\)\.height\)\)\);\s*keepRoom\(\);\s*if \(typeof ResizeObserver === 'undefined'\) return;\s*const observer = new ResizeObserver\(keepRoom\);\s*observer\.observe\(line\);\s*return \(\) => observer\.disconnect\(\);\s*\}, \[motionCaughtLine\]\);/.test(src) && (src.match(/setMotionLineRoom\(/g) ?? []).length === 1);
   check('D13: a line is said once, when it appears or changes, by a status that is always in the page; back soon for a text that only grew from the text that last showed it, it is not said again', /<p role="status" aria-live="polite" className="sr-only">\s*\{motionSpoken\}\s*<\/p>/.test(src) && has(`
     const motionLineLastRef = useRef<{ line: string; text: string } | null>(null);
@@ -671,9 +377,12 @@ const all = (texts, action, want) => { const got = caught(texts, action); return
       setMotionSpoken(motionCaughtLine);
     }, [motionCaughtLine, motionText]);`) && (block.match(/aria-live="polite"/g) ?? []).length === 1 && !/<p[^>]*ref=\{motionLineRef\}[^>]*(?:role|aria-live)/.test(src));
   check('D14: the words stay in the status for their moment whatever the line does, then leave it', /useEffect\(\(\) => \{\s*if \(motionSpoken === ''\) return;\s*const clear = setTimeout\(\(\) => setMotionSpoken\(''\), MOTION_SPOKEN_CLEAR_MS\);\s*return \(\) => clearTimeout\(clear\);\s*\}, \[motionSpoken\]\);/.test(src) && (src.match(/setMotionSpoken\(/g) ?? []).length === 2);
-  check('D15: the hidden status is laid out inside the motion block (a positioned block), not against the document, so it adds no height to the page', /<div className="relative">\s*<label htmlFor=\{motionBoxId\}/.test(src) && src.indexOf('<div className="relative">\n        <label htmlFor={motionBoxId}') < src.indexOf('className="sr-only">\n          {motionSpoken}') && !/sr-only/.test(src.slice(src.indexOf('{motionSpoken}') + 20, src.indexOf('{motionSpoken}') + 400)));
+  check('D15: the hidden status is laid out inside the motion block (a positioned block), not against the document, so it adds no height to the page', /<div className="relative">\s*<StepLabel n=\{3\}/.test(src) && src.indexOf('<div className="relative">\n        <StepLabel n={3}') < src.indexOf('className="sr-only">\n          {motionSpoken}') && !/sr-only/.test(src.slice(src.indexOf('{motionSpoken}') + 20, src.indexOf('{motionSpoken}') + 400)));
   check('D16: on touch screens, and in a window under 340 px wide, the box has room for three lines of example text', /\[@media\(hover:none\)_and_\(pointer:coarse\)\]:min-h-\[calc\(3lh\+1rem\+2px\)\]\s*max-\[340px\]:min-h-\[calc\(3lh\+1rem\+2px\)\]"/.test(block) && /rows=\{2\}/.test(block));
-  check('D17: nothing on the page moves after the last key: the form scrolls nothing (DESIGN 2026-11-14-236 withdrew the scroll into view)', !/scrollBy\(|scrollIntoView\(|scrollTo\(|scrollTop\s*=|generateBarRef/.test(src));
+  // The one scroll is the arrival from "Animate this" (generate-pass.md 5.3, item 3), in the effect that runs when a handoff opens Auto-Prep, never on a key.
+  const arrival = src.slice(src.indexOf('if (!pendingPrep || !arrivalRef.current) return;'), src.indexOf('}, [pendingPrep, prepHeadingId]);'));
+  const outsideArrival = src.replace(arrival, '');
+  check('D17: nothing on the page moves after the last key: the form scrolls nothing (DESIGN 2026-11-14-236 withdrew the scroll into view), but for the arrival from "Animate this", once per handoff (5.3)', arrival.length > 100 && (src.match(/scrollTop\s*\+?=|scrollBy\(|scrollIntoView\(|scrollTo\(/g) ?? []).length === 1 && /main\.scrollTop \+= /.test(arrival) && /arrivalRef\.current = false;/.test(arrival) && !/scrollBy\(|scrollIntoView\(|scrollTo\(|scrollTop\s*\+?=|generateBarRef/.test(outsideArrival));
   const zone = src.slice(src.indexOf('Drop your pixel art character here'), src.indexOf('Browse files'));
   check('D18: the background advice is one line in the empty drop zone, between its title and its formats line, 12 px in the secondary color, and nowhere else; the zone\'s three lines are centred', has(`
 <p className="text-sm font-mono text-text-secondary text-center mb-1">
@@ -684,13 +393,65 @@ const all = (texts, action, want) => { const got = caught(texts, action); return
     </p>
     <p className="text-xs font-mono text-text-secondary text-center mb-3">
       PNG, JPG, or WebP &middot; any size, we&apos;ll auto-crop and resize
-    </p>`) && (raw.match(/plain background/g) ?? []).length === 1 && src.indexOf('Works best on a plain background') > src.indexOf(') : pendingDataUrl ? null : (') && zone.length > 100 && !/text-\[/.test(zone));
+    </p>`) && (raw.match(/plain background/g) ?? []).length === 1 && src.indexOf('Works best on a plain background') > src.indexOf(') : pendingPrep ? null : (') && zone.length > 100 && !/text-\[/.test(zone));
   const card = src.slice(src.indexOf('Character ready'), src.indexOf('aria-label="Remove character"'));
   // L5 (AUDIT prompt-help-v1a-s2 r1; DESIGN, room 2026-11-14-320): the muted colour is 2.0 to 2.6:1 on every background; the secondary is 4.8:1 and up.
   const prep = fs.readFileSync(path.join(ROOT, 'src/components/sprites/CharacterAutoPrep.tsx'), 'utf8');
-  check('D20: nothing on the form is in the muted colour (under 4.5:1 on every background), at any opacity, text, placeholder or icon, the picture being prepared (CharacterAutoPrep, drawn inside the form) included; the secondary colour takes its place, at full strength there and on the form (no opacity on the secondary or primary text colour), and on the selected action card (its amber glow leaves the secondary at 4.42:1) the cost and description take the primary', !/text-text-muted|text-muted\//.test(raw) && !/text-text-muted|text-muted\//.test(prep) && ![raw, prep].some((f) => /text-text-(?:secondary|primary)\//.test(f)) && (prep.match(/text-text-secondary/g) ?? []).length === 10 && (raw.match(/text-text-secondary/g) ?? []).length === 30 && /placeholder:text-text-secondary/.test(raw) && (raw.match(/\$\{active \? 'text-text-primary' : 'text-text-secondary'\}/g) ?? []).length === 2);
+  check('D20: nothing on the form is in the muted colour (under 4.5:1 on every background), at any opacity, text, placeholder or icon, the picture being prepared (CharacterAutoPrep, drawn inside the form) included; the secondary colour takes its place, at full strength there and on the form (no opacity on the secondary or primary text colour), and on the selected action card (its amber glow leaves the secondary at 4.42:1) the cost and description take the primary', !/text-text-muted|text-muted\//.test(raw) && !/text-text-muted|text-muted\//.test(prep) && ![raw, prep].some((f) => /text-text-(?:secondary|primary)\//.test(f)) && (prep.match(/text-text-secondary/g) ?? []).length === 11 && (raw.match(/text-text-secondary/g) ?? []).length === 29 && /placeholder:text-text-secondary/.test(raw) && (raw.match(/\$\{active \? 'text-text-primary' : 'text-text-secondary'\}/g) ?? []).length === 2);
   check('D21: the Resolution note has a full stop where its em dash was (DESIGN, room 2026-11-15-091)', !/per generation \u2014/.test(raw) && raw.includes('Cost is flat per generation. No resolution surcharge.'));
   check('D19: the loaded character card has no text under 12 px, and under 480 px its text takes a row of its own under the picture', card.length > 200 && !/text-\[/.test(card) && (card.match(/text-xs font-mono/g) ?? []).length === 3 && has(`<p className="text-xs font-mono text-text-secondary mt-1"> {charWidth}x{charHeight}`) && has(`<p className="text-xs font-mono text-red-400 mt-1"> Prepared at`) && has(`<p className="text-xs font-mono text-green-400 mt-1"> Ready for animation`) && has(`<div className="flex flex-wrap items-start gap-4">`) && has(`<div className="flex-1 min-w-0 max-[480px]:order-last max-[480px]:basis-full"> <p className="text-xs font-mono text-text-primary">Character ready</p>`) && has(`aria-label="Remove character" className="ml-auto flex-shrink-0 p-1.5 rounded`));
+
+  // AUDIT g4-animate-r1 M6: the parts that make the picture sent and finish
+  // the job, each byte for byte as before G4 (main 27d26ec8, the file before
+  // G4), by its own sha256, as D1 holds the callback. Each is found by its
+  // first line (with its second where the first is common), once in the
+  // file, and runs to the first line equal to its last.
+  const PARTS = [
+    ["af", "the picture decoder", "const decodeImage: DecodeImage = (dataUrl, onLoad, onError) => {", "};", undefined, "1ff80e8247c301769d324288e2974206186c59722b14783633d7c6edf6db66d4"],
+    ["af", "the poll hook", "  const poll = useGenerationPoll({", "  });", undefined, "4d1972906b2856f18d3474b641fefbc04b4e72b957527da8faa838bfba13d4f2"],
+    ["af", "the encoder", "  const convertToRgbBase64 = useCallback(async (): Promise<", "  }, [characterDataUrl, charWidth, charHeight]);", undefined, "be2d071ae67a37e478c12c3eea9de171de7879c7ec101d5e512f3e41a4222a5d"],
+    ["af", "the poll effect", "  // Poll-effect: react to terminal states from the queue path.", "  }, [poll.status, poll.result, poll.error]);", undefined, "9b650417ff3db274b09ae62bcf985a4261852a347360220cf474ba1c5e2caedf"],
+    ["af", "the progress mirror", "  // Mirror in-flight progress to the store so BrewingLoader can show the", "  }, [poll.startedAt, poll.serverStatus, poll.mode, poll.pausedMessage, setGenerationProgress]);", undefined, "96b540cf34c8342d43ef1b277981d68851f736f395f2e14635699ba8064f49e8"],
+    ["af", "the gate", "  const gate = generateGate({", "  });", undefined, "bc06252384fc9e08de90962e0a05995f1640f907163be71e0762dfa5b363454a"],
+    ["af", "Use This", "  const handleAutoPrepAccept = useCallback(", "  );", undefined, "8317cf994c15a0cc8574d06fbe826bf7c2a46c011b503998b20a997e48de7a62"],
+    ["cap", "stage 1", "  useEffect(() => {", "  }, [sourceDataUrl]);", "    if (lastSourceRef.current === sourceDataUrl) return;", "01e901bf517ed13440a8491532c625af446dbd444cab3226fe6771cfe7dd25ab"],
+    ["cap", "stage 2", "  useEffect(() => {", "  }, [baseVersion, targetSize, effectivePct]);", "    if (baseVersion === 0) return;", "f8bf557e0f8a0257cb458d1643977b34df1e337c879b68e6adf2f7a3d8e58ec2"],
+    ["cap", "the accept", "  const handleAccept = useCallback(() => {", "  }, [fitCurrent, prepared, onAccept, editedBaseDataUrl, skipBgRemoval, tolerance]);", undefined, "068dd92365be089389f7d4d8dc3d50d5a8a08d53701e2d386acedda006428561"],
+  ];
+  const files = { af: raw, cap: prep };
+  const partOf = (text, start, end, second) => {
+    const L = text.split('\n');
+    const at = [];
+    L.forEach((l, i) => { if (l === start && (second === undefined || L[i + 1] === second)) at.push(i); });
+    if (at.length !== 1) return null;
+    const j = L.indexOf(end, at[0]);
+    return j < 0 ? null : L.slice(at[0], j + 1).join('\n');
+  };
+  const partsWrong = (file) => PARTS.filter(([f]) => f === file).filter(([f, , start, end, second, want]) => {
+    const got = partOf(files[f], start, end, second);
+    return got === null || createHash('sha256').update(got).digest('hex') !== want;
+  }).map(([, name]) => name);
+  check('D22: AnimateForm\'s decoder, poll hook, encoder, poll effect, progress mirror, gate and Use This are each byte for byte as before G4', partsWrong('af').length === 0, partsWrong('af'));
+  check('D23: Auto-Prep\'s stage 1 (detect, crop, remove the background), stage 2 (the fit) and its accept are each byte for byte as before G4', partsWrong('cap').length === 0, partsWrong('cap'));
+
+  // G4's own rules around the request (AUDIT g4-animate-r1 M1, M2, M4, L1).
+  check('D24: the kept character is read only through readKeptCharacter in an effect, never from the raw field; an account change under the form removes the character and writes nothing for the new account in that commit; Generate is off while Auto-Prep is open; the bar is marked for G1\'s room; "Change size" focuses at once when More settings is open',
+    !/s\.keptCharacter\b|\.keptCharacter\b/.test(src) && (src.match(/readKeptCharacter\(/g) ?? []).length === 1
+    && has(`useEffect(() => { const before = formAccountRef.current; formAccountRef.current = userId; if (!before || before === userId) return; accountChangedRef.current = true; handleRemoveChar(); }, [userId, handleRemoveChar]);`)
+    && has(`useEffect(() => { if (!keptRestoredRef.current) return; if (accountChangedRef.current) { accountChangedRef.current = false; return; } keepCharacter(userId, character); }, [userId, character, keepCharacter]);`)
+    && src.indexOf('const formAccountRef = useRef(userId);') < src.indexOf('keepCharacter(userId, character);')
+    && has(`const canGenerate = !GENERATION_PAUSED && gate.canGenerate && !pendingPrep;`)
+    && /data-generate-bar=""\s*className="fixed bottom-0/.test(src)
+    && has(`const handleChangeSize = useCallback(() => { if (moreOpen) { focusResolutionRef.current = false; focusResolution(); return; } focusResolutionRef.current = true; setMoreOpen(true); }, [moreOpen, focusResolution]);`)
+    && has(`useEffect(() => () => setAnimatePrepPending(false), [setAnimatePrepPending]);`));
+  // The steps and the bar on G1's rules (AUDIT g4-animate-r1 M5, L2 to L5, L11).
+  check('D25: badges by G1\'s badgeStates (step 3 done unless Custom Action is empty); the hint rows in order, paused giving screen readers the whole message, the guide, Auto-Prep, the character, step 3, the size, one token or more, ready; the dimmed Generate keeps its label; the arrival words leave once Auto-Prep closes',
+    has(`const [badge1, badge2, badge3] = badgeStates( [{ required: true, done: step1Done }, { required: true, done: true }, { required: isCustomAction, done: !step3Needed }], guideShowing, );`)
+    && has(`const step1Done = !!character && !pendingPrep;`)
+    && /GENERATION_PAUSED\s*\? \(\s*<>\s*<span aria-hidden="true">\{PAUSED_HINT\}<\/span>\s*<span className="sr-only">\{GENERATION_PAUSED_MESSAGE\}<\/span>\s*<\/>\s*\)\s*: guideShowing\s*\? GUIDE_HINT\s*: pendingPrep\s*\? 'Step 1: check your character, then press Use This\.'\s*: !character\s*\? 'Step 1: add your character\.'\s*: step3Needed\s*\? 'Step 3: describe the action\.'\s*: sizeWarning/.test(src)
+    && has(`You need {tokensNeeded} more {tokensWord(tokensNeeded)} for this action.{' '}`) && has(`const tokensWord = (n: number) => (n === 1 ? 'token' : 'tokens');`)
+    && has(`style={!isGenerating && canGenerate ? undefined : DIMMED_GENERATE}`)
+    && has(`useEffect(() => { if (!pendingPrep) setArrivalSpoken(''); }, [pendingPrep]);`));
 }
 
 // ---- E. the library (source) ----

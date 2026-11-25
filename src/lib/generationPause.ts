@@ -39,9 +39,10 @@ export class GenerationPausedError extends Error {
 
 /**
  * The customer message for an upstream (provider) failure. Unpaused it is the
- * text the forms showed before this change, word for word; paused, the advice
- * to try again is left out, since trying again cannot work until the pause
- * lifts.
+ * text the forms showed before this change, word for word, but for Animate's
+ * advice, which names More settings, where the frame count now is (G4,
+ * generate-pass.md 4.1); paused, the advice to try again is left out, since
+ * trying again cannot work until the pause lifts.
  */
 export function upstreamFailureMessage(
   kind: 'generation' | 'animation',
@@ -55,7 +56,7 @@ export function upstreamFailureMessage(
   }
   return paused
     ? `Animation failed due to a temporary issue with the AI service.${refundedNote}`
-    : `Animation failed due to a temporary issue with the AI service.${refundedNote} Please try again in a few minutes, or try a smaller frame count (6 or 8) if the issue persists.`;
+    : `Animation failed due to a temporary issue with the AI service.${refundedNote} Please try again in a few minutes, or try a smaller frame count (6 or 8) under More settings if the issue persists.`;
 }
 
 /**
@@ -77,10 +78,10 @@ export function isProviderRefusal(errorCode?: string): boolean {
  * otherwise upstreamFailureMessage's. `text-animation` is Animate from Text,
  * the tab G1 adds; until then its jobs come through the Create Sprite form as
  * `generation`, and its other failures keep the generation words, as today.
- * Create Sprite's line ends " under More settings", where its size now sits
- * (G2; AUDIT rd-swap-r3's note, HQ 2026-11-18-056). Animate My Character's
- * gets the same words when G4 adds its More settings. Paused, the advice is
- * left out, as in upstreamFailureMessage.
+ * Both forms' lines end " under More settings", where Create Sprite's size
+ * (G2; AUDIT rd-swap-r3's note, HQ 2026-11-18-056) and Animate My
+ * Character's frame count (G4) now sit. Paused, the advice is left out, as
+ * in upstreamFailureMessage.
  */
 export function providerFailureMessage(
   kind: 'generation' | 'text-animation' | 'animation',
@@ -100,7 +101,7 @@ export function providerFailureMessage(
   if (kind === 'text-animation') {
     return `${lead} You can try again, or change the description or the animation.`;
   }
-  return `${lead} You can try again, or change the picture or the action, or the frame count.`;
+  return `${lead} You can try again, or change the picture or the action, or the frame count under More settings.`;
 }
 
 /**

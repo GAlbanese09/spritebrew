@@ -112,6 +112,13 @@ export const GUIDE_HINT = 'Pick one to start.';
 export const DIMMED_GENERATE = { opacity: 1, backgroundColor: '#5a3d14', borderColor: '#5a3d14', color: '#f3e6d3' } as const;
 export const PAUSED_HINT = 'Generating is paused for now. Details are in the notice above.';
 
+/** Whether Create Sprite takes a "Make a side view" request (G0's
+ *  createRequest; generate-pass.md 4.2): its "What's it for?" card comes
+ *  with G2. Until then Animate My Character does not show that button, so
+ *  no request is left that nobody takes (AUDIT g4-animate-r1 M3). G2 sets
+ *  this true with its receiver. */
+export const SIDE_VIEW_REQUEST_TAKEN = false;
+
 /** The step badges: a step with a default counts as done; an optional step
  *  is never next; the next step is the first required step not done; all
  *  plain while the guide shows. */

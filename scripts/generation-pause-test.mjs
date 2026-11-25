@@ -61,17 +61,18 @@ const DRAFT =
 // The upstream-failure copy on main before this change, word for word.
 const BEFORE = {
   generation: (note) => `Generation failed due to a temporary issue with the AI service.${note} Please try again in a few minutes.`,
-  animation: (note) => `Animation failed due to a temporary issue with the AI service.${note} Please try again in a few minutes, or try a smaller frame count (6 or 8) if the issue persists.`,
+  // G4 (generate-pass.md 4.1): Animate's advice names More settings, where the frame count now is.
+  animation: (note) => `Animation failed due to a temporary issue with the AI service.${note} Please try again in a few minutes, or try a smaller frame count (6 or 8) under More settings if the issue persists.`,
 };
 const NOTE = ' Your tokens have been refunded.';
 
-// The refusal words (design/generate-pass/failure-lines.md, HQ 2026-11-17-236), without
-// " under More settings" on Create Sprite (G2); Animate My Character gets it with G4.
+// The refusal words (design/generate-pass/failure-lines.md, HQ 2026-11-17-236), with
+// " under More settings" on Create Sprite (G2) and on Animate My Character (G4).
 const REFUSAL = {
   // G2: Create Sprite's size now sits under More settings, so its line ends with those words (failure-lines.md; HQ 2026-11-18-056).
   generation: (note) => `Generation failed: the AI service could not make this one.${note} You can try again, or change the description or the style, or the size under More settings.`,
   'text-animation': (note) => `Animation failed: the AI service could not make this one.${note} You can try again, or change the description or the animation.`,
-  animation: (note) => `Animation failed: the AI service could not make this one.${note} You can try again, or change the picture or the action, or the frame count.`,
+  animation: (note) => `Animation failed: the AI service could not make this one.${note} You can try again, or change the picture or the action, or the frame count under More settings.`,
 };
 const REFUSAL_PAUSED = {
   generation: (note) => `Generation failed: the AI service could not make this one.${note}`,

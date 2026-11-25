@@ -367,6 +367,21 @@ export default function GeneratePage() {
     }
   }, [pendingAnimatorHandoff, tab, handleTabChange]);
 
+  // "Open 4-Angle Walking" on Animate My Character (G4, generate-pass.md
+  // 4.2): a new text-animation request opens Animate from Text, as the
+  // person's pick, and that form takes the request and clears it
+  // (TextAnimationForm). As for the handoff above, the form area opens first
+  // so the form mounts. Watched from the store, so nothing is set in render.
+  useEffect(
+    () =>
+      useSpriteStore.subscribe((state, before) => {
+        if (!state.textAnimationRequest || state.textAnimationRequest === before.textAnimationRequest) return;
+        setShowForm(true);
+        handleTabChange('text');
+      }),
+    [handleTabChange]
+  );
+
   const handleGenerated = useCallback(async (
     dataUrl: string,
     prompt: string,
@@ -545,7 +560,7 @@ export default function GeneratePage() {
                   onStyleChange={setTextStyleId}
                 />
               ) : (
-                <AnimateForm onGenerated={handleGenerated} />
+                <AnimateForm onGenerated={handleGenerated} guideShowing={guideShowing} />
               )
             ) : (
               <div className="text-center py-8">

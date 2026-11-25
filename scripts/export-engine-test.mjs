@@ -65,7 +65,7 @@ class FakeCanvas {
     const h = () => this._h;
     return {
       imageSmoothingEnabled: true,
-      drawImage() {},
+      drawImage() { globalThis.__draws = (globalThis.__draws ?? 0) + 1; },
       getImageData() { return { width: w(), height: h(), data: new Uint8ClampedArray(w() * h() * 4) }; },
       putImageData() {},
       fillRect() {},
@@ -141,6 +141,27 @@ function lastZipText(suffix) {
   check('Godot: the loop flag is the animation\'s own', /"loop": false,\n\s*"name": "Walk/.test(tres) && /"loop": true,\n\s*"name": "Idle"/.test(tres));
   check('Godot: quotes and backslashes in a name are escaped', tres.includes('"name": "Walk \\"fast\\" \\\\ run"'));
   check('Godot: regions in whole pixels for a 32.5 frame size', /region = Rect2\(32, 0, 32, 32\)/.test(tres) && !/Rect2\([^)]*\.5/.test(tres));
+}
+
+
+// 4. RPG Maker never downloads a blank sheet (external audit r2, SB-02).
+{
+  const idle = anim('i', 'Idle', 2);
+  const walk = anim('w', 'Walk', 3);
+  // Idle checked, Walk not: the exporter gets only the checked animations,
+  // while Down still names Walk and the other three directions are empty.
+  const before = captured.length;
+  globalThis.__draws = 0;
+  const blank = await engine.exportRPGMaker(opts([idle], { rpgFrameWidth: 48, rpgFrameHeight: 48, directionMap: ['w', null, null, null] }));
+  check('RPG Maker: no direction with a checked animation downloads nothing and says why',
+    captured.length === before && blank.warnings.length === 1 && /direction/i.test(blank.warnings[0]), { downloads: captured.length - before, warnings: blank.warnings });
+  globalThis.__draws = 0;
+  const one = await engine.exportRPGMaker(opts([idle], { rpgFrameWidth: 48, rpgFrameHeight: 48, directionMap: ['i', null, null, null] }));
+  const file = captured[captured.length - 1];
+  check('RPG Maker: a single mapped Idle row still exports ($sheet.png, 144x192), the other rows left empty on purpose',
+    captured.length === before + 1 && file.name === '$sheet.png' && file.data.w === 144 && file.data.h === 192 && one.warnings.length === 0, { name: file?.name, data: file?.data, warnings: one.warnings });
+  check('RPG Maker: that row draws its three cells', globalThis.__draws >= 3, globalThis.__draws);
+  void walk;
 }
 
 if (failed > 0) {

@@ -332,6 +332,18 @@ export async function exportRPGMaker(opts: RPGMakerOptions): Promise<{ warnings:
   const COLS = 3;
   const ROWS = 4;
 
+  // A sheet with no direction drawn would be a blank PNG: say so and
+  // download nothing (external audit SB-02). The page keeps Download off in
+  // that case too.
+  const drawable = directionMap.slice(0, ROWS).some((id) => {
+    const anim = id ? animations.find((a) => a.id === id) : null;
+    return !!anim && anim.frames.length > 0;
+  });
+  if (!drawable) {
+    warnings.push('No direction has a checked animation, so no sheet was downloaded.');
+    return { warnings };
+  }
+
   const canvas = document.createElement('canvas');
   canvas.width = rpgFrameWidth * COLS;
   canvas.height = rpgFrameHeight * ROWS;

@@ -1,5 +1,6 @@
 'use client';
 
+import type { RefObject } from 'react';
 import { usePathname } from 'next/navigation';
 import { Menu } from 'lucide-react';
 
@@ -18,19 +19,28 @@ const PAGE_TITLES: Record<string, string> = {
 
 interface HeaderProps {
   onMenuClick: () => void;
+  /** Whether the navigation drawer is open (phones and tablets). */
+  menuOpen: boolean;
+  /** Focus comes back here when the drawer closes (external audit SB-18). */
+  menuButtonRef: RefObject<HTMLButtonElement | null>;
 }
 
-export default function Header({ onMenuClick }: HeaderProps) {
+export default function Header({ onMenuClick, menuOpen, menuButtonRef }: HeaderProps) {
   const pathname = usePathname();
   const title = PAGE_TITLES[pathname] ?? 'SpriteBrew';
 
   return (
     <header className="flex h-[var(--header-height)] items-center gap-4 border-b border-border-default bg-bg-secondary/50 px-6 backdrop-blur-sm">
       <button
+        ref={menuButtonRef}
+        type="button"
         onClick={onMenuClick}
+        aria-label="Open menu"
+        aria-expanded={menuOpen}
+        aria-controls="app-sidebar"
         className="lg:hidden p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"
       >
-        <Menu size={20} />
+        <Menu size={20} aria-hidden="true" />
       </button>
       <h1 className="text-sm font-mono font-medium text-text-primary tracking-wide">
         {title}

@@ -32,6 +32,7 @@ import { encodeGif, GIF_SCALES, GIF_SCALE_DEFAULT, type GifScale } from '@/lib/g
 import type { SpriteAnimation } from '@/lib/types';
 import { loadImage } from '@/lib/spriteUtils';
 import { useContainerWidth } from '@/lib/useCanvasFitScale';
+import { rpgChoices, rpgHasRow, rpgMapInUse } from '@/lib/rpgDirections';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 
@@ -173,6 +174,12 @@ export default function ExportConfig() {
     [activeAnimations]
   );
 
+  // RPG Maker: a direction set to an animation that is no longer checked
+  // reads as none, and Download waits for one direction with an animation
+  // (external audit SB-02).
+  const rpgMap = useMemo(() => rpgMapInUse(directionMap, activeAnimations), [directionMap, activeAnimations]);
+  const rpgBlank = selectedEngine === 'rpgmaker' && !rpgHasRow(directionMap, activeAnimations);
+
   const toggleAnim = useCallback((id: string) => {
     setSelectedAnims((prev) => {
       const next = new Set(prev);
@@ -300,7 +307,7 @@ export default function ExportConfig() {
             ...baseOpts,
             rpgFrameWidth: rpgFrameW,
             rpgFrameHeight: rpgFrameH,
-            directionMap,
+            directionMap: rpgMap,
           };
           const result = await exportRPGMaker(rpgOpts);
           if (result.warnings.length > 0) setWarnings(result.warnings);
@@ -341,7 +348,7 @@ export default function ExportConfig() {
   }, [
     activeAnimations, frameDataUrls, fw, fh, padding, powerOfTwo,
     resizeEnabled, resizeW, resizeH, includeMetadata, selectedEngine,
-    spriteSheet, rpgFrameW, rpgFrameH, directionMap, includeManifest, gifScale,
+    spriteSheet, rpgFrameW, rpgFrameH, rpgMap, includeManifest, gifScale,
   ]);
 
   const engineInfo = TARGETS.find((e) => e.id === selectedEngine)!;
@@ -603,9 +610,9 @@ export default function ExportConfig() {
                   <div key={dir} className="flex items-center gap-3">
                     <span className="w-12 text-[10px] font-mono text-text-muted">{dir}</span>
                     <select
-                      value={directionMap[idx] ?? ''}
+                      value={rpgMap[idx] ?? ''}
                       onChange={(e) => {
-                        const next = [...directionMap];
+                        const next = [...rpgMap];
                         next[idx] = e.target.value || null;
                         setDirectionMap(next);
                       }}
@@ -613,7 +620,7 @@ export default function ExportConfig() {
                         text-xs font-mono text-text-primary focus:outline-none focus:border-accent-amber cursor-pointer"
                     >
                       <option value="">(none)</option>
-                      {animations.filter((a) => a.frames.length > 0).map((a) => (
+                      {rpgChoices(activeAnimations).map((a) => (
                         <option key={a.id} value={a.id}>{a.name}</option>
                       ))}
                     </select>
@@ -624,6 +631,11 @@ export default function ExportConfig() {
             <p className="text-[10px] font-mono text-text-muted">
               Output: {rpgFrameW * 3}x{rpgFrameH * 4}px sheet &middot; Filename prefixed with $
             </p>
+            {rpgBlank && (
+              <p className="text-[10px] font-mono text-accent-amber">
+                Set at least one direction to a checked animation to download the sheet.
+              </p>
+            )}
           </div>
         )}
 
@@ -714,7 +726,7 @@ export default function ExportConfig() {
         <Button
           size="lg"
           onClick={handleExport}
-          disabled={exporting || totalFrames === 0}
+          disabled={exporting || totalFrames === 0 || rpgBlank}
         >
           {exporting ? (
             <>

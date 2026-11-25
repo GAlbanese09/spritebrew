@@ -4,6 +4,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { UploadCloud, FilePlus, FolderOpen, Image as ImageIcon, AlertCircle, RotateCcw } from 'lucide-react';
 import UploadZone from './UploadZone';
 import EditorRefusalText from './EditorRefusalText';
+import DraftDiscardDialog from './DraftDiscardDialog';
 import Button from '@/components/ui/Button';
 import {
   dimsWithinEditorLimits,
@@ -11,6 +12,7 @@ import {
 } from '@/components/sprites/editorStore';
 import type { SpriteProjectSource } from '@/lib/spriteProject';
 import { draftHeading, draftListLine, draftSentence, type RecoveryManifestV1 } from '@/lib/editorRecovery';
+import { discardDraftText } from '@/lib/editorCopy';
 
 /**
  * Landing UI for the /editor route. Lets the user choose how to start
@@ -77,6 +79,10 @@ export default function EditorLanding({
   // larger sheets); we filter on the editor side so the user gets immediate
   // feedback without a page transition into the body.
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // The draft whose Discard was pressed: it is deleted only once the
+  // question is answered Discard (SB-04).
+  const [discardAsk, setDiscardAsk] = useState<{ draftId: string; text: string } | null>(null);
+  const askDiscard = (m: RecoveryManifestV1) => setDiscardAsk({ draftId: m.draftId, text: discardDraftText(m) });
 
   function restoreDraft(draftId: string) {
     choiceRef.current++;
@@ -118,6 +124,15 @@ export default function EditorLanding({
 
   return (
     <div className="h-full overflow-auto p-8">
+      <DraftDiscardDialog
+        text={discardAsk?.text ?? null}
+        onKeep={() => setDiscardAsk(null)}
+        onDiscard={() => {
+          const ask = discardAsk;
+          setDiscardAsk(null);
+          if (ask) onDiscardDraft?.(ask.draftId);
+        }}
+      />
       <div className="max-w-4xl mx-auto">
         {newest && (
           <div className="mb-6 rounded-lg border border-accent-amber bg-bg-surface p-4 flex items-start gap-3">
@@ -134,7 +149,7 @@ export default function EditorLanding({
                   Restore
                 </Button>
                 <button
-                  onClick={() => onDiscardDraft?.(newest.draftId)}
+                  onClick={() => askDiscard(newest)}
                   className="text-[11px] font-mono text-text-muted hover:text-text-primary cursor-pointer px-2 py-1"
                 >
                   Discard
@@ -155,7 +170,7 @@ export default function EditorLanding({
                           Restore
                         </button>
                         <button
-                          onClick={() => onDiscardDraft?.(m.draftId)}
+                          onClick={() => askDiscard(m)}
                           aria-label={`Discard ${draftListLine(m)}`}
                           className="text-[11px] font-mono text-text-muted hover:text-text-primary cursor-pointer px-2 py-1"
                         >

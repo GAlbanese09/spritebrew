@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@clerk/react';
 import { RotateCcw } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import DraftDiscardDialog from './DraftDiscardDialog';
+import { discardDraftText } from '@/lib/editorCopy';
 import { useSpriteStore } from '@/stores/spriteStore';
 import {
   isRecoveryAvailable,
@@ -19,7 +21,7 @@ import { discardEditorDraft, editorDraftStore, editorWritesSettled, isEditorSess
  * end the way they chose, which means a reload or a crash took it (BUILD
  * 2026-10-29: an iPhone reload in the middle of a modal session landed
  * George on Generate with his work gone). Restore opens it in the full-page
- * editor; Discard deletes it.
+ * editor; Discard asks first (SB-04), then deletes it.
  *
  * The offer belongs to the account it was found for: it is hidden the
  * moment the account changes, and Restore and Discard check the draft's
@@ -32,6 +34,10 @@ export default function EditorDraftBanner() {
   const { isLoaded, userId } = useAuth();
   const account = isLoaded ? (userId ?? null) : undefined;
   const [offer, setOffer] = useState<{ account: string | null; draft: RecoveryManifestV1 } | null>(null);
+  // The discard question while it is open (SB-04), with the draft it names:
+  // it shows, and its Discard deletes, only while that draft is still the
+  // one offered (AUDIT data-loss r1, L6).
+  const [discardAsk, setDiscardAsk] = useState<{ draftId: string; text: string } | null>(null);
   // The account as of the latest render, for the click handlers; the
   // account's visit, which moves on when the account changes; and whether
   // the banner is on screen, which turns false in the commit that removes
@@ -101,6 +107,15 @@ export default function EditorDraftBanner() {
 
   return (
     <div className="mb-4 rounded-lg border border-accent-amber bg-bg-surface p-4 flex items-start gap-3">
+      <DraftDiscardDialog
+        text={discardAsk && discardAsk.draftId === draft.draftId ? discardAsk.text : null}
+        onKeep={() => setDiscardAsk(null)}
+        onDiscard={() => {
+          const ask = discardAsk;
+          setDiscardAsk(null);
+          if (ask && ask.draftId === draft.draftId) void discard();
+        }}
+      />
       <RotateCcw size={18} className="text-accent-amber flex-shrink-0 mt-0.5" />
       <div className="flex-1 min-w-0">
         <p className="text-xs font-mono font-semibold text-text-primary mb-1">
@@ -114,7 +129,7 @@ export default function EditorDraftBanner() {
             Restore in Editor
           </Button>
           <button
-            onClick={() => { void discard(); }}
+            onClick={() => setDiscardAsk({ draftId: draft.draftId, text: discardDraftText(draft) })}
             className="text-[11px] font-mono text-text-muted hover:text-text-primary cursor-pointer px-2 py-1"
           >
             Discard

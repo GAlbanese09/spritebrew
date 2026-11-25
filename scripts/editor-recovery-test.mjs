@@ -184,6 +184,10 @@ const saves = () => db.log.filter((e) => e[0] === 'save');
 {
   const { c } = await session();
   await drain();
+  // One flip first, so the picture at the 10 s mark (after an even number
+  // of flips in the loop) is not the original: a picture back as it was
+  // loaded has nothing to keep (SB-26, editor-draft-safety-test.mjs).
+  edit();
   for (let t = 0; t < 12_000; t += 500) { edit(); await advance(500); }
   const s = saves();
   check('editing that never pauses for 1 s is still saved within 10 s', s.length >= 1 && s[0][2] === 'idle', s);

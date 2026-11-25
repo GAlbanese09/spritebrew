@@ -53,7 +53,12 @@
 
   --text-primary: #e8e0d6;
   --text-secondary: #9a918a;
-  --text-muted: #5c5550;
+  /* Dim text, at least 4.5:1 on every background below and on the
+     homepage's #0a0a0a (the external audit's SB-11; DESIGN 2026-11-25-117).
+     Disabled text keeps the old dim colour, exempt from 4.5:1, so "off"
+     still looks off. */
+  --text-muted: #968d86;
+  --text-disabled: #5c5550;
 
   --accent-amber: #d4871c;
   --accent-amber-glow: rgba(212, 135, 28, 0.15);
@@ -79,6 +84,7 @@
   --color-text-primary: var(--text-primary);
   --color-text-secondary: var(--text-secondary);
   --color-text-muted: var(--text-muted);
+  --color-text-disabled: var(--text-disabled);
 
   --color-accent-amber: var(--accent-amber);
   --color-accent-amber-glow: var(--accent-amber-glow);

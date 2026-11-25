@@ -34,6 +34,10 @@ export interface EnginePreset {
   includeMetadata: boolean;
   /** How to import, shown under the row while the preset is chosen. */
   note: string;
+  /** The homepage's one line on what the download holds and how it goes in
+   *  (the external audit's SB-15; DESIGN 2026-11-25-117), so the homepage
+   *  and the export page say the same. */
+  summary: string;
 }
 
 export const ENGINE_PRESETS: readonly EnginePreset[] = [
@@ -46,6 +50,7 @@ export const ENGINE_PRESETS: readonly EnginePreset[] = [
     includeMetadata: true,
     note:
       'You get a PNG and a SpriteFrames .tres in one zip. Put both in the top folder of your project (res://), then choose the .tres as the Sprite Frames of an AnimatedSprite2D. Each animation keeps its name, speed and loop setting.',
+    summary: "A PNG and a SpriteFrames .tres. Choose the .tres as an AnimatedSprite2D's Sprite Frames.",
   },
   {
     id: 'unity',
@@ -56,6 +61,7 @@ export const ENGINE_PRESETS: readonly EnginePreset[] = [
     includeMetadata: true,
     note:
       "You get an .aseprite file with its PNG and JSON. In Unity's Package Manager (Unity 2021.3.15f1 or newer), add the free 2D Aseprite Importer (com.unity.2d.aseprite), then drop the .aseprite file into Assets: each animation becomes a clip. Without the package, slice the PNG by cell size in the Sprite Editor.",
+    summary: "An .aseprite file with its PNG and JSON. Add Unity's free 2D Aseprite Importer and each animation becomes a clip; without it, slice the PNG.",
   },
   {
     id: 'gamemaker',
@@ -66,6 +72,7 @@ export const ENGINE_PRESETS: readonly EnginePreset[] = [
     includeMetadata: true,
     note:
       'You get one PNG strip per animation, named like walk_strip8.png. Import each one as a sprite: GameMaker reads the frame count from the _strip8 ending and removes it from the name.',
+    summary: 'One PNG strip per animation, such as walk_strip8.png. GameMaker reads the frame count from the name.',
   },
 ];
 

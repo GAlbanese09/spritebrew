@@ -23,6 +23,40 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    // Generate's three tabs by their names on the page (the external audit's
+    // SB-21; words DESIGN 2026-11-25-117).
+    version: '0.6.5',
+    date: 'NOV 25, 2026',
+    title: 'THREE WAYS TO MAKE A SPRITE',
+    entries: [
+      {
+        emoji: '🧍',
+        title: 'Create Sprite makes a still',
+        description: 'A character, item or icon from a description, standing still. Try: a knight in silver armor with a red cape.',
+      },
+      {
+        emoji: '🏃',
+        title: 'Animate from Text makes it move',
+        description: 'Describe a character and pick an animation: you get a moving sprite sheet, with no picture needed. Try: a knight swinging a sword overhead.',
+      },
+      {
+        emoji: '🎨',
+        title: 'Animate My Character moves your own art',
+        description: 'Bring your own pixel character and pick an action such as walk or idle. Try it with a sprite you made in Create Sprite.',
+      },
+      {
+        emoji: '🗂️',
+        title: 'Animated in the Gallery',
+        description: 'Animate from Text results, and older Creates made with an animation style, now show under Animated in the Gallery. Clear Animated deletes them with the rest, and its question says how many.',
+      },
+      {
+        emoji: '🔧',
+        title: 'Also fixed',
+        description: "A sheet with 1 px gaps now slices into its frames, ping-pong plays both ways, and RPG Maker's preview matches its download.",
+      },
+    ],
+  },
+  {
     version: '0.6.4',
     date: 'OCT 27, 2026',
     title: 'ANIMATION PRICES',

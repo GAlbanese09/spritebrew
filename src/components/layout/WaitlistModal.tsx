@@ -92,7 +92,8 @@ export default function WaitlistModal({ open, onClose, onJoined }: WaitlistModal
         {/* Close button */}
         <button
           onClick={onClose}
-          className="absolute top-3 right-3 p-1.5 rounded text-[#5c5550]
+          aria-label="Close"
+          className="absolute top-3 right-3 p-1.5 rounded text-text-muted
             hover:text-[#e8e0d6] hover:bg-[#2a2725] cursor-pointer transition-colors"
         >
           <X size={16} />
@@ -133,7 +134,7 @@ export default function WaitlistModal({ open, onClose, onJoined }: WaitlistModal
                 onKeyDown={handleKeyDown}
                 placeholder="your@email.com"
                 className="w-full rounded-lg border px-4 py-2.5 text-sm font-mono
-                  text-[#e8e0d6] placeholder:text-[#5c5550]
+                  text-[#e8e0d6] placeholder:text-text-muted
                   focus:outline-none focus:border-[#d4871c] transition-colors"
                 style={{
                   backgroundColor: '#2a2420',

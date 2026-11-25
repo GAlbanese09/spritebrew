@@ -240,7 +240,7 @@ export default function ReferenceImagesPanel({
                     : 'border-border-default bg-bg-surface hover:border-border-strong hover:bg-bg-elevated cursor-pointer'
               }`}
             >
-              <ImagePlus size={20} className={enabled ? 'text-text-secondary' : 'text-text-muted'} />
+              <ImagePlus size={20} className={enabled ? 'text-text-secondary' : 'text-text-disabled'} />
               <p className="text-xs font-mono text-text-secondary">
                 Add Images
               </p>
@@ -302,7 +302,7 @@ export default function ReferenceImagesPanel({
                         : 'border-border-default bg-bg-surface hover:border-border-strong hover:bg-bg-elevated cursor-pointer'
                     }`}
                   >
-                    <ImagePlus size={16} className={enabled ? 'text-text-secondary' : 'text-text-muted'} />
+                    <ImagePlus size={16} className={enabled ? 'text-text-secondary' : 'text-text-disabled'} />
                     <span className="text-xs font-mono text-text-secondary">
                       Add More
                     </span>

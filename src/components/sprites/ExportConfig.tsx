@@ -473,7 +473,7 @@ export default function ExportConfig() {
                   </h3>
                   {active && <Check size={14} className="text-accent-amber" />}
                 </div>
-                <p className="text-[10px] font-mono text-text-muted leading-relaxed">
+                <p className={`text-[10px] font-mono leading-relaxed ${active ? 'text-text-primary' : 'text-text-muted'}`}>
                   {engine.engines.join(', ')}
                 </p>
               </button>
@@ -510,7 +510,7 @@ export default function ExportConfig() {
                     className="accent-[var(--accent-amber)] cursor-pointer"
                   />
                   {a.name}
-                  <span className="text-text-muted">({a.frames.length})</span>
+                  <span className={checked ? 'text-text-primary' : 'text-text-muted'}>({a.frames.length})</span>
                 </label>
               );
             })}

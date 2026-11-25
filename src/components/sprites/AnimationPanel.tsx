@@ -560,7 +560,7 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
                 className={`px-2 py-1 rounded text-[9px] font-mono cursor-pointer transition-colors ${
                   effectiveLayout === 'directional'
                     ? 'bg-accent-amber text-bg-primary'
-                    : 'text-text-muted hover:text-text-secondary'
+                    : 'text-text-muted hover:text-text-primary'
                 }`}
               >
                 4-Directional
@@ -571,7 +571,7 @@ export default function AnimationPanel({ frameDataUrls }: AnimationPanelProps) {
                 className={`px-2 py-1 rounded text-[9px] font-mono cursor-pointer transition-colors ${
                   effectiveLayout === 'single'
                     ? 'bg-accent-amber text-bg-primary'
-                    : 'text-text-muted hover:text-text-secondary'
+                    : 'text-text-muted hover:text-text-primary'
                 }`}
               >
                 Single Animation

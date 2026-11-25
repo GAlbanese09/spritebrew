@@ -29,10 +29,12 @@ import { CURRENT_VERSION } from '@/lib/changelog';
 import {
   DAILY_LOGIN_TOKENS,
   EMAIL_LIST_BONUS_TOKENS,
+  ENGINE_TARGETS,
   SIGNUP_BONUS_TOKENS,
   STREAK_INTERVAL_DAYS,
   STREAK_WEEKLY_BONUS_TOKENS,
 } from '@/lib/constants';
+import { ENGINE_PRESETS } from '@/lib/exportPresets';
 import { GENERATION_STYLES } from '@/lib/styleRegistry';
 import { HOME_JSON_LD } from '@/lib/seo';
 
@@ -81,8 +83,9 @@ const FEATURES = [
   },
   {
     icon: Download,
-    title: '6 Export Formats',
-    desc: 'TexturePacker, Aseprite, GameMaker, RPG Maker, Godot, raw frames. One click, game-ready.',
+    // The engine targets plus Animated GIF, which the export page adds.
+    title: `${ENGINE_TARGETS.length + 1} Export Formats`,
+    desc: 'Aseprite, TexturePacker, GameMaker, RPG Maker, Godot, PNG frames and GIF. One click, game-ready.',
     span: 'sm:col-span-2',
   },
 ] as const;
@@ -105,13 +108,18 @@ const STEPS = [
   },
 ] as const;
 
+// One chip per export target and the GIF, named as the export page names
+// them (the external audit's SB-15; DESIGN 2026-11-25-117). Unity takes the
+// .aseprite file through Unity's own importer, as its quick setup does.
 const ENGINES = [
-  'Unity (TexturePacker)',
-  'Godot (SpriteFrames)',
-  'GameMaker (Strip)',
+  'Unity (Aseprite Importer)',
+  'Godot 4 (SpriteFrames)',
+  'GameMaker (strips)',
   'RPG Maker MV/MZ',
-  'Aseprite (JSON)',
-  'Raw PNGs (Any)',
+  'Aseprite (.aseprite + JSON)',
+  'TexturePacker JSON',
+  'PNG frames',
+  'Animated GIF',
 ] as const;
 
 // ── Component ──
@@ -183,7 +191,7 @@ export default function LandingPage() {
               style={{ imageRendering: 'pixelated' }}
             />
           </div>
-          <p className="text-[10px] font-mono text-[#5c5550]">
+          <p className="text-[10px] font-mono text-text-muted">
             Generated with SpriteBrew
           </p>
         </div>
@@ -206,7 +214,7 @@ export default function LandingPage() {
             See how it works <ChevronDown size={14} />
           </a>
         </div>
-        <p className="mt-4 text-[10px] font-mono text-[#5c5550]">
+        <p className="mt-4 text-[10px] font-mono text-text-muted">
           Start free. Earn +{DAILY_LOGIN_TOKENS} tokens every day you log in. No credit card required.
         </p>
       </section>
@@ -272,6 +280,15 @@ export default function LandingPage() {
             </span>
           ))}
         </div>
+        {/* Quick setup, read from the presets the export page uses, so the
+            two say the same (SB-15). */}
+        <ul className="mt-6 max-w-2xl mx-auto space-y-2 text-xs font-mono text-[#9a918a] leading-relaxed">
+          {ENGINE_PRESETS.map((preset) => (
+            <li key={preset.id}>
+              <span className="text-[#e8e0d6]">{preset.label}:</span> {preset.summary}
+            </li>
+          ))}
+        </ul>
       </section>
 
       {/* ── Trust ── */}
@@ -314,7 +331,7 @@ export default function LandingPage() {
           <div className="rounded-xl border border-[#d4871c]/30 bg-[#121010] p-6 space-y-4">
             <div>
               <h3 className="text-sm font-semibold text-[#d4871c]">Free</h3>
-              <p className="text-[10px] text-[#5c5550] uppercase tracking-wider mt-0.5">
+              <p className="text-[10px] text-text-muted uppercase tracking-wider mt-0.5">
                 Get Started
               </p>
             </div>
@@ -349,7 +366,7 @@ export default function LandingPage() {
             </div>
             <div>
               <h3 className="text-sm font-semibold text-[#d4871c]">Token Packs</h3>
-              <p className="text-[10px] text-[#5c5550] uppercase tracking-wider mt-0.5">
+              <p className="text-[10px] text-text-muted uppercase tracking-wider mt-0.5">
                 Pay as You Go
               </p>
             </div>
@@ -391,7 +408,7 @@ export default function LandingPage() {
           <div className="rounded-xl border border-[#1e1b18] bg-[#121010] p-6 space-y-4">
             <div>
               <h3 className="text-sm font-semibold">Pixel Pass</h3>
-              <p className="text-[10px] text-[#5c5550] uppercase tracking-wider mt-0.5">
+              <p className="text-[10px] text-text-muted uppercase tracking-wider mt-0.5">
                 Coming Soon
               </p>
             </div>
@@ -411,7 +428,7 @@ export default function LandingPage() {
             <PixelPassWaitlist />
           </div>
         </div>
-        <p className="text-center text-[10px] text-[#5c5550] mt-4">
+        <p className="text-center text-[10px] text-text-muted mt-4">
           All editing tools work without an account. AI generation requires sign-up. Commercial use included with every generation.
         </p>
       </section>
@@ -435,41 +452,41 @@ export default function LandingPage() {
       <footer className="border-t border-[#1e1b18] px-6 py-8">
         <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
           {/* At least 12 px, and 44 px tall on a coarse pointer. */}
-          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-[#5c5550]">
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-text-muted">
             <a
               href="https://github.com/GAlbanese09/spritebrew"
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-[#9a918a] transition-colors inline-flex items-center gap-1 pointer-coarse:min-h-11"
+              className="hover:text-text-primary focus-visible:text-text-primary transition-colors inline-flex items-center gap-1 pointer-coarse:min-h-11"
             >
               <GithubIcon size={12} /> GitHub
             </a>
             <a
               href="mailto:support@spritebrew.com"
-              className="hover:text-[#9a918a] transition-colors inline-flex items-center pointer-coarse:min-h-11"
+              className="hover:text-text-primary focus-visible:text-text-primary transition-colors inline-flex items-center pointer-coarse:min-h-11"
             >
               Contact
             </a>
-            <a href="/privacy" className="hover:text-[#9a918a] transition-colors inline-flex items-center pointer-coarse:min-h-11">
+            <a href="/privacy" className="hover:text-text-primary focus-visible:text-text-primary transition-colors inline-flex items-center pointer-coarse:min-h-11">
               Privacy
             </a>
-            <a href="/terms" className="hover:text-[#9a918a] transition-colors inline-flex items-center pointer-coarse:min-h-11">
+            <a href="/terms" className="hover:text-text-primary focus-visible:text-text-primary transition-colors inline-flex items-center pointer-coarse:min-h-11">
               Terms
             </a>
-            <a href="/refund-policy" className="hover:text-[#9a918a] transition-colors inline-flex items-center pointer-coarse:min-h-11">
+            <a href="/refund-policy" className="hover:text-text-primary focus-visible:text-text-primary transition-colors inline-flex items-center pointer-coarse:min-h-11">
               Refund Policy
             </a>
             <a
               href="https://tally.so/r/Y5oGp6"
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-[#9a918a] transition-colors inline-flex items-center pointer-coarse:min-h-11"
+              className="hover:text-text-primary focus-visible:text-text-primary transition-colors inline-flex items-center pointer-coarse:min-h-11"
             >
               Feedback
             </a>
           </div>
-          <p className="text-center text-xs text-[#5c5550]">
-            <a href="/updates" title="See all updates" className="underline underline-offset-2 hover:text-[#9a918a] transition-colors inline-flex items-center pointer-coarse:min-h-11">
+          <p className="text-center text-xs text-text-muted">
+            <a href="/updates" title="See all updates" className="underline underline-offset-2 hover:text-text-primary focus-visible:text-text-primary transition-colors inline-flex items-center pointer-coarse:min-h-11">
               SpriteBrew {CURRENT_VERSION}
             </a>{' '}
             &middot; Made by George, an indie developer
@@ -550,7 +567,7 @@ function PixelPassWaitlist() {
           onKeyDown={(e) => { if (e.key === 'Enter' && !submitting) handleSubmit(); }}
           placeholder="your@email.com"
           className="flex-1 min-w-0 rounded-lg border px-3 py-2 text-xs font-mono
-            text-[#e8e0d6] placeholder:text-[#5c5550]
+            text-[#e8e0d6] placeholder:text-text-muted
             focus:outline-none focus:border-[#d4871c] transition-colors"
           style={{ backgroundColor: '#2a2420', borderColor: error ? '#ef4444' : '#3a3430' }}
         />

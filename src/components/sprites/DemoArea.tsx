@@ -1235,11 +1235,11 @@ export default function DemoArea({ frameDataUrls }: DemoAreaProps) {
                 </span>
               </div>
             </div>
-            <p className="text-[9px] font-mono text-text-muted/70 pt-1 border-t border-border-subtle">
+            <p className="text-[9px] font-mono text-text-muted pt-1 border-t border-border-subtle">
               Arrow keys control direction when directional animations (Walk Up/Down/Left/Right) are available.
               Vertical direction takes priority on diagonals.
             </p>
-            <p className="text-[9px] font-mono text-text-muted/70">
+            <p className="text-[9px] font-mono text-text-muted">
               Sprite moonwalking? Try toggling natural facing if your sheet was generated facing left.
             </p>
           </div>

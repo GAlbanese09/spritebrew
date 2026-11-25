@@ -73,5 +73,24 @@ check('seen before the oldest release: everything', releasesSince('0.0.1').lengt
     read('src/components/layout/Sidebar.tsx').includes('href="/updates"') && read('src/app/page.tsx').includes('href="/updates"'));
 }
 
+// ── The newest release names Generate's three ways (the external product
+// audit's SB-21; DESIGN 2026-11-25-117) ──
+{
+  const tabs = fs.readFileSync(path.join(ROOT, 'src/lib/generateTabs.ts'), 'utf8');
+  const labels = ['create', 'text', 'animate'].map((k) => (tabs.match(new RegExp(`\\b${k}: '([^']+)'`)) || [])[1]);
+  const newest = RELEASES[0];
+  const said = newest.entries.map((e) => `${e.title} ${e.description}`).join(' ');
+  check('the three tab labels are read from generateTabs.ts', labels.every(Boolean) && labels.length === 3);
+  check('the newest release names each of Generate\'s three tabs as the page labels them',
+    labels.every(Boolean) && labels.every((l) => said.includes(l)));
+  check('each of the three has its own entry, with a "Try:" example',
+    labels.every((l) => newest.entries.some((e) => e.title.startsWith(l) && /Try/.test(e.description))));
+  check('the newest release is dated, and is 0.6.5 of NOV 25, 2026',
+    newest.version === '0.6.5' && newest.date === 'NOV 25, 2026' && newest.title === 'THREE WAYS TO MAKE A SPRITE');
+  check('the earlier notes stay as history (0.6.4, ANIMATION PRICES)',
+    RELEASES.some((r) => r.version === '0.6.4' && r.title === 'ANIMATION PRICES' && r.entries[0].title === 'Two animation styles now cost 50 tokens'));
+  check('no entry of the newest release has an em dash', !said.includes('—'));
+}
+
 console.log(failed ? `${failed} failed` : 'all pass');
 process.exit(failed ? 1 : 0);

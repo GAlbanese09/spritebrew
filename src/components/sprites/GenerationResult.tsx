@@ -756,7 +756,7 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
                 </Link>
                 <button
                   onClick={handleClearHistory}
-                  className="text-[10px] font-mono text-text-muted hover:text-text-secondary cursor-pointer"
+                  className="text-[10px] font-mono text-text-muted hover:text-text-primary cursor-pointer"
                 >
                   <Trash2 size={10} className="inline mr-1" />
                   Clear
@@ -790,7 +790,7 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
                   <p className="text-[9px] font-mono text-text-muted truncate" title={entry.prompt}>
                     {entry.prompt}
                   </p>
-                  <p className="text-[8px] font-mono text-text-muted/60">
+                  <p className="text-[8px] font-mono text-text-muted">
                     {entry.style}
                   </p>
                 </Link>
@@ -1071,7 +1071,7 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
               rounded text-xs font-mono transition-colors
               focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber
               ${sheetIsTransparent === true
-                ? 'bg-bg-elevated text-text-muted border border-border-subtle cursor-not-allowed'
+                ? 'bg-bg-elevated text-text-disabled border border-border-subtle cursor-not-allowed'
                 : bgRemovalActive
                   ? 'bg-accent-amber text-bg-primary cursor-pointer'
                   : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover border border-border-subtle cursor-pointer'
@@ -1294,7 +1294,7 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
             </Link>
             <button
               onClick={handleClearHistory}
-              className="text-[10px] font-mono text-text-muted hover:text-text-secondary cursor-pointer"
+              className="text-[10px] font-mono text-text-muted hover:text-text-primary cursor-pointer"
             >
               Clear
             </button>

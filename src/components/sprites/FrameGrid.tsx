@@ -209,7 +209,7 @@ export default function FrameGrid({ frameDataUrls, onCommit, knownBackground = N
                 </div>
                 <span
                   className={`mt-1 text-[10px] font-mono ${
-                    selected ? 'text-accent-amber' : 'text-text-muted group-hover:text-text-secondary'
+                    selected ? 'text-accent-amber' : 'text-text-muted group-hover:text-text-primary'
                   }`}
                 >
                   {idx + 1}

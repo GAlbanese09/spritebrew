@@ -18,6 +18,8 @@ import { encodeGif, framesFromSheet, GIF_SCALES, GIF_SCALE_DEFAULT, type GifScal
 import { canvasToBlob, downloadFile } from '@/lib/downloadUtils';
 import { assemblePlayedSheet, playedIsIdentity } from '@/lib/playedSheet';
 import { borderMostlyTransparent } from '@/lib/sheetAlpha';
+import { OUTLINE_RESTORED, outlineCleanedLine, outlineFoundLine } from '@/lib/outlineClean';
+import { outlineOfPicture } from '@/lib/outlinePicture';
 import { deliveredOf, resultKeyOf, shownOf, type CardImage, type CardVersion } from '@/lib/cardImage';
 import { tipsFor, type GenerateTab } from '@/lib/generateTabs';
 import {
@@ -277,6 +279,9 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
     setBgRemoved(null);
     setDetectedBgColor(null);
     setBgRemovalError(null);
+    setOutlineCleanedFor(null);
+    setOutlineShowFor(null);
+    setOutlineSaid('');
     if (dimsResultKeyRef.current !== resultKey) setNaturalDims({ w: 0, h: 0 });
     dimsResultKeyRef.current = resultKey;
   }, [generatedImageDataUrl, resultKey]);
@@ -345,9 +350,75 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
     return () => { cancelled = true; };
   }, [bgRemovalActive, bgTolerance, generatedImageDataUrl]);
 
-  /** The image currently displayed and used for download / Send to Slicer */
-  const displayImageDataUrl =
-    bgRemovalActive && bgRemovedDataUrl ? bgRemovedDataUrl : generatedImageDataUrl;
+  /** The image with background removal applied when it is active. */
+  const bgShownUrl = bgRemovalActive && bgRemovedDataUrl ? bgRemovedDataUrl : generatedImageDataUrl;
+
+  // The white outline clean (George, Nov 24; DESIGN's ticket
+  // design/tickets/outline-clean.md). The scan runs on the picture the card
+  // shows once its background is transparent: after Remove background, or at
+  // once when the background was already removed. Each answer is held with
+  // the picture it was made from, so a new picture (another tolerance,
+  // Remove background off, another version or result) never shows the last
+  // one's line, marks or cleaned picture.
+  const outlineBaseUrl = bgRemovalActive && bgRemovedDataUrl ? bgRemovedDataUrl : sheetIsTransparent === true ? generatedImageDataUrl : null;
+  const [outlineScanned, setOutlineScanned] = useState<{ src: string; n: number; markedUrl: string; cleanedUrl: string } | null>(null);
+  const outlineFound = outlineScanned !== null && outlineScanned.src === outlineBaseUrl && outlineScanned.n > 0 ? outlineScanned : null;
+  const [outlineCleanedFor, setOutlineCleanedFor] = useState<string | null>(null);
+  const outlineCleanedUrl = outlineFound !== null && outlineCleanedFor === outlineBaseUrl ? outlineFound.cleanedUrl : null;
+  const [outlineShowFor, setOutlineShowFor] = useState<string | null>(null);
+  const outlineShowing = outlineFound !== null && outlineCleanedUrl === null && outlineShowFor === outlineBaseUrl;
+  // What the card's status says after Clean outline or Undo (a polite live
+  // region; the line itself is not one, so a new scan is not read out).
+  const [outlineSaid, setOutlineSaid] = useState('');
+  const outlineUndoRef = useRef<HTMLButtonElement>(null);
+  const outlineCleanRef = useRef<HTMLButtonElement>(null);
+  const outlineFocusRef = useRef<'undo' | 'clean' | null>(null);
+
+  useEffect(() => {
+    if (!outlineBaseUrl) return;
+    const src = outlineBaseUrl;
+    let cancelled = false;
+    (async () => {
+      try {
+        const found = await outlineOfPicture(src);
+        if (!cancelled) setOutlineScanned({ src, ...found });
+      } catch {
+        // Unknown: no line, as before this clean.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [outlineBaseUrl]);
+
+  // Clean outline hands focus to Undo, and Undo hands it back, once the
+  // button it moves to is on the page.
+  useEffect(() => {
+    const to = outlineFocusRef.current;
+    if (!to) return;
+    outlineFocusRef.current = null;
+    (to === 'undo' ? outlineUndoRef.current : outlineCleanRef.current)?.focus();
+  }, [outlineCleanedUrl]);
+
+  const handleShowOutline = useCallback(() => {
+    setOutlineShowFor((v) => (v === outlineBaseUrl ? null : outlineBaseUrl));
+  }, [outlineBaseUrl]);
+  const handleCleanOutline = useCallback(() => {
+    if (!outlineFound) return;
+    outlineFocusRef.current = 'undo';
+    setOutlineCleanedFor(outlineBaseUrl);
+    setOutlineShowFor(null);
+    setOutlineSaid(outlineCleanedLine(outlineFound.n));
+  }, [outlineFound, outlineBaseUrl]);
+  const handleUndoOutline = useCallback(() => {
+    outlineFocusRef.current = 'clean';
+    setOutlineCleanedFor(null);
+    setOutlineSaid(OUTLINE_RESTORED);
+  }, []);
+
+  /** The image currently displayed and used for download / Send to Slicer:
+   *  the outline-cleaned picture once the outline is cleaned. */
+  const displayImageDataUrl = outlineCleanedUrl ?? bgShownUrl;
+  /** What the card draws: the marked picture while Show where is on. */
+  const drawnImageUrl = outlineShowing && outlineFound ? outlineFound.markedUrl : displayImageDataUrl;
 
   // Animate results loop in place. Geometry comes from the sheet hints the
   // generation set (frame size and count) and the loaded image's natural
@@ -476,10 +547,10 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
     // The version shown, or its transparent variant when background removal
     // is active, becomes the working image, so the slicer receives what the
     // card shows. Nothing changes when that is the working image already.
-    const handed = bgRemovalActive && bgRemovedDataUrl ? bgRemovedDataUrl : generatedImageDataUrl;
+    const handed = displayImageDataUrl;
     if (handed) setWorkingImage(handed);
     router.push('/upload');
-  }, [router, bgRemovalActive, bgRemovedDataUrl, generatedImageDataUrl, setWorkingImage]);
+  }, [router, displayImageDataUrl, setWorkingImage]);
 
   const handleSendToEditor = useCallback(async () => {
     // Snapshot bytes + dims at click time. We deliberately do NOT pre-stage
@@ -565,7 +636,7 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
     // GeneratePage flips the tab; AnimateForm consumes the flag on mount.
     // The animator reads the working image: hand it the version shown (its
     // transparent variant when background removal is active).
-    const handed = bgRemovalActive && bgRemovedDataUrl ? bgRemovedDataUrl : generatedImageDataUrl;
+    const handed = displayImageDataUrl;
     if (handed) setWorkingImage(handed);
     // Communicate the user's bg-removal CHOICE to AutoPrep. If the result-side
     // toggle was OFF, the user wants to keep the bg — tell AutoPrep to skip
@@ -576,10 +647,15 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
     setPendingAnimatorSkipBgRemoval(!bgRemovalActive);
     setPendingAnimatorHandoff(true);
     router.push('/generate');
-  }, [router, bgRemovalActive, bgRemovedDataUrl, generatedImageDataUrl, setWorkingImage, setPendingAnimatorHandoff, setPendingAnimatorSkipBgRemoval]);
+  }, [router, bgRemovalActive, displayImageDataUrl, setWorkingImage, setPendingAnimatorHandoff, setPendingAnimatorSkipBgRemoval]);
 
   const handleToggleBgRemoval = useCallback(() => {
     if (sheetIsTransparent === true) return;
+    // Turning Remove background off drops the outline clean with the picture
+    // it was made from; turning it on scans again (DESIGN's ticket, 2).
+    setOutlineCleanedFor(null);
+    setOutlineShowFor(null);
+    setOutlineSaid('');
     setBgRemovalWanted((v) => !v);
   }, [sheetIsTransparent]);
 
@@ -856,7 +932,7 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
               }}
             >
               <SheetLoop
-                src={displayImageDataUrl ?? generatedImageDataUrl}
+                src={drawnImageUrl ?? generatedImageDataUrl}
                 geometry={loopGeometry}
                 sequence={loopPlayback}
                 fps={loopSeq.fps}
@@ -885,7 +961,7 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
             }}
           >
             <img
-              src={displayImageDataUrl ?? generatedImageDataUrl}
+              src={drawnImageUrl ?? generatedImageDataUrl}
               alt="Generated sprite sheet"
               className="pixel-art-render block max-w-none"
               style={{
@@ -927,7 +1003,7 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
       {loopGeometry && (
         <div className={showLoop ? undefined : 'invisible'} inert={!showLoop} aria-hidden={!showLoop || undefined}>
           <LoopFrameStrip
-            src={displayImageDataUrl ?? generatedImageDataUrl}
+            src={drawnImageUrl ?? generatedImageDataUrl}
             geometry={loopGeometry}
             sequence={loopSeq}
             onChange={handleLoopChange}
@@ -1036,6 +1112,58 @@ export default function GenerationResult({ onReset, tab = 'create', textStyleId 
             )}
           </>
         )}
+        {/* The white outline (DESIGN's ticket, 2): Show where, Clean outline,
+            then Undo. Nothing shows when none is found. */}
+        {outlineFound && (
+          <div className="space-y-2 border-t border-border-subtle pt-2">
+            <p className="text-xs font-mono text-text-secondary">
+              {outlineCleanedUrl ? outlineCleanedLine(outlineFound.n) : outlineFoundLine(outlineFound.n)}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {outlineCleanedUrl === null ? (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleShowOutline}
+                    aria-pressed={outlineShowing}
+                    // Pressed: amber border and text, as #86's Show where
+                    // (the ghost variant's grey text would win over a
+                    // plain text class; the pressed variant is applied
+                    // after it).
+                    className="md:h-8 pointer-coarse:min-h-11 border border-transparent
+                      aria-pressed:border-accent-amber aria-pressed:text-accent-amber aria-pressed:hover:text-accent-amber
+                      focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber"
+                  >
+                    Show where
+                  </Button>
+                  <Button
+                    ref={outlineCleanRef}
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleCleanOutline}
+                    className="md:h-8 pointer-coarse:min-h-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber"
+                  >
+                    Clean outline
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  ref={outlineUndoRef}
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleUndoOutline}
+                  className="md:h-8 pointer-coarse:min-h-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-amber"
+                >
+                  Undo
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+        <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {outlineSaid}
+        </span>
       </div>
 
       {/* GIF scale, for Download GIF */}

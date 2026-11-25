@@ -3,7 +3,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Pencil, Eraser, Pipette, Undo2, Redo2, FlipHorizontal, History, Save, X, ArrowLeft, Film, AlertCircle, Download, ScanEye, Sparkles, Layers, Minus, Plus, ChevronDown, Check } from 'lucide-react';
+import { Pencil, Eraser, Pipette, Undo2, Redo2, FlipHorizontal, History, Save, X, ArrowLeft, Film, AlertCircle, Download, ScanEye, Sparkles, Layers, Minus, Plus, ChevronDown, Check, PaintBucket, Scan, WandSparkles } from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import Button from '@/components/ui/Button';
 import {
@@ -21,6 +21,7 @@ import {
 import type { SpriteProjectSource, SpriteProjectV1 } from '@/lib/spriteProject';
 import type { EditorRefusalPlace } from '@/lib/editorConstants';
 import { scanResidue, residueOverlay } from '@/lib/residueCleanup';
+import { ERASE_AREA_DEFAULT, ERASE_AREA_MAX, NO_OUTLINE_TITLE, editorOutlineCleaned, erasedLine, floodRegion, scanOutline, tapAgainLine } from '@/lib/outlineClean';
 import {
   fitZoom,
   fitPanY,
@@ -270,6 +271,8 @@ export default function PixelEditorBody({
   const redo = useEditorStore((s) => s.redo);
   const flipHorizontal = useEditorStore((s) => s.flipHorizontal);
   const cleanResidue = useEditorStore((s) => s.cleanResidue);
+  const cleanOutline = useEditorStore((s) => s.cleanOutline);
+  const eraseArea = useEditorStore((s) => s.eraseArea);
   const hasPixels = useEditorStore((s) => s.pixels != null);
   const revertToOriginal = useEditorStore((s) => s.revertToOriginal);
   const reset = useEditorStore((s) => s.reset);
@@ -337,6 +340,30 @@ export default function PixelEditorBody({
   const showResidueRef = useRef(false);
   const residueCanvasRef = useRef<HTMLCanvasElement>(null);
   const residueTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // The white outline (DESIGN's outline ticket, 3): "Show outline" marks
+  // what "Clean outline" would take, on its own layer, rescanned after
+  // strokes as "Show residue" is. Whether there is an outline at all is
+  // kept current either way, since "Clean outline" is off without one.
+  const [showOutline, setShowOutline] = useState(false);
+  const showOutlineRef = useRef(false);
+  const outlineCanvasRef = useRef<HTMLCanvasElement>(null);
+  const outlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [outlineAvailable, setOutlineAvailable] = useState(false);
+
+  // "Erase area": its tolerance, the cell under the mouse (its run is marked
+  // before a click) or the cell a first tap marked on a touch screen, and a
+  // press waiting for its release, so a second finger that starts a pinch
+  // erases nothing.
+  const [eraseTolerance, setEraseTolerance] = useState(ERASE_AREA_DEFAULT);
+  const eraseToleranceRef = useRef(ERASE_AREA_DEFAULT);
+  const toleranceId = useId();
+  const noOutlineId = useId();
+  const areaCanvasRef = useRef<HTMLCanvasElement>(null);
+  const areaHoverRef = useRef<{ x: number; y: number } | null>(null);
+  const areaRafRef = useRef<number | null>(null);
+  const pendingEraseRef = useRef<{ x: number; y: number; touch: boolean } | null>(null);
+  const toolRef = useRef(tool);
 
   // Onion skin (W2): off until the person turns it on; available only when
   // the caller passed neighbours. The decoded neighbours belong to the
@@ -544,6 +571,12 @@ export default function PixelEditorBody({
       rc.style.width = `${width * zoom}px`;
       rc.style.height = `${height * zoom}px`;
     }
+    // The outline marks and the "Erase area" preview sit there too.
+    for (const layer of [outlineCanvasRef.current, areaCanvasRef.current]) {
+      if (!layer) continue;
+      layer.style.width = `${width * zoom}px`;
+      layer.style.height = `${height * zoom}px`;
+    }
 
     // The onion layer sits exactly under the image: same CSS size. Its
     // backing store is sized when it is drawn.
@@ -680,6 +713,84 @@ export default function PixelEditorBody({
     setShowResidue(next);
   }, [drawResidueOverlay]);
 
+  // The white outline: scan the pixels as they are now, keep whether there
+  // is one, and mark it when "Show outline" is on. Reads the store at call
+  // time, as the residue scan does.
+  const refreshOutline = useCallback(() => {
+    if (outlineTimerRef.current !== null) {
+      clearTimeout(outlineTimerRef.current);
+      outlineTimerRef.current = null;
+    }
+    const oc = outlineCanvasRef.current;
+    const { pixels, width, height } = useEditorStore.getState();
+    if (!pixels || width === 0 || height === 0) {
+      setOutlineAvailable(false);
+      oc?.getContext('2d')?.clearRect(0, 0, oc.width, oc.height);
+      return;
+    }
+    const { kinds, count } = scanOutline(pixels, width, height);
+    setOutlineAvailable(count > 0);
+    if (!oc || !showOutlineRef.current) return;
+    if (oc.width !== width || oc.height !== height) {
+      oc.width = width;
+      oc.height = height;
+    }
+    oc.getContext('2d')!.putImageData(new ImageData(residueOverlay(kinds, width, height), width, height), 0, 0);
+  }, []);
+
+  // After a stroke's pixels change, scan once the edits pause.
+  const scheduleOutline = useCallback(() => {
+    if (outlineTimerRef.current !== null) clearTimeout(outlineTimerRef.current);
+    outlineTimerRef.current = setTimeout(refreshOutline, RESIDUE_RESCAN_MS);
+  }, [refreshOutline]);
+
+  const toggleShowOutline = useCallback(() => {
+    const next = !showOutlineRef.current;
+    showOutlineRef.current = next;
+    if (next) refreshOutline();
+    setShowOutline(next);
+  }, [refreshOutline]);
+
+  // "Erase area": mark the run a click on the hovered cell would erase.
+  // Reads the store, the tool and the tolerance at draw time, so a redraw
+  // after an erase, a stroke or a tolerance change marks the newest run.
+  const drawAreaPreview = useCallback(() => {
+    const ac = areaCanvasRef.current;
+    if (!ac) return;
+    const { pixels, width, height } = useEditorStore.getState();
+    const at = areaHoverRef.current;
+    if (!pixels || width === 0 || height === 0 || !at || toolRef.current !== 'erasearea') {
+      ac.getContext('2d')?.clearRect(0, 0, ac.width, ac.height);
+      return;
+    }
+    if (ac.width !== width || ac.height !== height) {
+      ac.width = width;
+      ac.height = height;
+    }
+    const { mask } = floodRegion(pixels, width, height, at.x, at.y, eraseToleranceRef.current);
+    ac.getContext('2d')!.putImageData(new ImageData(residueOverlay(mask, width, height), width, height), 0, 0);
+  }, []);
+
+  const scheduleAreaPreview = useCallback(() => {
+    if (areaRafRef.current !== null) return;
+    areaRafRef.current = requestAnimationFrame(() => {
+      areaRafRef.current = null;
+      drawAreaPreview();
+    });
+  }, [drawAreaPreview]);
+
+  // The tool and the tolerance: kept for the handlers outside render, and
+  // the preview follows them.
+  useEffect(() => {
+    toolRef.current = tool;
+    if (tool !== 'erasearea') areaHoverRef.current = null;
+    drawAreaPreview();
+  }, [tool, drawAreaPreview]);
+  useEffect(() => {
+    eraseToleranceRef.current = eraseTolerance;
+    drawAreaPreview();
+  }, [eraseTolerance, drawAreaPreview]);
+
   // Onion skin: decode the neighbours once per set of sources. A decode
   // that finishes after the sources changed or the editor closed is
   // dropped (decodeOnionSources asks isCurrent at the end).
@@ -735,10 +846,14 @@ export default function PixelEditorBody({
         }
         if (rect === null) redrawResidueOverlayNow();
         else scheduleResidueOverlay();
+        if (rect === null) refreshOutline();
+        else scheduleOutline();
+        if (areaHoverRef.current) scheduleAreaPreview();
       }
     );
+    refreshOutline();
     return unsub;
-  }, [renderCanvasesFull, patchDirtyRect, drawGridOverlay, scheduleResidueOverlay, redrawResidueOverlayNow]);
+  }, [renderCanvasesFull, patchDirtyRect, drawGridOverlay, scheduleResidueOverlay, redrawResidueOverlayNow, refreshOutline, scheduleOutline, scheduleAreaPreview]);
 
   // Re-render on zoom change (image canvas's CSS size + overlay's full
   // geometry). Wave 2a: this MUST be a layout effect so the canvas CSS size
@@ -1359,6 +1474,11 @@ export default function PixelEditorBody({
           // started here would still work.
           return;
         }
+        if (tool === 'erasearea') {
+          // One click is one undo step, taken on release (handlePointerUp).
+          pendingEraseRef.current = { ...coords, touch: e.pointerType !== 'mouse' };
+          return;
+        }
         if (tool !== 'eyedropper') beginStroke();
         setIsDrawing(true);
         prevCellRef.current = null;
@@ -1367,6 +1487,8 @@ export default function PixelEditorBody({
           prevCellRef.current = coords;
         }
       } else if (size === 2) {
+        // A second finger starts a pinch: a pending "Erase area" press is dropped.
+        pendingEraseRef.current = null;
         // Second pointer landed — kill any drawing in progress, start gesture.
         // cancelStroke restores the pre-stroke snapshot from history so the
         // partial stroke is invisible (spec AD-4).
@@ -1411,6 +1533,21 @@ export default function PixelEditorBody({
       // mid-transform; an in-flight overlay position would be misleading).
       if (e.pointerType === 'mouse' && !gestureRef.current) {
         updateCursorForMouse(e.clientX, e.clientY);
+        if (tool === 'erasearea') {
+          const at = getPixelCoords(e);
+          const { width, height } = useEditorStore.getState();
+          const inside = at !== null && at.x >= 0 && at.y >= 0 && at.x < width && at.y < height;
+          const was = areaHoverRef.current;
+          if (!inside) {
+            if (was) {
+              areaHoverRef.current = null;
+              scheduleAreaPreview();
+            }
+          } else if (!was || was.x !== at.x || was.y !== at.y) {
+            areaHoverRef.current = at;
+            scheduleAreaPreview();
+          }
+        }
       }
       if (!pointersRef.current.has(e.pointerId)) return;
       pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1459,7 +1596,7 @@ export default function PixelEditorBody({
         prevCellRef.current = coords;
       }
     },
-    [isDrawing, tool, getPixelCoords, applyAt, applyLine, updateCursorForMouse]
+    [isDrawing, tool, getPixelCoords, applyAt, applyLine, updateCursorForMouse, scheduleAreaPreview]
   );
 
   const handlePointerUp = useCallback(
@@ -1528,6 +1665,43 @@ export default function PixelEditorBody({
         prevCellRef.current = null;
       }
 
+      // "Erase area": the press is released with no pinch in between.
+      if (size === 0 && pendingEraseRef.current) {
+        const at = pendingEraseRef.current;
+        pendingEraseRef.current = null;
+        if (!gestureSessionRef.current) {
+          const tol = eraseToleranceRef.current;
+          // A touch screen has no hover to show the run first (DESIGN
+          // 2026-11-25-006): the first tap marks it and says how many
+          // pixels; a second tap inside the mark erases it; a tap elsewhere
+          // marks that run instead. Another tool clears the mark.
+          let seed: { x: number; y: number } | null = at;
+          if (at.touch) {
+            const mark = areaHoverRef.current;
+            const { pixels, width, height } = useEditorStore.getState();
+            const inMark = !!mark && !!pixels && floodRegion(pixels, width, height, mark.x, mark.y, tol).mask[at.y * width + at.x] === 1;
+            if (mark && inMark) {
+              seed = mark;
+              areaHoverRef.current = null;
+            } else {
+              const run = pixels ? floodRegion(pixels, width, height, at.x, at.y, tol).count : 0;
+              areaHoverRef.current = run > 0 ? { x: at.x, y: at.y } : null;
+              seed = null;
+              if (brushToastTimerRef.current) clearTimeout(brushToastTimerRef.current);
+              setBrushToast(run > 0 ? tapAgainLine(run) : null);
+              if (run > 0) brushToastTimerRef.current = setTimeout(() => setBrushToast(null), 4000);
+            }
+            drawAreaPreview();
+          }
+          const n = seed ? eraseArea(seed.x, seed.y, tol) : 0;
+          if (n > 0) {
+            if (brushToastTimerRef.current) clearTimeout(brushToastTimerRef.current);
+            setBrushToast(erasedLine(n));
+            brushToastTimerRef.current = setTimeout(() => setBrushToast(null), 2000);
+          }
+        }
+      }
+
       if (size === 0) {
         gestureSessionRef.current = false;
       }
@@ -1537,7 +1711,7 @@ export default function PixelEditorBody({
         updateCursorForMouse(e.clientX, e.clientY);
       }
     },
-    [isDrawing, tool, endStroke, updateCursorForMouse, commitZoomPan]
+    [isDrawing, tool, endStroke, updateCursorForMouse, commitZoomPan, eraseArea, drawAreaPreview]
   );
 
   const handlePointerCancel = useCallback(
@@ -1549,7 +1723,8 @@ export default function PixelEditorBody({
       try {
         containerRef.current?.releasePointerCapture(e.pointerId);
       } catch { /* ignore */ }
-      // OS stole the gesture — don't commit a half-stroke.
+      // OS stole the gesture: don't commit a half-stroke, nor a pending erase.
+      pendingEraseRef.current = null;
       if (isDrawing) {
         cancelStroke();
         setIsDrawing(false);
@@ -1805,6 +1980,17 @@ export default function PixelEditorBody({
     brushToastTimerRef.current = setTimeout(() => setBrushToast(null), 2000);
   }, [cleanResidue]);
 
+  // "Clean outline": one undo step, then say how many pixels went. Off
+  // (aria-disabled, so it keeps focus and its title) when none is found.
+  const handleCleanOutline = useCallback(() => {
+    if (!outlineAvailable) return;
+    const n = cleanOutline();
+    if (n === 0) return;
+    if (brushToastTimerRef.current) clearTimeout(brushToastTimerRef.current);
+    setBrushToast(editorOutlineCleaned(n));
+    brushToastTimerRef.current = setTimeout(() => setBrushToast(null), 2000);
+  }, [cleanOutline, outlineAvailable]);
+
   // Fix #3: scope every editor hotkey to the 'editor' scope so they don't
   // fire while a text input (e.g., the future project-name prompt or a
   // gallery search) is focused. The matching <HotkeysProvider initiallyActive
@@ -1844,6 +2030,15 @@ export default function PixelEditorBody({
         clearTimeout(residueTimerRef.current);
         residueTimerRef.current = null;
       }
+      // Nor does an outline rescan or an "Erase area" preview.
+      if (outlineTimerRef.current !== null) {
+        clearTimeout(outlineTimerRef.current);
+        outlineTimerRef.current = null;
+      }
+      if (areaRafRef.current !== null) {
+        cancelAnimationFrame(areaRafRef.current);
+        areaRafRef.current = null;
+      }
       // Nor does a zoom animation's backstop (W2 audit r2, finding 9).
       if (zoomAnimTimerRef.current !== null) {
         clearTimeout(zoomAnimTimerRef.current);
@@ -1870,6 +2065,7 @@ export default function PixelEditorBody({
   const toolButtons: Array<{ id: Tool; icon: typeof Pencil; label: string }> = [
     { id: 'pencil', icon: Pencil, label: 'Pencil' },
     { id: 'eraser', icon: Eraser, label: 'Eraser' },
+    { id: 'erasearea', icon: PaintBucket, label: 'Erase area' },
     { id: 'eyedropper', icon: Pipette, label: 'Eyedropper' },
   ];
 
@@ -1969,6 +2165,8 @@ export default function PixelEditorBody({
             key={id}
             onClick={() => setTool(id)}
             title={label}
+            aria-label={label}
+            aria-pressed={tool === id}
             className={`p-2 rounded cursor-pointer transition-colors min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0
               ${tool === id
                 ? 'bg-accent-amber text-bg-primary'
@@ -2065,6 +2263,35 @@ export default function PixelEditorBody({
         >
           <Sparkles size={16} />
         </button>
+        <button
+          onClick={toggleShowOutline}
+          title="Show outline"
+          aria-label="Show outline"
+          aria-pressed={showOutline}
+          disabled={!hasPixels}
+          className={`p-2 rounded cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0
+            ${showOutline
+              ? 'bg-accent-amber text-bg-primary'
+              : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'
+            }`}
+        >
+          <Scan size={16} />
+        </button>
+        <button
+          onClick={handleCleanOutline}
+          title={outlineAvailable ? 'Clean outline' : NO_OUTLINE_TITLE}
+          aria-label="Clean outline"
+          aria-disabled={!outlineAvailable || undefined}
+          aria-describedby={outlineAvailable ? undefined : noOutlineId}
+          className={`p-2 rounded min-h-11 min-w-11 shrink-0 md:min-h-0 md:min-w-0
+            ${outlineAvailable
+              ? 'text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer'
+              : 'text-text-muted opacity-30 cursor-not-allowed'
+            }`}
+        >
+          <WandSparkles size={16} />
+        </button>
+        <span id={noOutlineId} hidden>{NO_OUTLINE_TITLE}</span>
         {onionAvailable && (
           <button
             onClick={toggleOnion}
@@ -2142,6 +2369,29 @@ export default function PixelEditorBody({
             the zoom as a percentage opening a menu, plus. Outside the
             pointer-capturing container below, so presses never reach the
             gesture handlers. A fitted image sits above it (FIT_PAD_BOTTOM). */}
+        {/* "Erase area"'s tolerance (DESIGN's outline ticket, 3), at the top
+            of the canvas while the tool is on: the tool rail is too narrow
+            for a slider, and the bottom bar scrolls on a phone. Outside the
+            pointer-capturing container, as the zoom pill is. */}
+        {tool === 'erasearea' && (
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-3 py-1 rounded-xl bg-bg-primary/90 backdrop-blur-sm border border-border-subtle">
+            <label htmlFor={toleranceId} className="text-xs font-mono text-text-secondary">
+              Tolerance
+            </label>
+            <input
+              id={toleranceId}
+              type="range"
+              min={0}
+              max={ERASE_AREA_MAX}
+              value={eraseTolerance}
+              onChange={(e) => setEraseTolerance(Number(e.target.value))}
+              className="w-28 pointer-coarse:min-h-11 accent-[var(--accent-amber)] cursor-pointer"
+            />
+            <output htmlFor={toleranceId} className="w-6 text-right text-xs font-mono text-text-primary tabular-nums">
+              {eraseTolerance}
+            </output>
+          </div>
+        )}
         <div ref={zoomPillRef} className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-0.5 p-0.5 rounded-xl bg-bg-primary/90 backdrop-blur-sm border border-border-subtle">
           {/* Zoom changes are announced, as the old readout's were (W2 audit
               r2, finding 6). */}
@@ -2282,7 +2532,7 @@ export default function PixelEditorBody({
                 // Eyedropper tool gets its own cursor (lucide pipette SVG,
                 // hotspot at the tip 2,22). Pencil/eraser keep cursor:none
                 // so the brush-footprint overlay below is the only indicator.
-                cursor: tool === 'eyedropper' ? "url('/cursors/eyedropper.svg') 2 22, crosshair" : 'none',
+                cursor: tool === 'eyedropper' ? "url('/cursors/eyedropper.svg') 2 22, crosshair" : tool === 'erasearea' ? 'crosshair' : 'none',
                 // Wave 1c CSS checkerboard. Fixed 16px screen tile (8px
                 // squares) — intentional look change from the prior zoom-
                 // scaled in-canvas fill.
@@ -2300,6 +2550,21 @@ export default function PixelEditorBody({
               className="absolute top-0 left-0 pointer-events-none"
               style={{ imageRendering: layerRendering, display: showResidue ? 'block' : 'none' }}
             />
+            {/* "Show outline" marks and the "Erase area" preview, the same way. */}
+            <canvas
+              ref={outlineCanvasRef}
+              aria-hidden="true"
+              data-outline-overlay=""
+              className="absolute top-0 left-0 pointer-events-none"
+              style={{ imageRendering: layerRendering, display: showOutline ? 'block' : 'none' }}
+            />
+            <canvas
+              ref={areaCanvasRef}
+              aria-hidden="true"
+              data-area-preview=""
+              className="absolute top-0 left-0 pointer-events-none"
+              style={{ imageRendering: layerRendering, display: tool === 'erasearea' ? 'block' : 'none' }}
+            />
             <div
               ref={overlayRef}
               aria-hidden="true"
@@ -2315,7 +2580,7 @@ export default function PixelEditorBody({
                 width: brushSize * zoom,
                 height: brushSize * zoom,
                 transform: `translate(${cursorX}px, ${cursorY}px)`,
-                display: cursorVisible && tool !== 'eyedropper' ? 'block' : 'none',
+                display: cursorVisible && tool !== 'eyedropper' && tool !== 'erasearea' ? 'block' : 'none',
               }}
             />
           </div>

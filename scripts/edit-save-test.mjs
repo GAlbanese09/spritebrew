@@ -222,8 +222,12 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   check('E6: a switch shows the version and drops the notes made for the other one', /if \(version === cardVersion\) return;\s*showCardVersion\(version\);\s*setAnnouncedEdit\(null\);\s*setSheetReady\(null\);\s*setGifReady\(null\);\s*setSheetFailedSrc\(null\);\s*setGifError\(null\);/.test(sw), sw.length);
   const slicer = fn(cardSrc, 'handleSendToSlicer');
   const animator = fn(cardSrc, 'handleSendToAnimator');
-  const handed = /const handed = bgRemovalActive && bgRemovedDataUrl \? bgRemovedDataUrl : generatedImageDataUrl;\s*if \(handed\) setWorkingImage\(handed\);/;
-  check('E7: Send to Slicer and Send to Animator hand over the version shown', handed.test(slicer) && handed.test(animator));
+  // The version shown: background removal and the outline clean applied
+  // when they are on (BUILD-2's outline clean; scripts/outline-clean-test.mjs W2).
+  const handed = /const handed = displayImageDataUrl;\s*if \(handed\) setWorkingImage\(handed\);/;
+  check('E7: Send to Slicer and Send to Animator hand over the version shown', handed.test(slicer) && handed.test(animator)
+    && /const bgShownUrl = bgRemovalActive && bgRemovedDataUrl \? bgRemovedDataUrl : generatedImageDataUrl;/.test(cardSrc)
+    && /const displayImageDataUrl = outlineCleanedUrl \?\? bgShownUrl;/.test(cardSrc));
   check('E8: each save is announced one frame later, and the note is one polite line', /setAnnouncedEdit\(null\);[\s\S]*requestAnimationFrame\(\(\) => \{\s*announceFrameRef\.current = null;\s*setAnnouncedEdit\(editedDataUrl\);/.test(save) && /'Your edit is on the card\. Before edit is one tap away\.'/.test(cardSrc) && /<p className="sr-only" role="status">\{editNote\}<\/p>/.test(cardSrc));
 
   const labels = ['Discard changes', 'Keep editing', 'Save and close'].map((t) => modal.indexOf(`\n                ${t}\n`));

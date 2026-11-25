@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Pencil } from 'lucide-react';
 import { useSpriteStore } from '@/stores/spriteStore';
 import PixelEditor, { type OnionSources } from './PixelEditor';
@@ -30,6 +30,13 @@ export default function FrameGrid({ frameDataUrls, onCommit, knownBackground = N
   const updateFrameData = useSpriteStore((s) => s.updateFrameData);
 
   const [editingFrameId, setEditingFrameId] = useState<string | null>(null);
+  // Each frame's pencil, so closing the editor gives the focus back to the
+  // one that opened it (SB-03, the outside audit of Nov 24, 2026).
+  const pencilRefs = useRef(new Map<string, HTMLButtonElement>());
+  const closeEditor = useCallback((frameId: string | null) => {
+    setEditingFrameId(null);
+    if (frameId) requestAnimationFrame(() => pencilRefs.current.get(frameId)?.focus());
+  }, []);
   // The strip's "Show where" marks, one image per frame id, drawn over the
   // thumbnails; null when they are off.
   const [leftoverMarks, setLeftoverMarks] = useState<Map<string, string> | null>(null);
@@ -66,10 +73,10 @@ export default function FrameGrid({ frameDataUrls, onCommit, knownBackground = N
     (newDataUrl: string) => {
       if (editingFrameId) {
         updateFrameData(editingFrameId, newDataUrl);
-        setEditingFrameId(null);
+        closeEditor(editingFrameId);
       }
     },
-    [editingFrameId, updateFrameData]
+    [editingFrameId, updateFrameData, closeEditor]
   );
 
   const editingFrame = editingFrameId ? allFrames.find((f) => f.id === editingFrameId) : null;
@@ -209,20 +216,28 @@ export default function FrameGrid({ frameDataUrls, onCommit, knownBackground = N
                 </span>
               </button>
 
-              {/* Edit-pixel — sibling to selector button (avoids nested
+              {/* Edit-pixel: sibling to selector button (avoids nested
                   <button> hydration error). Positioned to land in the same
                   pixel spot as the original overlay: button p-1 = 4px +
-                  checkerboard's original top-0.5/right-0.5 = 2px → 6px = 1.5. */}
+                  checkerboard's original top-0.5/right-0.5 = 2px, so 6px = 1.5.
+                  With a mouse it shows on hover, and when its frame has the
+                  keyboard focus; it is see-through, never display:none, so
+                  Tab reaches it (SB-03). Its name says which frame. */}
               <button
+                ref={(el) => {
+                  if (el) pencilRefs.current.set(frame.id, el);
+                  else pencilRefs.current.delete(frame.id);
+                }}
                 data-frame-drag-ignore
                 onClick={(e) => {
                   e.stopPropagation();
                   setEditingFrameId(frame.id);
                 }}
-                className="absolute top-1.5 right-1.5 w-5 h-5 flex pointer-fine:hidden pointer-fine:group-hover:flex items-center justify-center rounded
+                aria-label={`Edit frame ${idx + 1}`}
+                title={`Edit frame ${idx + 1}`}
+                className="absolute top-1.5 right-1.5 w-5 h-5 flex pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100 items-center justify-center rounded
                   bg-bg-primary/80 border border-border-default
                   text-text-muted hover:text-accent-amber hover:bg-bg-primary cursor-pointer"
-                title="Edit pixel"
               >
                 <Pencil size={10} />
               </button>
@@ -242,7 +257,7 @@ export default function FrameGrid({ frameDataUrls, onCommit, knownBackground = N
           frameWidth={editingFrame.width}
           frameHeight={editingFrame.height}
           onSave={handleEditSave}
-          onClose={() => setEditingFrameId(null)}
+          onClose={() => closeEditor(editingFrameId)}
           source={{ kind: 'sheet-import' }}
           onion={editingOnion}
           refusalPlace="plain"

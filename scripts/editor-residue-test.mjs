@@ -93,9 +93,11 @@ s().undo();
 check('redo branch: undo after the clean returns to the loaded frame, not the undone stroke', same(Array.from(s().pixels), Array.from(frame(true))));
 
 check('reloads for the cap', s().loadProject(project(), frame(true)) === true);
+// Each pass over the 36 cells swaps the colours, so every stroke changes a
+// pixel (a stroke that changes nothing adds no step since SB-27).
 for (let i = 0; i < 60; i++) {
   s().beginStroke();
-  s().paintPixel(2 + (i % 6), 2 + (Math.floor(i / 6) % 6), i % 2 ? '#112233' : '#445566');
+  s().paintPixel(2 + (i % 6), 2 + (Math.floor(i / 6) % 6), (i + Math.floor(i / 36)) % 2 ? '#112233' : '#445566');
   s().endStroke();
 }
 const before = s().historyStack.length;

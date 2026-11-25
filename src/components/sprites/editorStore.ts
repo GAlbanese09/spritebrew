@@ -144,8 +144,8 @@ export interface PixelEditorState {
   historyIndex: number; // -1 = empty, 0 = initial state, 1+ = edits
   /**
    * Bumps on every history write that changes what the editor holds (load,
-   * stroke end, undo, redo, revert, flip, reset; not the redo branch dropped
-   * at a stroke's start, which endStroke follows). The "something changed" signal for
+   * a stroke end that changed pixels, undo, redo, revert, flip, reset). The
+   * "something changed" signal for
    * subscribers such as useEditorRecovery: historyIndex alone stops moving
    * once the stack is at MAX_HISTORY, because endStroke shifts the stack and
    * leaves the index at MAX_HISTORY - 1.
@@ -217,8 +217,10 @@ export interface PixelEditorState {
     height: number,
     source?: SpriteProjectSource,
   ) => void;
-  // Stroke boundaries: beginStroke clears any redo branch; endStroke
-  // pushes the post-stroke pixel snapshot as a single history entry.
+  // Stroke boundaries: endStroke pushes the post-stroke pixel snapshot as a
+  // single history entry, dropping any redo branch first, when the stroke
+  // changed pixels; a stroke that changed nothing, or one cancelled, keeps
+  // the history and Redo as they were (SB-27).
   // Editor calls these on mousedown / mouseup so each stroke = one undo
   // entry (matches the original PixelEditor behaviour).
   beginStroke: () => void;
@@ -312,6 +314,13 @@ export function flipPixelsHorizontal(
     }
   }
   return out;
+}
+
+/** True when two pixel buffers hold the same bytes. */
+function sameBytes(a: Uint8ClampedArray, b: Uint8ClampedArray): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 /**
@@ -499,28 +508,27 @@ export const useEditorStore = create<PixelEditorState>()(
     },
 
     beginStroke: () => {
-      const { historyStack, historyIndex, hasAttemptedEdit } = get();
       // Flip hasAttemptedEdit on the FIRST paint-pointer-down. Survives a
       // subsequent cancelStroke (gesture interrupt / pointercancel) so the
       // unsaved-changes confirm fires on dismiss even when iOS unwound the
       // only stroke. Cleared only by loadProject / reset.
-      const next: Partial<PixelEditorState> = {};
-      if (historyIndex < historyStack.length - 1) {
-        // Drops the redo branch. No revision bump: the recovery draft stores
-        // pixels only, and endStroke bumps; a bump here would start the
-        // autosave debounce mid-stroke (backlog-1 audit r1).
-        next.historyStack = historyStack.slice(0, historyIndex + 1);
-      }
-      if (!hasAttemptedEdit) {
-        next.hasAttemptedEdit = true;
-      }
-      if (Object.keys(next).length > 0) set(next);
+      //
+      // The redo branch is no longer dropped here: a stroke that is
+      // cancelled, or that changes nothing (erasing an empty pixel), keeps
+      // Redo (SB-27, the outside audit of Nov 24, 2026). endStroke drops it
+      // when the stroke changed pixels.
+      if (!get().hasAttemptedEdit) set({ hasAttemptedEdit: true });
     },
 
     endStroke: () => {
-      const { pixels, historyStack } = get();
+      const { pixels, historyStack, historyIndex } = get();
       if (!pixels) return;
-      const next = [...historyStack, new Uint8ClampedArray(pixels)];
+      // A stroke that left the pixels as they were adds no step and keeps
+      // the redo branch (SB-27).
+      const current = historyIndex >= 0 ? historyStack[historyIndex] : undefined;
+      if (current && sameBytes(current, pixels)) return;
+      // A real edit: drop the redo branch, then add the step.
+      const next = [...historyStack.slice(0, historyIndex + 1), new Uint8ClampedArray(pixels)];
       while (next.length > MAX_HISTORY) next.shift();
       set({ historyStack: next, historyIndex: next.length - 1, revision: get().revision + 1 });
     },
@@ -600,11 +608,15 @@ export const useEditorStore = create<PixelEditorState>()(
       const { pixels, width, height } = get();
       if (!pixels || x < 0 || y < 0 || x >= width || y >= height) return null;
       const idx = (y * width + x) * 4;
-      if (pixels[idx + 3] < 10) return null;
-      const r = pixels[idx];
-      const g = pixels[idx + 1];
-      const b = pixels[idx + 2];
-      return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+      // An empty pixel keeps the paint as it is: the Pencil never turns into
+      // an eraser (DESIGN 2026-11-25-034). Any other pixel is picked with its
+      // opacity, as #rrggbbaa when it is see-through, so the paint writes all
+      // four channels as picked (SB-28, the outside audit of Nov 24, 2026).
+      const a = pixels[idx + 3];
+      if (a === 0) return null;
+      const hex = (v: number) => v.toString(16).padStart(2, '0');
+      const rgb = `#${hex(pixels[idx])}${hex(pixels[idx + 1])}${hex(pixels[idx + 2])}`;
+      return a === 255 ? rgb : `${rgb}${hex(a)}`;
     },
 
     undo: () => {

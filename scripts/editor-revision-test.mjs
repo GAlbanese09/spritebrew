@@ -68,8 +68,10 @@ let indexStayedAtCap = true;
 let sawCap = false;
 for (let i = 0; i < 60; i++) {
   const before = s().revision;
-  // Alternate colours so consecutive snapshots differ.
-  stroke(i % W, Math.floor(i / W) % H, i % 2 ? '#00ff00' : '#ff0000');
+  // Alternate colours so consecutive snapshots differ; each pass over the
+  // 16 cells swaps them, so every stroke changes a pixel (a stroke that
+  // changes nothing adds no step since SB-27, editor-batch2-test.mjs).
+  stroke(i % W, Math.floor(i / W) % H, (i + Math.floor(i / (W * H))) % 2 ? '#00ff00' : '#ff0000');
   if (s().revision !== before + 1) everyStrokeRaised = false;
   if (i + 1 >= MAX_HISTORY) {
     sawCap = true;

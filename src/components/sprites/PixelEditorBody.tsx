@@ -117,7 +117,9 @@ import EditorRefusalText from './EditorRefusalText';
 import { isDevHost } from '@/lib/isDevHost';
 import { devRecoverySelfTest } from '@/lib/editorRecovery';
 import { pixelsToPngDataUrl } from '@/lib/editorImage';
-import { DOWNLOAD_PNG_LABEL, DOWNLOAD_PNG_SHORT, downloadPngHint, discardBrokenDraftText } from '@/lib/editorCopy';
+import { DOWNLOAD_PNG_LABEL, DOWNLOAD_PNG_SHORT, downloadPngHint, discardBrokenDraftText, MAKE_OPAQUE_LABEL, colorControlName, opacityLine } from '@/lib/editorCopy';
+import { hexAlpha, opaqueHex } from '@/lib/colorUtils';
+import { nextTrapIndex, tabbableIn } from '@/lib/focusTrap';
 
 /** Module-scope so the dev self-test runs at most once per page load, even
  *  if the editor body remounts (e.g. Strict Mode double-invoke in dev). */
@@ -236,6 +238,10 @@ export default function PixelEditorBody({
   const setTool = useEditorStore((s) => s.setActiveTool);
   const color = useEditorStore((s) => s.foregroundColor);
   const setColor = useEditorStore((s) => s.setForegroundColor);
+  // See-through paint from the eyedropper (SB-28): its opacity, shown under
+  // the swatch with Make opaque; the native pickers show the opaque colour.
+  const colorAlpha = hexAlpha(color);
+  const seeThrough = colorAlpha < 255;
   const brushSize = useEditorStore((s) => s.brushSize);
   const setBrushSize = useEditorStore((s) => s.setBrushSize);
   const isDirty = useEditorStore((s) => s.historyIndex > 0);
@@ -327,6 +333,10 @@ export default function PixelEditorBody({
   // on phones; never opens at md+ (the close-on-md effect dismisses if the
   // viewport reaches desktop width via rotation).
   const [sheetOpen, setSheetOpen] = useState(false);
+  // The sheet and the button that opens it, for the focus: in on opening,
+  // back to the button on closing (SB-29, the outside audit of Nov 24, 2026).
+  const colorsTriggerRef = useRef<HTMLButtonElement>(null);
+  const colorsSheetRef = useRef<HTMLDivElement>(null);
 
   // Transient toast for keyboard-driven brush-size changes.
   const [brushToast, setBrushToast] = useState<string | null>(null);
@@ -763,14 +773,45 @@ export default function PixelEditorBody({
     return () => mq.removeEventListener('change', handler);
   }, []);
 
-  // Escape closes the mobile Colors sheet (parity with the old Dialog).
+  // Opening the Colors sheet moves the focus into it; closing it (Done,
+  // Escape, the backdrop) gives the focus back to the Colors button (SB-29).
+  const sheetWasOpenRef = useRef(false);
+  useEffect(() => {
+    if (sheetOpen) {
+      sheetWasOpenRef.current = true;
+      colorsSheetRef.current?.focus();
+    } else if (sheetWasOpenRef.current) {
+      sheetWasOpenRef.current = false;
+      colorsTriggerRef.current?.focus();
+    }
+  }, [sheetOpen]);
+
+  // While the mobile Colors sheet is open it keeps the keyboard. Escape
+  // closes the sheet alone: caught on the window before the frame editor's
+  // Dialog hears it, which closed the editor too (AUDIT editor batch 2 r1,
+  // L1). Tab and Shift+Tab go round the sheet's own controls instead of out
+  // to the page behind its backdrop (L2). Keys aimed at a question opened
+  // over it (the leave question) are left alone.
   useEffect(() => {
     if (!sheetOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setSheetOpen(false);
+      const sheet = colorsSheetRef.current;
+      const target = e.target as Node | null;
+      if (!sheet || !(target === document.body || (target && sheet.contains(target)))) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        setSheetOpen(false);
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const items = tabbableIn(sheet);
+      const next = nextTrapIndex(items.length, items.indexOf(document.activeElement as HTMLElement), e.shiftKey);
+      e.preventDefault();
+      if (next >= 0) items[next].focus();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [sheetOpen]);
 
   // Wave 2a commit contract: when a gesture/wheel committer wants to atomic-
@@ -1999,13 +2040,16 @@ export default function PixelEditorBody({
             palette). Shows the current color. The desktop equivalent lives
             in the sidepanel (hidden below md). */}
         <button
+          ref={colorsTriggerRef}
           type="button"
           onClick={() => setSheetOpen(true)}
-          aria-label="Colors"
+          aria-label={colorControlName('Colors', colorAlpha)}
           title="Colors"
           className="w-11 h-11 shrink-0 rounded border border-border-default cursor-pointer md:hidden p-1"
         >
-          <span className="block w-full h-full rounded-sm" style={{ backgroundColor: color }} />
+          <span className="block w-full h-full rounded-sm" style={seeThrough ? CHECKERBOARD_STYLE : undefined}>
+            <span className="block w-full h-full rounded-sm" style={{ backgroundColor: color }} />
+          </span>
         </button>
 
         <div className="w-full h-px bg-border-subtle my-1 hidden md:block" />
@@ -2366,16 +2410,31 @@ export default function PixelEditorBody({
             Color
           </div>
           <div className="flex items-center gap-2">
-            <input
-              type="color"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              className="w-10 h-10 rounded border border-border-default cursor-pointer appearance-none [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-sm"
-              aria-label="Foreground color"
-              title="Click to pick a foreground color"
-            />
+            <span className="block w-10 h-10 rounded" style={seeThrough ? CHECKERBOARD_STYLE : undefined}>
+              <input
+                type="color"
+                value={opaqueHex(color)}
+                onChange={(e) => setColor(e.target.value)}
+                style={seeThrough ? { opacity: colorAlpha / 255 } : undefined}
+                className="block w-10 h-10 rounded border border-border-default cursor-pointer appearance-none [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-sm"
+                aria-label={colorControlName('Foreground color', colorAlpha)}
+                title="Click to pick a foreground color"
+              />
+            </span>
             <span className="text-xs font-mono text-text-muted">Click to pick</span>
           </div>
+          {seeThrough && (
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-mono text-text-secondary">{opacityLine(colorAlpha)}</span>
+              <button
+                type="button"
+                onClick={() => setColor(opaqueHex(color))}
+                className="text-[11px] font-mono text-accent-amber hover:text-accent-amber-strong cursor-pointer px-1.5 py-0.5 pointer-coarse:min-h-11 rounded hover:bg-bg-hover"
+              >
+                {MAKE_OPAQUE_LABEL}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Palette */}
@@ -2501,7 +2560,9 @@ export default function PixelEditorBody({
         DOM, and has no Dialog to collide with. Backdrop tap and Done close it;
         Escape closes it via the keydown effect. Always mounted so it can slide;
         pointer-events are gated off when closed so it never blocks the canvas,
-        and md:hidden keeps it off desktop entirely. */}
+        and md:hidden keeps it off desktop entirely. Closed, it is inert too,
+        so Tab never lands on its hidden controls (SB-29); open, Tab goes
+        round its own controls (the keydown effect). */}
     <div
       aria-hidden={!sheetOpen}
       onClick={() => setSheetOpen(false)}
@@ -2511,11 +2572,14 @@ export default function PixelEditorBody({
       }`}
     />
     <div
+      ref={colorsSheetRef}
       role="dialog"
       aria-label="Colors"
       aria-hidden={!sheetOpen}
+      inert={!sheetOpen}
+      tabIndex={-1}
       style={{ touchAction: 'none' }}
-      className={`fixed inset-x-0 bottom-0 z-[106] md:hidden flex flex-col gap-4 bg-bg-secondary border-t border-border-default rounded-t-2xl shadow-2xl px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] transition-transform duration-200 ease-out ${
+      className={`fixed inset-x-0 bottom-0 z-[106] md:hidden outline-none flex flex-col gap-4 bg-bg-secondary border-t border-border-default rounded-t-2xl shadow-2xl px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] transition-transform duration-200 ease-out ${
         sheetOpen ? 'translate-y-0' : 'translate-y-full pointer-events-none'
       }`}
     >
@@ -2535,15 +2599,30 @@ export default function PixelEditorBody({
 
       {/* Custom color picker (native) */}
       <div className="flex items-center gap-3">
-        <input
-          type="color"
-          value={color}
-          onChange={(e) => setColor(e.target.value)}
-          aria-label="Foreground color"
-          className="w-12 h-12 rounded border border-border-default cursor-pointer appearance-none [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-sm"
-        />
+        <span className="block w-12 h-12 rounded" style={seeThrough ? CHECKERBOARD_STYLE : undefined}>
+          <input
+            type="color"
+            value={opaqueHex(color)}
+            onChange={(e) => setColor(e.target.value)}
+            style={seeThrough ? { opacity: colorAlpha / 255 } : undefined}
+            aria-label={colorControlName('Foreground color', colorAlpha)}
+            className="block w-12 h-12 rounded border border-border-default cursor-pointer appearance-none [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-sm"
+          />
+        </span>
         <span className="text-xs font-mono text-text-muted">Tap to pick a custom color</span>
       </div>
+      {seeThrough && (
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-mono text-text-secondary">{opacityLine(colorAlpha)}</span>
+          <button
+            type="button"
+            onClick={() => setColor(opaqueHex(color))}
+            className="min-h-11 px-3 rounded text-xs font-mono text-accent-amber hover:text-accent-amber-strong hover:bg-bg-hover border border-border-subtle cursor-pointer"
+          >
+            {MAKE_OPAQUE_LABEL}
+          </button>
+        </div>
+      )}
 
       {/* Palette */}
       <div className="flex flex-col gap-2">

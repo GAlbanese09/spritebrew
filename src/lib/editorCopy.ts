@@ -93,3 +93,20 @@ export function discardBrokenDraftText(width: number, height: number): string {
 }
 export const KEEP_DRAFT_LABEL = 'Keep draft';
 export const DISCARD_DRAFT_LABEL = 'Discard';
+
+/** See-through paint from the eyedropper (SB-28, the outside audit of Nov
+ *  24, 2026; DESIGN 2026-11-25-034): its opacity as a whole percent, never
+ *  0 or 100 while the paint is see-through. */
+export function opacityPercent(alpha: number): number {
+  if (alpha >= 255) return 100;
+  return Math.min(99, Math.max(1, Math.round((alpha * 100) / 255)));
+}
+/** The line under the swatch while the paint is see-through. */
+export function opacityLine(alpha: number): string {
+  return `Opacity ${opacityPercent(alpha)}%`;
+}
+export const MAKE_OPAQUE_LABEL = 'Make opaque';
+/** A colour control's name, with the opacity added while it is see-through. */
+export function colorControlName(name: string, alpha: number): string {
+  return alpha < 255 ? `${name}, opacity ${opacityPercent(alpha)}%` : name;
+}

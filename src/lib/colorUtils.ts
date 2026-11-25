@@ -32,6 +32,21 @@ export function hexToRgb(hex: string): [number, number, number, number] | null {
   return [r, g, b, a];
 }
 
+/** A paint's opacity, 0 to 255: the alpha byte of #RRGGBBAA, 255 for
+ *  #RRGGBB (and for a colour that does not parse). */
+export function hexAlpha(hex: string): number {
+  const c = hexToRgb(hex);
+  return c ? c[3] : 255;
+}
+
+/** The same colour, fully opaque, as #rrggbb (a native colour picker holds
+ *  no opacity). A colour that does not parse comes back as it was. */
+export function opaqueHex(hex: string): string {
+  const c = hexToRgb(hex);
+  if (!c) return hex;
+  return `#${c.slice(0, 3).map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
 // Dev-only round-trip assertions for hexToRgb. Stripped in production.
 if (process.env.NODE_ENV !== 'production') {
   console.assert(

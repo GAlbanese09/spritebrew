@@ -165,7 +165,9 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   check('C4: undone back to the loaded image: nothing to save', selectHasPixelChanges(st()) === false);
   // More steps than the history keeps, then Undo to the oldest kept step:
   // the index reads 0 while the canvas still holds edits.
-  for (let i = 0; i < 60; i++) { st().beginStroke(); st().paintPixel(i % 4, Math.floor(i / 4) % 4, i % 2 ? '#ff0000' : '#00ff00'); st().endStroke(); }
+  // Each pass over the 16 cells swaps the colours, so every stroke changes a
+  // pixel (a stroke that changes nothing adds no step since SB-27).
+  for (let i = 0; i < 60; i++) { st().beginStroke(); st().paintPixel(i % 4, Math.floor(i / 4) % 4, (i + Math.floor(i / 16)) % 2 ? '#ff0000' : '#00ff00'); st().endStroke(); }
   while (st().historyIndex > 0) st().undo();
   check('C5: past the history cap, Undo to the oldest kept step: index 0, edits still there, still a change', st().historyIndex === 0 && selectHasPixelChanges(st()) === true);
   st().revertToOriginal();

@@ -26,8 +26,9 @@ interface BgRemovalBannerProps {
   imageUrl: string;
   imageWidth: number;
   imageHeight: number;
-  /** Called with the background-removed data URL on Apply. */
-  onRemoved: (cleanedDataUrl: string) => void;
+  /** Called with the background-removed data URL on Apply, and the color
+   *  it took. */
+  onRemoved: (cleanedDataUrl: string, color: { r: number; g: number; b: number }) => void;
   /** Called when the user dismisses (clicks Keep). */
   onDismiss: () => void;
 }
@@ -101,10 +102,10 @@ export default function BgRemovalBanner({
   }, []);
 
   const handleApply = useCallback(() => {
-    if (previewUrl) {
-      onRemoved(previewUrl);
+    if (previewUrl && bgColor) {
+      onRemoved(previewUrl, bgColor);
     }
-  }, [previewUrl, onRemoved]);
+  }, [previewUrl, bgColor, onRemoved]);
 
   // Don't render anything if no background detected or still detecting
   if (state === 'none' || state === 'detecting') return null;

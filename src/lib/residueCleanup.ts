@@ -119,14 +119,19 @@ export interface ResidueScan {
 /**
  * Finds the residue in a W x H RGBA image without changing it. The kinds
  * array is what an editor can highlight before a person cleans. A pixel near
- * a `protect` colour is the character's own and never residue.
+ * a `protect` colour is the character's own and never residue. With
+ * `enclosed: false`, only runs that touch the outside count: an enclosed run
+ * may be a small violet detail the model drew (a gem, a seam), so a cleanup
+ * nobody asked for leaves it to the editor (AUDIT clean-default-r1 M1).
  */
 export function scanResidue(
   px: Uint8ClampedArray | Uint8Array,
   W: number,
   H: number,
-  protect: readonly Rgb[] = []
+  protect: readonly Rgb[] = [],
+  opts: { enclosed?: boolean } = {}
 ): ResidueScan {
+  const enclosedToo = opts.enclosed !== false;
   const N = W * H;
   const kinds = new Uint8Array(N);
   const scan: ResidueScan = { kinds, clear: 0, despill: 0, keep: 0 };
@@ -222,6 +227,7 @@ export function scanResidue(
       let kind: number;
       if (far) kind = RESIDUE_KEEP;
       else if (outside) kind = RESIDUE_CLEAR;
+      else if (!enclosedToo) continue;
       else {
         const i = p * 4;
         const dark = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2] <= RESIDUE_DARK_LUMA;
@@ -246,9 +252,10 @@ export function cleanResidue(
   px: Uint8ClampedArray | Uint8Array,
   W: number,
   H: number,
-  protect: readonly Rgb[] = []
+  protect: readonly Rgb[] = [],
+  opts: { enclosed?: boolean } = {}
 ): { cleared: number; despilled: number; kept: number } {
-  const { kinds, clear, despill, keep } = scanResidue(px, W, H, protect);
+  const { kinds, clear, despill, keep } = scanResidue(px, W, H, protect, opts);
   if (clear + despill === 0) return { cleared: 0, despilled: 0, kept: keep };
   for (let p = 0, i = 0; p < W * H; p++, i += 4) {
     if (kinds[p] === RESIDUE_CLEAR) {

@@ -15,6 +15,7 @@ import Badge from '@/components/ui/Badge';
 import SheetLoop from '@/components/sprites/SheetLoop';
 import { sheetGeometry, galleryFrameSizeGuess } from '@/lib/animationGeometry';
 import { cleanGallerySheet } from '@/lib/spriteUtils';
+import { jobGuards } from '@/lib/jobGuards';
 import { createGalleryOwnership } from '@/lib/galleryOwnership';
 import { dropKept, keepGallery, quietMerge, takeKept, type KeptGallery, type KeptPage } from '@/lib/galleryKeep';
 import {
@@ -469,7 +470,7 @@ export default function GalleryPage() {
     if (!stored || !storedUrl) return Promise.resolve(storedUrl);
     const run = (async () => {
       try {
-        const cleaned = await cleanGallerySheet(stored);
+        const cleaned = await cleanGallerySheet(stored, jobGuards(jobId));
         if (storedRef.current[jobId] === stored) delete storedRef.current[jobId];
         // Nothing needed cleaning, or the entry was deleted or fetched again
         // meanwhile.

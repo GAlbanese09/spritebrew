@@ -11,6 +11,7 @@ import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { hexToRgb } from '@/lib/colorUtils';
 import { cleanResidue as cleanResiduePixels } from '@/lib/residueCleanup';
+import { cleanOutline as cleanOutlinePixels, eraseRegion, floodRegion } from '@/lib/outlineClean';
 import {
   EDITOR_MAX_DIMENSION,
   EDITOR_MAX_PIXELS,
@@ -25,7 +26,7 @@ import {
   type SpriteProjectV1,
 } from '@/lib/spriteProject';
 
-export type Tool = 'pencil' | 'eraser' | 'eyedropper';
+export type Tool = 'pencil' | 'eraser' | 'eyedropper' | 'erasearea';
 export type BrushSize = 1 | 2 | 4 | 8 | 16;
 export const VALID_BRUSH_SIZES: readonly BrushSize[] = [1, 2, 4, 8, 16];
 
@@ -249,6 +250,18 @@ export interface PixelEditorState {
    * history entry and return what changed. No entry when nothing did.
    */
   cleanResidue: () => { cleared: number; despilled: number };
+  /** "Clean outline" (DESIGN's outline ticket): clear the white outline as
+   *  one undoable history entry and return how many pixels went. No entry
+   *  when none is found. */
+  cleanOutline: () => number;
+  /** "Erase area": clear the 4-way connected run of colours within
+   *  `tolerance` of the pixel at (x, y), as one undoable history entry, and
+   *  return how many pixels went. No entry when none did (a transparent
+   *  pixel, or outside the image). */
+  eraseArea: (x: number, y: number, tolerance: number) => number;
+  /** Push a whole new image as one undoable history entry (used by
+   *  cleanOutline and eraseArea). */
+  commitWhole: (next: Uint8ClampedArray) => void;
   /** Discard an in-progress stroke: restore the pre-stroke snapshot.
    *  A partial stroke's pixels are live in `pixels` but not yet in history
    *  (endStroke hasn't fired), so restoring historyStack[historyIndex]
@@ -714,6 +727,45 @@ export const useEditorStore = create<PixelEditorState>()(
         hasAttemptedEdit: !pixelsMatchOriginal(cleaned, originalPixels),
       });
       return { cleared, despilled };
+    },
+
+    cleanOutline: () => {
+      const { pixels, width, height } = get();
+      if (!pixels || width <= 0 || height <= 0) return 0;
+      const cleaned = new Uint8ClampedArray(pixels);
+      const n = cleanOutlinePixels(cleaned, width, height);
+      if (n === 0) return 0;
+      get().commitWhole(cleaned);
+      return n;
+    },
+
+    eraseArea: (x, y, tolerance) => {
+      const { pixels, width, height } = get();
+      if (!pixels || width <= 0 || height <= 0) return 0;
+      const { mask, count } = floodRegion(pixels, width, height, x, y, tolerance);
+      if (count === 0) return 0;
+      const erased = new Uint8ClampedArray(pixels);
+      eraseRegion(erased, mask);
+      get().commitWhole(erased);
+      return count;
+    },
+
+    commitWhole: (next) => {
+      const { originalPixels, historyStack, historyIndex } = get();
+      // Same shape as cleanResidue: drop any redo branch, push, cap.
+      const truncated = historyIndex < historyStack.length - 1
+        ? historyStack.slice(0, historyIndex + 1)
+        : historyStack;
+      const nextStack = [...truncated, new Uint8ClampedArray(next)];
+      while (nextStack.length > MAX_HISTORY) nextStack.shift();
+      set({
+        pixels: next,
+        historyStack: nextStack,
+        historyIndex: nextStack.length - 1,
+        revision: get().revision + 1,
+        lastDirtyRect: null, // wholesale replacement, full repaint
+        hasAttemptedEdit: !pixelsMatchOriginal(next, originalPixels),
+      });
     },
 
     cancelStroke: () => {

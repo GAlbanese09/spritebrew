@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useId } from 'react';
 import { Grid3X3, Scan, Scissors, AlertTriangle, X } from 'lucide-react';
 import { SLICER_FRAME_PRESETS } from '@/lib/constants';
 import { detectSlicerGrid, loadImage, imageToCanvas } from '@/lib/spriteUtils';
@@ -58,6 +58,8 @@ export default function SlicerConfig({
   const [padding, setPadding] = useState(0);
   const [offsetX, setOffsetX] = useState(0);
   const [offsetY, setOffsetY] = useState(0);
+  // Ties each field to its label (external audit SB-08).
+  const fieldId = useId();
   const [detecting, setDetecting] = useState(false);
   const [sanityWarning, setSanityWarning] = useState<SanityWarning | null>(null);
   // Frame cap from a generated sheet's geometry (trailing empty cells are
@@ -316,8 +318,9 @@ export default function SlicerConfig({
 
         <div className="flex gap-3 mb-3">
           <div className="flex-1">
-            <label className="block text-[10px] font-mono text-text-muted mb-1">Width</label>
+            <label htmlFor={`${fieldId}-width`} className="block text-[10px] font-mono text-text-muted mb-1">Width</label>
             <input
+              id={`${fieldId}-width`}
               type="number"
               min={1}
               max={imageWidth}
@@ -328,8 +331,9 @@ export default function SlicerConfig({
             />
           </div>
           <div className="flex-1">
-            <label className="block text-[10px] font-mono text-text-muted mb-1">Height</label>
+            <label htmlFor={`${fieldId}-height`} className="block text-[10px] font-mono text-text-muted mb-1">Height</label>
             <input
+              id={`${fieldId}-height`}
               type="number"
               min={1}
               max={imageHeight}
@@ -405,8 +409,9 @@ export default function SlicerConfig({
         </label>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-[10px] font-mono text-text-muted mb-1">Columns</label>
+            <label htmlFor={`${fieldId}-columns`} className="block text-[10px] font-mono text-text-muted mb-1">Columns</label>
             <input
+              id={`${fieldId}-columns`}
               type="number"
               min={1}
               value={columns}
@@ -416,8 +421,9 @@ export default function SlicerConfig({
             />
           </div>
           <div>
-            <label className="block text-[10px] font-mono text-text-muted mb-1">Rows</label>
+            <label htmlFor={`${fieldId}-rows`} className="block text-[10px] font-mono text-text-muted mb-1">Rows</label>
             <input
+              id={`${fieldId}-rows`}
               type="number"
               min={1}
               value={rows}
@@ -427,8 +433,9 @@ export default function SlicerConfig({
             />
           </div>
           <div>
-            <label className="block text-[10px] font-mono text-text-muted mb-1">Padding (px)</label>
+            <label htmlFor={`${fieldId}-padding`} className="block text-[10px] font-mono text-text-muted mb-1">Padding (px)</label>
             <input
+              id={`${fieldId}-padding`}
               type="number"
               min={0}
               max={4}
@@ -439,8 +446,9 @@ export default function SlicerConfig({
             />
           </div>
           <div>
-            <label className="block text-[10px] font-mono text-text-muted mb-1">Offset X</label>
+            <label htmlFor={`${fieldId}-offset-x`} className="block text-[10px] font-mono text-text-muted mb-1">Offset X</label>
             <input
+              id={`${fieldId}-offset-x`}
               type="number"
               min={0}
               value={offsetX}
@@ -450,8 +458,9 @@ export default function SlicerConfig({
             />
           </div>
           <div>
-            <label className="block text-[10px] font-mono text-text-muted mb-1">Offset Y</label>
+            <label htmlFor={`${fieldId}-offset-y`} className="block text-[10px] font-mono text-text-muted mb-1">Offset Y</label>
             <input
+              id={`${fieldId}-offset-y`}
               type="number"
               min={0}
               value={offsetY}

@@ -1,5 +1,5 @@
 import { getAuthedUserId } from '@/lib/edgeAuth';
-import { GALLERY_KV_PREFIX, galleryR2Key, type GalleryEntryV1 } from '@/lib/galleryTypes';
+import { entryKind, GALLERY_KV_PREFIX, galleryR2Key, type GalleryEntryV1, type JobMode } from '@/lib/galleryTypes';
 import { jobStateR2Key } from '@/lib/jobState';
 
 export const runtime = 'edge';
@@ -69,6 +69,15 @@ export async function DELETE(
     return Response.json({ error: 'Invalid jobId.' }, { status: 400 });
   }
 
+  // A Clear of one kind sends the kind it counted this entry as (HQ
+  // 2026-11-25-079). A card's own Delete, and pages from before, send none
+  // and are served as before.
+  const kindParam = new URL(request.url).searchParams.get('kind');
+  if (kindParam !== null && kindParam !== 'create' && kindParam !== 'animate') {
+    return Response.json({ error: 'Invalid kind.' }, { status: 400 });
+  }
+  const kind: JobMode | null = kindParam;
+
   const kv = getKV();
   const bucket = getR2();
   if (!kv || !bucket) {
@@ -77,6 +86,7 @@ export async function DELETE(
 
   // 1. Find the matching KV index entry.
   let foundKvKey: string | null = null;
+  let found: GalleryEntryV1 | null = null;
   let cursor: string | undefined = undefined;
   let listComplete = false;
   let safetyCounter = 0;
@@ -91,6 +101,7 @@ export async function DELETE(
       const md = k.metadata as Partial<GalleryEntryV1> | null | undefined;
       if (md?.jobId === jobId) {
         foundKvKey = k.name;
+        found = md as GalleryEntryV1;
         break;
       }
     }
@@ -106,6 +117,14 @@ export async function DELETE(
     // not reach it.
     await bucket.delete(galleryR2Key(userId, jobId));
     return Response.json({ deleted: false, reason: 'Entry not found.' }, { status: 404 });
+  }
+
+  // An entry of another kind than the Clear counted: the page's rule is out
+  // of date. Nothing is deleted for it (HQ 2026-11-25-079).
+  if (kind !== null && found !== null && entryKind(found) !== kind) {
+    // Marked, so the page tells this answer from any other 409 (AUDIT
+    // ext-mediums r2 L2).
+    return Response.json({ error: 'Reload the Gallery and try again.', stale: true }, { status: 409 });
   }
 
   // 2. The picture and the job's status record mirror (jobs/{jobId}.json,

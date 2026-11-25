@@ -11,6 +11,7 @@ import {
   editorDimsRejectionMessage,
 } from '@/components/sprites/editorStore';
 import type { SpriteProjectSource, SpriteProjectV1 } from '@/lib/spriteProject';
+import { takeForEditor } from '@/lib/editorResizeHandoff';
 import { useSpriteStore } from '@/stores/spriteStore';
 import {
   IndexedDbDraftStore,
@@ -169,6 +170,26 @@ export default function EditorPage() {
     // Mount-only — the handoff is a one-shot consumed on arrival. The
     // effect doesn't close over any reactive values (uses getState()
     // imperatively, and show never changes), so it runs once.
+  }, [show]);
+
+  // An image /resize handed over with "Edit resized image" (external audit
+  // SB-06): open it as an upload. One-shot, in memory, mount-only.
+  useEffect(() => {
+    const handed = takeForEditor();
+    if (!handed) return;
+    if (!dimsWithinEditorLimits(handed.width, handed.height)) {
+      setHandoffError(editorDimsRejectionMessage(handed.width, handed.height, 'card'));
+      return;
+    }
+    intentRef.current++;
+    show({
+      kind: 'image',
+      draftKey: newDraftKey('page'),
+      dataUrl: handed.dataUrl,
+      width: handed.width,
+      height: handed.height,
+      source: { kind: 'upload' },
+    });
   }, [show]);
 
   // Probe for this user's saved drafts whenever the landing is about to show

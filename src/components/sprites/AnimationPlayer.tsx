@@ -13,6 +13,7 @@ import {
 import { useSpriteStore } from '@/stores/spriteStore';
 import { useStagePinch } from '@/hooks/useStagePinch';
 import { fitZoomToBox, snapZoom, stepZoom } from '@/lib/stageZoom';
+import { stepPlayback } from '@/lib/playback';
 import type { SpriteAnimation } from '@/lib/types';
 import Button from '@/components/ui/Button';
 
@@ -114,8 +115,14 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
   const [pingPong, setPingPong] = useState(false);
   const [loop, setLoop] = useState(true);
 
-  // Track ping-pong direction: 1 = forward, -1 = backward
+  // Track ping-pong direction: 1 = forward, -1 = backward. It is kept across
+  // frames and reset only by Stop, another animation or turning Ping-pong on
+  // (external audit SB-09).
   const pingPongDirRef = useRef(1);
+  // The frame the loop steps from, kept in step with currentFrame.
+  const frameRef = useRef(0);
+  // A pass without Loop has ended; Play starts it again (AUDIT ext-mediums r1 L8).
+  const endedRef = useRef(false);
   const lastTimeRef = useRef(0);
   const accumRef = useRef(0);
 
@@ -263,17 +270,24 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
     [anim, spriteSheet, zoom, bgMode, customBgColor]
   );
 
-  // Animation loop
+  // Another animation (picked, or the shown one gone) starts forward.
+  const animId = anim?.id;
+  useEffect(() => {
+    pingPongDirRef.current = 1;
+  }, [animId]);
+
+  // Animation loop. It restarts only when the animation, play state, speed,
+  // modes or drawing change, never on a frame change, so the ping-pong
+  // direction carries from frame to frame (external audit SB-09).
   useEffect(() => {
     if (!anim || anim.frames.length === 0) return;
 
     lastTimeRef.current = 0;
     accumRef.current = 0;
-    pingPongDirRef.current = 1;
 
     const tick = (timestamp: number) => {
       if (!playing) {
-        drawFrame(currentFrame);
+        drawFrame(frameRef.current);
         rafRef.current = requestAnimationFrame(tick);
         return;
       }
@@ -290,43 +304,30 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
 
       if (accumRef.current >= msPerFrame) {
         accumRef.current -= msPerFrame;
-
-        setCurrentFrame((prev) => {
-          const total = anim.frames.length;
-          if (total <= 1) return 0;
-
-          if (pingPong) {
-            let next = prev + pingPongDirRef.current;
-            if (next >= total) {
-              pingPongDirRef.current = -1;
-              next = total - 2;
-            } else if (next < 0) {
-              if (!loop) return 0;
-              pingPongDirRef.current = 1;
-              next = 1;
-            }
-            return Math.max(0, Math.min(total - 1, next));
-          }
-
-          const next = prev + 1;
-          if (next >= total) {
-            return loop ? 0 : total - 1;
-          }
-          return next;
-        });
+        const step = stepPlayback(frameRef.current, pingPongDirRef.current, anim.frames.length, pingPong, loop);
+        pingPongDirRef.current = step.dir;
+        frameRef.current = step.frame;
+        setCurrentFrame(step.frame);
+        if (step.done) {
+          endedRef.current = true;
+          setPlaying(false);
+        }
       }
 
-      drawFrame(currentFrame);
+      drawFrame(frameRef.current);
       rafRef.current = requestAnimationFrame(tick);
     };
 
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [anim, playing, speed, pingPong, loop, currentFrame, drawFrame]);
+  }, [anim, playing, speed, pingPong, loop, drawFrame]);
 
   // Draw before paint whenever the frame, zoom or background changes, so a
   // new canvas size is never painted blank; the loop keeps drawing while
   // playing.
+  useLayoutEffect(() => {
+    frameRef.current = currentFrame;
+  }, [currentFrame]);
   useLayoutEffect(() => {
     drawFrame(currentFrame);
   }, [currentFrame, drawFrame]);
@@ -347,10 +348,29 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
     setPlaying(false);
     setCurrentFrame(0);
     pingPongDirRef.current = 1;
+    endedRef.current = false;
+  };
+
+  const togglePlay = () => {
+    // After a pass without Loop ends, Play starts it again from the first
+    // frame (AUDIT ext-mediums r1 L8).
+    if (!playing && endedRef.current) {
+      endedRef.current = false;
+      setCurrentFrame(0);
+      frameRef.current = 0;
+      pingPongDirRef.current = 1;
+    }
+    setPlaying(!playing);
+  };
+
+  const togglePingPong = () => {
+    if (!pingPong) pingPongDirRef.current = 1;
+    setPingPong(!pingPong);
   };
 
   const handleStepBack = () => {
     setPlaying(false);
+    endedRef.current = false;
     setCurrentFrame((prev) => {
       const total = anim?.frames.length ?? 1;
       return prev > 0 ? prev - 1 : total - 1;
@@ -359,6 +379,7 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
 
   const handleStepForward = () => {
     setPlaying(false);
+    endedRef.current = false;
     setCurrentFrame((prev) => {
       const total = anim?.frames.length ?? 1;
       return prev < total - 1 ? prev + 1 : 0;
@@ -442,7 +463,7 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
           variant={playing ? 'secondary' : 'primary'}
           size="sm"
           className={TOUCH_BUTTON}
-          onClick={() => setPlaying(!playing)}
+          onClick={togglePlay}
           title={playing ? 'Pause' : 'Play'}
           aria-label={playing ? 'Pause' : 'Play'}
         >
@@ -469,7 +490,7 @@ export default function AnimationPlayer({ frameDataUrls }: AnimationPlayerProps)
           variant={pingPong ? 'secondary' : 'ghost'}
           size="sm"
           className={TOUCH_BUTTON}
-          onClick={() => setPingPong(!pingPong)}
+          onClick={togglePingPong}
           title="Ping-pong"
           aria-label="Ping-pong"
           aria-pressed={pingPong}

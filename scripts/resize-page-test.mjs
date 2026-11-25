@@ -41,7 +41,7 @@ check('B5: the page\'s words',
   W.title === 'Resize pixel art' &&
   W.lead === 'Shrink or grow pixel art without blurring it. Free, no account, and your image never leaves your browser.' &&
   W.drop === 'Drop an image here or choose a file' && W.choose === 'Choose a file' && W.another === 'Choose another' &&
-  W.hint === 'PNG, JPEG, WebP or GIF, up to 4096 px a side.' && W.tooLarge === 'That image is larger than 4096 px a side. Try a smaller one.' &&
+  W.hint === 'PNG, JPEG, WebP or GIF, up to 4096 px a side. A GIF uses its first frame.' && W.tooLarge === 'That image is larger than 4096 px a side. Try a smaller one.' &&
   W.oneImage === 'One image' && W.sheet === "It's a sheet" && W.what === 'What is this image?' && W.frameSize === 'Frame size' && W.size === 'Size' &&
   W.bigger === 'Bigger, for posting' && W.other === 'Other size...' && W.before === 'Before' && W.after === 'After' && W.download === 'Download PNG' &&
   RESIZE_SIDE_CAP === 4096 && RESIZE_SIDE_CAP === E.DOWNLOAD_SIDE_CAP);
@@ -173,7 +173,7 @@ check('never smoothing: the engine\'s mapping for every size, pixelated on scree
   (page.match(/imageSmoothingEnabled = false/g) ?? []).length === 2 && !/imageSmoothingEnabled = true/.test(page));
 check('the preview\'s choice: a labelled two-choice radio group above the pictures, shown when the sizes differ; arrow keys move and choose; the choice holds until another picture loads',
   /const showChoice = !!before && \(differ \|\| pans \|\| afterOver\);/.test(page) && /\{showChoice && \(/.test(page) && /role="radiogroup" aria-labelledby="resize-preview-label"/.test(page) && /role="radio"\s+aria-checked=\{mode === m\}\s+tabIndex=\{mode === m \? 0 : -1\}/.test(page) &&
-  /\['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'\]\.includes\(e\.key\)/.test(page) && /setLoaded\(\{ name: file\.name, image: out\.image, thumb: out\.thumb \}\);\s*setPreviewChoice\(null\);/.test(page) &&
+  /\['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'\]\.includes\(e\.key\)/.test(page) && /setLoaded\(\{ name: file\.name, image: out\.image, thumb: out\.thumb, gifFrames \}\);\s*setPreviewChoice\(null\);/.test(page) &&
   /const mode: PreviewMode = showChoice \? previewChoice \?\? defaultPreviewMode\(pans, afterOver\) : 'same';/.test(page));
 check('Fit each draws boxes as wide as their column and no taller than the room inside a 4 px margin; a panning picture starts at its centre',
   /const fitBox = Math\.max\(0, Math\.min\(box\.width, box\.height\)\);\s*const fitRoom = \{ width: box\.width - 2 - 2 \* FIT_PAD, height: fitBox - 2 - 2 \* FIT_PAD \};/.test(page) &&
@@ -247,6 +247,23 @@ check('the sidebar scrolls when it is taller than the window (AUDIT resize-page-
 const landing = read('src/app/page.tsx');
 check('the landing line links "resizer" to /resize (DESIGN -249)',
   /Free tools \(slicer, editor, exporter,\{' '\}\s*<Link href="\/resize"[^>]*>resizer<\/Link>\s*\) work without AI and without an account\./.test(landing));
+// SB-05 (external product audit r2): a GIF gives its first frame, so the
+// page says so before a file is chosen (the hint, above) and, for a GIF with
+// more than one frame, once it is loaded. A PNG gets no such line.
+{
+  const b64 = (t) => new Uint8Array(Buffer.from(t, 'base64'));
+  const twoFrames = b64('R0lGODlhBAAEAIEAANweHgAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAABAAEAAAICQABCBxIsCCAgAAh+QQBCgABACwAAAAABAAEAIEePNwAAAAAAAAAAAAICQABCBxIsCCAgAA7');
+  const oneFrame = b64('R0lGODdhBAAEAIEAANweHgAAAAAAAAAAACwAAAAABAAEAAAICQABCBxIsCCAgAA7');
+  const png = b64('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==');
+  const count = P.gifFrameCount;
+  check('SB-05: gifFrameCount counts a GIF\'s frames: 2, 1, and 0 for a PNG or a cut-off file',
+    typeof count === 'function' && count(twoFrames) === 2 && count(oneFrame) === 1 && count(png) === 0 && count(twoFrames.subarray(0, 30)) === 0,
+    typeof count === 'function' ? [count(twoFrames), count(oneFrame), count(png), count(twoFrames.subarray(0, 30))] : 'missing');
+  check('SB-05: the line for a GIF with frames', typeof W.gifStill === 'function'
+    && W.gifStill(2) === 'This GIF has 2 frames. Only the first is resized, and the download is a still PNG.');
+  check('SB-05: the page counts a GIF\'s frames when it reads one, and shows the line only for more than one',
+    /gifFrameCount\(/.test(page) && /loaded\.gifFrames > 1 && \(/.test(page) && /W\.gifStill\(loaded\.gifFrames\)/.test(page));
+}
 check('no em dashes in the new files', ![page, lib, worker, read('scripts/resize-page-test.mjs')].some((s) => s.includes(String.fromCharCode(0x2014))));
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -32,7 +32,7 @@ import { encodeGif, GIF_SCALES, GIF_SCALE_DEFAULT, type GifScale } from '@/lib/g
 import type { SpriteAnimation } from '@/lib/types';
 import { loadImage } from '@/lib/spriteUtils';
 import { useContainerWidth } from '@/lib/useCanvasFitScale';
-import { rpgChoices, rpgHasRow, rpgMapInUse } from '@/lib/rpgDirections';
+import { RPG_COLS, RPG_ROWS, isRpgCutNote, rpgChoices, rpgCutNote, rpgHasRow, rpgMapInUse, rpgRows } from '@/lib/rpgDirections';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 
@@ -180,6 +180,12 @@ export default function ExportConfig() {
   const rpgMap = useMemo(() => rpgMapInUse(directionMap, activeAnimations), [directionMap, activeAnimations]);
   const rpgBlank = selectedEngine === 'rpgmaker' && !rpgHasRow(directionMap, activeAnimations);
   const rpgBlankId = useId();
+  // Each direction list is named by its word (AUDIT ext-mediums r1 L10).
+  const dirFieldId = useId();
+  // A changed map makes the last Download's warnings stale (AUDIT ext-mediums r2 L9).
+  useEffect(() => {
+    setWarnings([]);
+  }, [rpgMap]);
 
   const toggleAnim = useCallback((id: string) => {
     setSelectedAnims((prev) => {
@@ -197,46 +203,66 @@ export default function ExportConfig() {
 
     let cancelled = false;
 
+    const loadCanvas = async (url: string, w?: number, h?: number) => {
+      const img = await loadImage(url);
+      const fc = document.createElement('canvas');
+      fc.width = img.naturalWidth;
+      fc.height = img.naturalHeight;
+      const fctx = fc.getContext('2d')!;
+      fctx.imageSmoothingEnabled = false;
+      fctx.drawImage(img, 0, 0);
+      return w && h && (w !== fc.width || h !== fc.height) ? resizeFrame(fc, w, h) : fc;
+    };
+
     const draw = async () => {
       const effectiveFw = resizeEnabled ? resizeW : fw;
       const effectiveFh = resizeEnabled ? resizeH : fh;
 
-      // Load a few frames for preview (up to 16)
-      const previewFrames: HTMLCanvasElement[] = [];
-      for (const anim of activeAnimations) {
-        for (const frame of anim.frames) {
-          if (previewFrames.length >= 16) break;
-          const url = frameDataUrls.get(frame.id);
-          if (!url) continue;
-          const img = await loadImage(url);
-          const fc = document.createElement('canvas');
-          fc.width = img.naturalWidth;
-          fc.height = img.naturalHeight;
-          const fctx = fc.getContext('2d')!;
-          fctx.imageSmoothingEnabled = false;
-          fctx.drawImage(img, 0, 0);
-          if (resizeEnabled && (resizeW !== fc.width || resizeH !== fc.height)) {
-            previewFrames.push(resizeFrame(fc, resizeW, resizeH));
-          } else {
-            previewFrames.push(fc);
+      let assembled: HTMLCanvasElement;
+      if (selectedEngine === 'rpgmaker') {
+        const rows = rpgRows(rpgMap, activeAnimations, (id) => frameDataUrls.has(id));
+        // The sheet the download writes: 3 x 4 cells at the RPG frame size,
+        // empty rows left empty (external audit SB-07).
+        assembled = document.createElement('canvas');
+        assembled.width = rpgFrameW * RPG_COLS;
+        assembled.height = rpgFrameH * RPG_ROWS;
+        const actx = assembled.getContext('2d')!;
+        actx.imageSmoothingEnabled = false;
+        for (let row = 0; row < RPG_ROWS; row++) {
+          const r = rows[row];
+          if (!r) continue;
+          for (let col = 0; col < RPG_COLS; col++) {
+            const cell = await loadCanvas(frameDataUrls.get(r.frameIds[col])!, rpgFrameW, rpgFrameH);
+            if (cancelled) return;
+            actx.drawImage(cell, col * rpgFrameW, row * rpgFrameH);
           }
         }
-        if (previewFrames.length >= 16) break;
-      }
-
-      if (cancelled || previewFrames.length === 0) return;
-
-      let assembled: HTMLCanvasElement;
-      if (selectedEngine === 'gamemaker') {
-        assembled = assembleStripSheet(previewFrames);
       } else {
-        const cols = Math.ceil(Math.sqrt(previewFrames.length));
-        assembled = assembleGridSheet(
-          previewFrames,
-          cols,
-          selectedEngine === 'texturepacker' || selectedEngine === 'aseprite' ? padding : 0,
-          powerOfTwo && selectedEngine !== 'animated-gif'
-        );
+        // Load a few frames for preview (up to 16)
+        const previewFrames: HTMLCanvasElement[] = [];
+        for (const anim of activeAnimations) {
+          for (const frame of anim.frames) {
+            if (previewFrames.length >= 16) break;
+            const url = frameDataUrls.get(frame.id);
+            if (!url) continue;
+            previewFrames.push(await loadCanvas(url, resizeEnabled ? resizeW : undefined, resizeEnabled ? resizeH : undefined));
+          }
+          if (previewFrames.length >= 16) break;
+        }
+
+        if (cancelled || previewFrames.length === 0) return;
+
+        if (selectedEngine === 'gamemaker') {
+          assembled = assembleStripSheet(previewFrames);
+        } else {
+          const cols = Math.ceil(Math.sqrt(previewFrames.length));
+          assembled = assembleGridSheet(
+            previewFrames,
+            cols,
+            selectedEngine === 'texturepacker' || selectedEngine === 'aseprite' ? padding : 0,
+            powerOfTwo && selectedEngine !== 'animated-gif'
+          );
+        }
       }
 
       // Wave M2 / M2.1: preview-area scale. Preserves the legacy max-width
@@ -271,9 +297,12 @@ export default function ExportConfig() {
 
     draw();
     return () => { cancelled = true; };
-  }, [activeAnimations, frameDataUrls, selectedEngine, padding, powerOfTwo, resizeEnabled, resizeW, resizeH, fw, fh, containerWidth]);
+  }, [activeAnimations, frameDataUrls, selectedEngine, padding, powerOfTwo, resizeEnabled, resizeW, resizeH, fw, fh, containerWidth, rpgMap, rpgFrameW, rpgFrameH]);
 
   const handleExport = useCallback(async () => {
+    // Off while RPG Maker has no direction to draw (aria-disabled, so the
+    // press does nothing here).
+    if (rpgBlank) return;
     setExporting(true);
     setWarnings([]);
     setGifError(null);
@@ -311,7 +340,8 @@ export default function ExportConfig() {
             directionMap: rpgMap,
           };
           const result = await exportRPGMaker(rpgOpts);
-          if (result.warnings.length > 0) setWarnings(result.warnings);
+          // The cut line already shows under its direction (AUDIT ext-mediums r2 L9).
+          if (result.warnings.length > 0) setWarnings(selectedEngine === 'rpgmaker' ? result.warnings.filter((w) => !isRpgCutNote(w)) : result.warnings);
           break;
         }
         case 'godot-tres':
@@ -349,7 +379,7 @@ export default function ExportConfig() {
   }, [
     activeAnimations, frameDataUrls, fw, fh, padding, powerOfTwo,
     resizeEnabled, resizeW, resizeH, includeMetadata, selectedEngine,
-    spriteSheet, rpgFrameW, rpgFrameH, rpgMap, includeManifest, gifScale,
+    spriteSheet, rpgFrameW, rpgFrameH, rpgMap, includeManifest, gifScale, rpgBlank,
   ]);
 
   const engineInfo = TARGETS.find((e) => e.id === selectedEngine)!;
@@ -607,10 +637,17 @@ export default function ExportConfig() {
             <div>
               <label className="block text-[10px] font-mono text-text-muted mb-2">Direction mapping (3x4 grid)</label>
               <div className="space-y-2">
-                {RPG_DIRECTIONS.map((dir, idx) => (
-                  <div key={dir} className="flex items-center gap-3">
-                    <span className="w-12 text-[10px] font-mono text-text-muted">{dir}</span>
+                {RPG_DIRECTIONS.map((dir, idx) => {
+                  // An animation longer than a row says so under its direction,
+                  // before the download (AUDIT ext-mediums r1 L9).
+                  const mapped = activeAnimations.find((a) => a.id === rpgMap[idx]);
+                  const cut = mapped ? rpgCutNote(mapped.name, mapped.frames.filter((f) => frameDataUrls.has(f.id)).length) : null;
+                  return (
+                  <div key={dir}>
+                  <div className="flex items-center gap-3">
+                    <label htmlFor={`${dirFieldId}-${idx}`} className="w-12 text-[10px] font-mono text-text-muted">{dir}</label>
                     <select
+                      id={`${dirFieldId}-${idx}`}
                       value={rpgMap[idx] ?? ''}
                       onChange={(e) => {
                         const next = [...rpgMap];
@@ -626,7 +663,12 @@ export default function ExportConfig() {
                       ))}
                     </select>
                   </div>
-                ))}
+                  {cut && (
+                    <p className="mt-1 ml-15 text-xs font-mono text-accent-amber">{cut}</p>
+                  )}
+                  </div>
+                  );
+                })}
               </div>
             </div>
             <p className="text-[10px] font-mono text-text-muted">
@@ -723,8 +765,10 @@ export default function ExportConfig() {
         <Button
           size="lg"
           onClick={handleExport}
-          disabled={exporting || totalFrames === 0 || rpgBlank}
+          disabled={exporting || totalFrames === 0}
+          aria-disabled={rpgBlank || undefined}
           aria-describedby={rpgBlank ? rpgBlankId : undefined}
+          className="aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
         >
           {exporting ? (
             <>

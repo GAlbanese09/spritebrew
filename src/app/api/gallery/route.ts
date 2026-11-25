@@ -174,7 +174,13 @@ export async function DELETE(request: Request): Promise<Response> {
   }
   const userId = auth.userId;
 
-  const startCursor = new URL(request.url).searchParams.get('cursor') || undefined;
+  const params = new URL(request.url).searchParams;
+  // A request that names a kind was meant for one generation, not for
+  // everything (AUDIT ext-mediums r2 L7): refuse it before the store.
+  if (params.has('kind')) {
+    return Response.json({ error: 'Invalid request.' }, { status: 400 });
+  }
+  const startCursor = params.get('cursor') || undefined;
   if (startCursor !== undefined && startCursor.length > MAX_CURSOR_LENGTH) {
     return Response.json({ error: 'Invalid cursor.' }, { status: 400 });
   }

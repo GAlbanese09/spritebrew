@@ -167,20 +167,20 @@ function bind(w, { noKv = false, noBucket = false } = {}) {
 }
 const callsOf = (w) => w.calls.list + w.calls.kvDelete + w.calls.r2Delete;
 
-async function delAll(w, user, cursor, opts) {
+async function delAll(w, user, cursor, opts, query = '') {
   bind(w, opts);
   w.reset();
-  const url = `https://x.test/api/gallery${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`;
+  const url = `https://x.test/api/gallery${cursor ? `?cursor=${encodeURIComponent(cursor)}` : query}`;
   const res = await all.DELETE(new Request(url, { method: 'DELETE', headers: user ? { 'x-test-user': user } : {} }));
   const json = await res.json();
   if (cursor) cursorsSeen.add(cursor);
   if (typeof json.cursor === 'string') cursorsSeen.add(json.cursor);
   return { status: res.status, json, calls: callsOf(w) };
 }
-async function delOne(w, user, jobId) {
+async function delOne(w, user, jobId, query = '') {
   bind(w);
   w.reset();
-  const res = await one.DELETE(new Request(`https://x.test/api/gallery/${jobId}`, { method: 'DELETE', headers: { 'x-test-user': user } }), { params: { jobId } });
+  const res = await one.DELETE(new Request(`https://x.test/api/gallery/${jobId}${query}`, { method: 'DELETE', headers: { 'x-test-user': user } }), { params: { jobId } });
   return { status: res.status, json: await res.json() };
 }
 // The page's loop: call again with the answer's cursor until done.
@@ -423,6 +423,54 @@ for (const [kind, points, opts] of [
   check('a stopped request logs one line naming the step (r2)', /"step":"r2"/.test(line));
   const leaks = logs.filter((l) => /user_TESTONLY|aaaa\d|bbbb\d|a0\d|meta01|name01/.test(l) || [...cursorsSeen].some((c) => l.includes(c)));
   check(`no log line carries an account id, a job id or a cursor (${logs.length} lines read)`, leaks.length === 0 && logs.length > 0);
+}
+
+// 18. A kind's Clear sends its kind; the server refuses an entry of another
+//     kind and deletes nothing for it (HQ 2026-11-25-079). Old pages send no
+//     kind and are served as before. One shared rule, entryKind.
+{
+  const w = world();
+  w.entry(A, 'kstill01');
+  const walkName = w.entry(A, 'kwalk001');
+  w.kv.set(walkName, { ...w.kv.get(walkName), style: 'animation__four_angle_walking' });
+  const anim = w.entry(A, 'kanim001');
+  w.kv.set(anim, { ...w.kv.get(anim), mode: 'animate', style: 'rd_advanced_animation__walking', action: 'walking' });
+  const n0 = w.indexed(A);
+  const r1 = await delOne(w, A, 'kwalk001', '?kind=create');
+  check('18a: a text walk asked for under Created: 409, "Reload the Gallery and try again.", marked stale, nothing deleted',
+    r1.status === 409 && r1.json.error === 'Reload the Gallery and try again.' && r1.json.stale === true && w.indexed(A) === n0 && w.r2.has(`${A}/kwalk001.png`) && w.calls.r2Delete === 0 && w.calls.kvDelete === 0);
+  const r2 = await delOne(w, A, 'kwalk001', '?kind=animate');
+  check('18b: the same walk under Animated: deleted', r2.status === 200 && w.indexed(A) === n0 - 1 && !w.r2.has(`${A}/kwalk001.png`) && w.noOrphans(A));
+  const r3 = await delOne(w, A, 'kanim001', '?kind=create');
+  check('18c: an animate job under Created: 409, nothing deleted', r3.status === 409 && w.indexed(A) === n0 - 1);
+  const r4 = await delOne(w, A, 'kstill01', '?kind=animate');
+  check('18d: a still under Animated: 409, nothing deleted', r4.status === 409 && w.indexed(A) === n0 - 1);
+  const r5 = await delOne(w, A, 'kstill01');
+  check('18e: no kind, as an old page or a card\'s own Delete sends: deleted as before', r5.status === 200 && w.indexed(A) === n0 - 2);
+  const r6 = await delOne(w, A, 'kanim001', '?kind=video');
+  check('18f: a kind the server does not know: 400, nothing deleted', r6.status === 400 && w.indexed(A) === n0 - 2);
+  const r7 = await delOne(w, A, 'kanim001', '?kind=animate');
+  check('18g: the animate job under Animated: deleted', r7.status === 200 && w.indexed(A) === n0 - 3 && w.noOrphans(A));
+  // AUDIT ext-mediums r2 L5: the check's edges.
+  const packName = w.entry(A, 'kpack001');
+  w.kv.set(packName, { ...w.kv.get(packName), mode: 'pack' });
+  const r8 = await delOne(w, A, 'kpack001', '?kind=create');
+  const r8b = await delOne(w, A, 'kpack001', '?kind=animate');
+  check('18i: an entry of a mode the Gallery does not know is neither kind: 409 under each, nothing deleted', r8.status === 409 && r8b.status === 409 && w.kv.has(packName));
+  bind(w); w.reset();
+  const noUser = await one.DELETE(new Request('https://x.test/api/gallery/kpack001?kind=video', { method: 'DELETE' }), { params: { jobId: 'kpack001' } });
+  check('18j: sign-in comes first: no sign-in and a bad kind answers 401, and touches nothing', noUser.status === 401 && w.calls.list === 0);
+  const r9 = await delOne(w, A, 'knotthere', '?kind=animate');
+  check('18k: a missing entry under a kind answers 404 deleted false, not 409', r9.status === 404 && r9.json.deleted === false);
+  const twoName = w.entry(A, 'kwalk002');
+  w.kv.set(twoName, { ...w.kv.get(twoName), style: 'animation__vfx' });
+  const r10 = await delOne(w, A, 'kwalk002', '?kind=create&kind=animate');
+  check('18l: a repeated kind is read as its first: create, so the walk is refused', r10.status === 409 && w.kv.has(twoName));
+  const nAll = w.indexed(A);
+  const rAll = await delAll(w, A, null, undefined, '?kind=animate');
+  check('18m: delete-everything refuses any kind with 400 and deletes nothing (AUDIT ext-mediums r2 L7)', rAll.status === 400 && w.indexed(A) === nAll);
+  const src = (await import('node:fs')).readFileSync(path.join(ROOT, 'src/app/api/gallery/[jobId]/route.ts'), 'utf8');
+  check('18h: the route decides the kind with the shared rule', /import \{[^}]*\bentryKind\b[^}]*\} from '@\/lib\/galleryTypes'/.test(src) && /entryKind\(found\) !== kind/.test(src));
 }
 
 out(failed === 0 ? 'all pass' : `${failed} failed`);

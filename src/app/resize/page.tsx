@@ -6,8 +6,9 @@
 // src/lib/pixelResize.ts; the page's own rules and words are
 // src/lib/resizePage.ts.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { AlertTriangle, Download, ImageUp, Upload, X } from 'lucide-react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useRouter } from 'next/navigation';
+import { AlertTriangle, Download, ImageUp, Pencil, Upload, X } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import { resizeImage, type PixelImage, type SizeChoice } from '@/lib/pixelResize';
 import { detectGridSmart } from '@/lib/resizerGrid';
@@ -36,12 +37,18 @@ import {
   previewLine,
   type PreviewMode,
   type PageGrid,
+  gifFrameCount,
+  editorPick,
+  fitsEditor,
 } from '@/lib/resizePage';
+import { sendToEditor, takeForResize } from '@/lib/editorResizeHandoff';
 
 interface Loaded {
   name: string;
   image: PixelImage;
   thumb: string;
+  /** Frames in a GIF (only the first is read); 0 for anything else. */
+  gifFrames: number;
 }
 
 /** The size the After shows: a choice from the rows, or Other size. */
@@ -167,6 +174,12 @@ export default function ResizePage() {
   const waitingRef = useRef(new Map<number, (image: PixelImage | null) => void>());
   const askRef = useRef(0);
   const readRef = useRef(0);
+  const router = useRouter();
+  // An image the editor refused, handed over by its "Resize page" link: open
+  // it, and pick the largest size the editor opens (external audit SB-06).
+  const autoPickRef = useRef(false);
+  const [fromEditor, setFromEditor] = useState<{ width: number; height: number } | null>(null);
+  const editTooLargeId = useId();
 
   const unit = useMemo(() => (loaded ? unitOf(loaded.image.width, loaded.image.height, sheet ? grid : null) : null), [loaded, sheet, grid]);
   const rows = useMemo(() => (unit ? sizeRows(unit) : null), [unit]);
@@ -188,8 +201,10 @@ export default function ResizePage() {
     setOther(null);
   }, []);
 
-  const takeFile = useCallback(async (file: File) => {
+  const takeFile = useCallback(async (file: File, handed = false) => {
     const read = (readRef.current += 1);
+    autoPickRef.current = false;
+    setFromEditor(null);
     const wrong = fileProblem(file);
     if (wrong) {
       // It replaces a read still on its way, so the button comes back
@@ -201,6 +216,8 @@ export default function ResizePage() {
     setProblem(null);
     setReading(true);
     const out = await readImage(file);
+    const isGif = file.type === 'image/gif' || /\.gif$/i.test(file.name);
+    const gifFrames = isGif ? gifFrameCount(new Uint8Array(await file.arrayBuffer().catch(() => new ArrayBuffer(0)))) : 0;
     if (read !== readRef.current) return;
     setReading(false);
     if (out === 'too-large') { setProblem(W.tooLarge); return; }
@@ -210,9 +227,29 @@ export default function ResizePage() {
     setGrid(null);
     setPicking(false);
     setNoGuess(false);
-    setLoaded({ name: file.name, image: out.image, thumb: out.thumb });
+    setLoaded({ name: file.name, image: out.image, thumb: out.thumb, gifFrames });
     setPreviewChoice(null);
+    autoPickRef.current = handed;
   }, [resetTarget]);
+
+  useEffect(() => {
+    const handed = takeForResize();
+    if (handed) void takeFile(handed, true);
+  }, [takeFile]);
+
+  // Once a handed image is in, pick the editor's size, as a pill press would.
+  useEffect(() => {
+    if (!autoPickRef.current || !loaded || !unit || sheet) return;
+    autoPickRef.current = false;
+    const pick = editorPick(unit);
+    if (!pick) return;
+    askRef.current += 1;
+    setOther(null);
+    setResult(null);
+    setResizing(true);
+    setTarget({ width: pick.width, height: pick.height, key: `${pick.direction}:${pick.factor}` });
+    setFromEditor({ width: pick.width, height: pick.height });
+  }, [loaded, unit, sheet]);
 
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
@@ -510,6 +547,24 @@ export default function ResizePage() {
     }, 'image/png');
   };
 
+  // "Edit resized image": the image the page would download, if the editor
+  // opens it (external audit SB-06). aria-disabled, not disabled, so the
+  // button and its reason stay in the Tab order.
+  const editImage = loaded ? (target ? result : loaded.image) : null;
+  const tooLarge = !!editImage && !fitsEditor(editImage.width, editImage.height);
+  const editable = !!editImage && !tooLarge;
+  const edit = () => {
+    if (!loaded || !editImage || !editable) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = editImage.width;
+    canvas.height = editImage.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(editImage.data), editImage.width, editImage.height), 0, 0);
+    sendToEditor({ dataUrl: canvas.toDataURL('image/png'), width: editImage.width, height: editImage.height, name: loaded.name });
+    router.push('/editor');
+  };
+
   const pressed = (choice: SizeChoice) => (choice.direction === 'same' ? target === null : target?.key === `${choice.direction}:${choice.factor}`);
 
   return (
@@ -535,6 +590,12 @@ export default function ResizePage() {
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-mono text-text-primary truncate">{loaded.name}</p>
                 <p className="text-[13px] font-mono text-text-secondary">{`${loaded.image.width} by ${loaded.image.height} px`}</p>
+                {fromEditor && (
+                  <p className="text-[13px] font-mono text-text-secondary">{W.fromEditor(fromEditor.width, fromEditor.height)}</p>
+                )}
+                {loaded.gifFrames > 1 && (
+                  <p className="text-[13px] font-mono text-accent-amber">{W.gifStill(loaded.gifFrames)}</p>
+                )}
               </div>
               <Button variant="secondary" className="w-full sm:w-auto pointer-coarse:min-h-11" onClick={() => inputRef.current?.click()}>
                 <Upload size={16} /> {W.another}
@@ -719,11 +780,23 @@ export default function ResizePage() {
             </div>
             <p className="text-[13px] font-mono text-text-secondary">{line}</p>
 
-            <div className="flex justify-end">
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button
+                variant="secondary"
+                className="w-full sm:w-auto pointer-coarse:min-h-11 aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
+                onClick={edit}
+                aria-disabled={!editable}
+                aria-describedby={tooLarge ? editTooLargeId : undefined}
+              >
+                <Pencil size={16} aria-hidden="true" /> {W.edit}
+              </Button>
               <Button className="w-full sm:w-auto pointer-coarse:min-h-11" onClick={save} disabled={target !== null && !result}>
                 <Download size={16} /> {W.download}
               </Button>
             </div>
+            {tooLarge && (
+              <p id={editTooLargeId} className="text-[13px] font-mono text-text-secondary sm:text-right">{W.editTooLarge}</p>
+            )}
           </>
         )}
       </section>

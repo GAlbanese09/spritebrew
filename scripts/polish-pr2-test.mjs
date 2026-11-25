@@ -87,7 +87,7 @@ await build({
   } }],
 });
 const load = (name) => import(pathToFileURL(path.join(OUT_DIR, `${name}.mjs`)).href);
-const { openingStyle, affordableNote, OPENING_CANDIDATES } = await load('affordableStyle');
+const { openingStyle, affordableNote, OPENING_CANDIDATES, DEFAULT_STYLE_ID } = await load('affordableStyle');
 const { middleEllipsis } = await load('middleEllipsis');
 const { sheetLeaveLosesWork } = await load('sheetSession');
 const { getStyleById, GENERATION_STYLES, OFFERED_STYLES } = await load('styleRegistry');
@@ -114,36 +114,31 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
 // ── 1. affordableStyle ──
 
 {
-  const classic = getStyleById('plus-classic');
   const fast = getStyleById('fast-retro');
-  const open = (balance, currentId = 'plus-classic', acted = false) => openingStyle({ balance, currentId, acted });
+  const open = (balance, currentId = 'fast-retro', acted = false) => openingStyle({ balance, currentId, acted });
 
-  check('1: balance 8 opens Retro Arcade (fast-retro)', open(8) === 'fast-retro', open(8));
-  check('1: balance 5, exactly Retro Arcade\'s cost, opens fast-retro', open(fast.tokenCost) === 'fast-retro');
-  check('1: balance 16 keeps plus-classic', open(16) === 'plus-classic');
-  check('1: balance 10,021 keeps plus-classic', open(10021) === 'plus-classic');
-  check('1: balance 4 (covers nothing) keeps plus-classic', open(4) === 'plus-classic');
+  // George, Nov 24, 2026 (HQ 2026-11-24-149): Retro Arcade is the default.
+  const createIds = OFFERED_STYLES.filter((s) => !s.isAnimation).map((s) => s.id);
+  check('1: the default is Retro Arcade (fast-retro), the only opening candidate, and no style Create offers costs less',
+    DEFAULT_STYLE_ID === 'fast-retro' && JSON.stringify(OPENING_CANDIDATES) === '["fast-retro"]' && createIds.includes('fast-retro')
+    && createIds.every((id) => getStyleById(id).tokenCost >= fast.tokenCost), [DEFAULT_STYLE_ID, OPENING_CANDIDATES]);
+  check('1: every balance opens on Retro Arcade (0, 1, 4, 5, 8, 15, 16, 10,021)',
+    [0, 1, 4, 5, 8, 15, 16, 10021].every((b) => open(b) === 'fast-retro'));
   check('1: acted keeps the current style whatever the balance', open(8, 'plus-classic', true) === 'plus-classic' && open(3, 'pro-fantasy', true) === 'pro-fantasy');
-  check('1: not acted, a current style other than plus-classic follows the balance', open(8, 'pro-fantasy') === 'fast-retro' && open(0, 'fast-no-style') === 'plus-classic');
+  check('1: not acted, a current style other than the default goes to the default', open(8, 'pro-fantasy') === 'fast-retro' && open(0, 'fast-no-style') === 'fast-retro');
 
   // The newsletter is offered only once the reward's answer is known and unclaimed.
   const more = (offered) => `+${DAILY_LOGIN_TOKENS} a day${offered ? `, +${EMAIL_LIST_BONUS_TOKENS} for the newsletter` : ''}`;
-  const note8 = (offered) => `You have 8 tokens: ${fast.label} is ready at ${fast.tokenCost}. ${classic.label} needs ${classic.tokenCost} (${more(offered)}).`;
   const note3 = (offered) => `You have 3 tokens. ${fast.label} needs ${fast.tokenCost} (${more(offered)}).`;
   const known = (balance, emailListClaimed) => affordableNote({ balance, emailListClaimed, emailListClaimKnown: true });
-  check('1: note for 8, newsletter not claimed (numbers and names from the registry and constants)',
-    known(8, false) === note8(true), known(8, false));
-  check('1: note for 8, newsletter claimed, leaves the newsletter out',
-    known(8, true) === note8(false), known(8, true));
-  check('1: note for 3, newsletter not claimed',
+  check('1: note for 3, newsletter not claimed (numbers and names from the registry and constants)',
     known(3, false) === note3(true), known(3, false));
   check('1: note for 3, newsletter claimed',
     known(3, true) === note3(false), known(3, true));
-  check('1: today\'s values give the words HQ -034 wrote',
-    known(8, false) === 'You have 8 tokens: Retro Arcade is ready at 5. Classic Pixel Art needs 16 (+3 a day, +5 for the newsletter).'
-    && known(3, false) === 'You have 3 tokens. Retro Arcade needs 5 (+3 a day, +5 for the newsletter).');
-  check('1: no note once the balance covers plus-classic (16, 10,021)',
-    affordableNote({ balance: 16, emailListClaimed: false }) === null && affordableNote({ balance: 10021, emailListClaimed: true }) === null);
+  check('1: today\'s values give the words HQ -034 wrote for a balance under the cheapest style',
+    known(3, false) === 'You have 3 tokens. Retro Arcade needs 5 (+3 a day, +5 for the newsletter).');
+  check('1: no note once the balance covers Retro Arcade (5, 8, 16, 10,021)',
+    [5, 8, 16, 10021].every((b) => affordableNote({ balance: b, emailListClaimed: false, emailListClaimKnown: true }) === null));
   check('1: one token reads "1 token"', affordableNote({ balance: 1, emailListClaimed: true })?.startsWith('You have 1 token. '));
   const src = stripComments(read('src/lib/affordableStyle.ts'));
   check('1: affordableStyle types no cost, label or bonus number', !/\b(16|5|3|40|25|50)\b/.test(src.replace(/import[\s\S]*?;/g, ''))
@@ -453,31 +448,29 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
 {
   // openingStyle (HQ -034): until the person acts, the balance decides, from
   // any current style; once they act, the current style stays.
-  const TABLE = [[0, 'plus-classic'], [1, 'plus-classic'], [4, 'plus-classic'], [5, 'fast-retro'], [15, 'fast-retro'], [16, 'plus-classic'], [10021, 'plus-classic']];
+  // Retro Arcade the default (HQ 2026-11-24-149): it opens at every balance.
+  const TABLE = [[0, 'fast-retro'], [1, 'fast-retro'], [4, 'fast-retro'], [5, 'fast-retro'], [15, 'fast-retro'], [16, 'fast-retro'], [10021, 'fast-retro']];
   const open = (balance, currentId, acted) => openingStyle({ balance, currentId, acted });
-  const OTHERS = ['pro-fantasy', 'fast-retro', 'fast-no-style', 'anim-any', 'plus-low-res'];
-  check('8: openingStyle, not acted, from the default: 0, 1, 4 Classic; 5, 15 Retro Arcade; 16, 10,021 Classic',
-    TABLE.every(([b, id]) => open(b, 'plus-classic', false) === id), TABLE.map(([b]) => open(b, 'plus-classic', false)));
+  const OTHERS = ['pro-fantasy', 'plus-classic', 'fast-no-style', 'anim-any', 'plus-low-res'];
+  check('8: openingStyle, not acted, from the default: Retro Arcade at 0, 1, 4, 5, 15, 16 and 10,021',
+    TABLE.every(([b, id]) => open(b, 'fast-retro', false) === id), TABLE.map(([b]) => open(b, 'fast-retro', false)));
   check('8: openingStyle, not acted, from a style other than the default: the same table',
     OTHERS.every((cur) => TABLE.every(([b, id]) => open(b, cur, false) === id)));
   check('8: openingStyle, acted: the current style at every balance',
-    ['plus-classic', ...OTHERS].every((cur) => TABLE.every(([b]) => open(b, cur, true) === cur)));
+    ['fast-retro', ...OTHERS].every((cur) => TABLE.every(([b]) => open(b, cur, true) === cur)));
 
   // affordableNote (HQ -034, ENG -043): the ready style by name and cost; the
   // newsletter only when the reward's answer is known and unclaimed.
   const note = (balance, emailListClaimed = false, emailListClaimKnown = true) => affordableNote({ balance, emailListClaimed, emailListClaimKnown });
   const NEWS = ', +5 for the newsletter';
-  check('8: the new sentence at 5, 8 and 15',
-    [5, 8, 15].every((n) => note(n) === `You have ${n} tokens: Retro Arcade is ready at 5. Classic Pixel Art needs 16 (+3 a day${NEWS}).`), [5, 8, 15].map((n) => note(n)));
-  check('8: the old sentence at 0 and 4',
+  check('8: the sentence at 0 and 4',
     [0, 4].every((n) => note(n) === `You have ${n} tokens. Retro Arcade needs 5 (+3 a day${NEWS}).`), [0, 4].map((n) => note(n)));
-  check('8: no note at 16', note(16) === null && note(16, false, false) === null);
+  check('8: no note at 5, 8, 15 and 16', [5, 8, 15, 16].every((n) => note(n) === null && note(n, false, false) === null));
   check('8: the newsletter part only when the answer is known and unclaimed',
-    note(8, false, true).includes(NEWS) && !note(8, true, true).includes(NEWS)
-    && !note(8, false, false).includes(NEWS) && !note(8, true, false).includes(NEWS)
-    && note(3, false, true).includes(NEWS) && !note(3, false, false).includes(NEWS));
+    note(3, false, true).includes(NEWS) && !note(3, true, true).includes(NEWS)
+    && !note(3, false, false).includes(NEWS) && !note(3, true, false).includes(NEWS));
   check('8: 1 token reads "1 token"', note(1) === `You have 1 token. Retro Arcade needs 5 (+3 a day${NEWS}).`, note(1));
-  check('8: the note names no tier word', [1, 5, 8, 15].every((n) => !/\b(Fast|Plus|Pro) styles\b/.test(note(n))));
+  check('8: the note names no tier word', [0, 1, 3, 4].every((n) => !/\b(Fast|Plus|Pro) styles\b/.test(note(n))));
 
   // The flag, through the real dailyRewardClient and store.
   const apply = globalThis.__rewardApply;
@@ -623,7 +616,7 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     // Without the form's code every check below fails by its title.
     if (!makeForm) return { style: 'missing', acted: null, prompt: null, size: null, balance() {}, type() {}, chip() {}, choose() {}, width() {}, height() {}, background() {}, references() {}, note: () => 'missing', formNote: () => 'missing', disabled: () => null, announced: () => 'missing', recent: () => ['missing'] };
     const real = makeForm({
-      formVisit: visit, openingStyle, getStyleById, DEFAULT_STYLE_ID: 'plus-classic', userId,
+      formVisit: visit, openingStyle, getStyleById, DEFAULT_STYLE_ID, userId,
       pushRecent: (list, prev, id) => [prev, ...list.filter((x) => x !== id && x !== prev)], writeRecent: () => {},
       OFFERED_STYLES, GENERATION_STYLES, readRecent, recentStore, OPENING_CANDIDATES, affordableNote,
       // Not paused, so the balance alone decides the button.
@@ -655,11 +648,11 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
 
   {
     const f = mountForm(createFormVisit(), 'user_a');
-    f.balance(8);
-    const at8 = f.style === 'fast-retro' && f.note() !== null;
+    f.balance(3);
+    const at3 = f.style === 'fast-retro' && f.formNote() !== null;
     f.balance(508);
-    check('8: balance 8 opens on Retro Arcade; then 508 with nothing typed returns to Classic and the note goes',
-      at8 && f.style === 'plus-classic' && f.note() === null, f.style);
+    check('8: balance 3 opens on Retro Arcade with the note; then 508 with nothing typed keeps Retro Arcade and the note goes',
+      at3 && f.style === 'fast-retro' && f.formNote() === null && f.acted === false, f.style);
   }
   {
     const f = mountForm(createFormVisit(), 'user_a');
@@ -670,22 +663,23 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     g.balance(3);
     const at3 = g.style;
     g.balance(6);
-    check('8: 13 then 16: Retro Arcade then Classic; 3 then 6: Classic then Retro Arcade with the note',
-      at13 === 'fast-retro' && f.style === 'plus-classic' && at3 === 'plus-classic' && g.style === 'fast-retro' && g.note() !== null,
+    check('8: 13 then 16, and 3 then 6: Retro Arcade throughout (HQ 2026-11-24-149)',
+      at13 === 'fast-retro' && f.style === 'fast-retro' && at3 === 'fast-retro' && g.style === 'fast-retro' && g.formNote() === null,
       { at13, at16: f.style, at3, at6: g.style });
   }
   {
     const f = mountForm(createFormVisit(), 'user_a');
-    f.balance(8);
+    f.balance(3);
     f.type('a small knight');
     const before = bodyFor(f.style, f.prompt);
     const styleBefore = f.style;
     f.balance(508);
     const g = mountForm(createFormVisit(), 'user_a');
     g.balance(21);
+    g.choose('plus-classic');
     g.type('a small knight');
     g.balance(8);
-    check('8: after a non-empty prompt, 8 to 508 and 21 to 8 leave the style and the request body unchanged; at 8 on Classic the button is disabled',
+    check('8: after a non-empty prompt, 3 to 508 and 21 to 8 leave the style and the request body unchanged; at 8 on Classic the button is disabled',
       f.style === styleBefore && bodyFor(f.style, f.prompt) === before && g.style === 'plus-classic' && g.disabled(), { f: f.style, g: g.style });
   }
   {
@@ -693,17 +687,17 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     f.balance(8);
     f.type('');
     f.balance(508);
-    const emptyTypingKeepsFollowing = f.style === 'plus-classic' && f.acted === false;
+    const emptyTypingKeepsFollowing = f.style === 'fast-retro' && f.acted === false;
     const g = mountForm(createFormVisit(), 'user_a');
     g.balance(8);
     g.chip('pixel art knight with sword');
     g.balance(508);
     const h = mountForm(createFormVisit(), 'user_a');
     h.balance(508);
-    h.choose('plus-classic');
+    h.choose('fast-retro');
     h.balance(8);
     check('8: an empty prompt is not an act; a chip and choosing the current style are (the current style: no Recent, no announcement)',
-      emptyTypingKeepsFollowing && g.style === 'fast-retro' && h.style === 'plus-classic' && h.acted
+      emptyTypingKeepsFollowing && g.style === 'fast-retro' && g.acted && h.style === 'fast-retro' && h.acted
       && h.recent().length === 0 && h.announced() === '');
   }
   {
@@ -725,22 +719,22 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     const other = mountForm(visit, 'user_b');
     const returning = mountForm(visit, 'user_a');
     check('8: another account starts empty, and what was held is dropped',
-      other.style === 'plus-classic' && other.acted === false && returning.style === 'plus-classic' && returning.acted === false);
+      other.style === 'fast-retro' && other.acted === false && returning.style === 'fast-retro' && returning.acted === false);
     const before = createFormVisit();
     mountForm(before, 'user_a').choose('pro-fantasy');
     const held = mountForm(before, 'user_a').style;
     const reload = mountForm(createFormVisit(), 'user_a');
-    check('8: a reload (a new page load) starts over on the default', held === 'pro-fantasy' && reload.style === 'plus-classic' && reload.acted === false, { held, reload: reload.style });
+    check('8: a reload (a new page load) starts over on the default', held === 'pro-fantasy' && reload.style === 'fast-retro' && reload.acted === false, { held, reload: reload.style });
   }
   {
     const visit = createFormVisit();
     const f = mountForm(visit, 'user_a');
-    f.balance(8);
+    f.balance(3);
     const again = mountForm(visit, 'user_a');
     const opened = again.style;
     again.balance(508);
-    check('8: a style the balance chose is remembered too, still unlatched, so it keeps following',
-      opened === 'fast-retro' && again.acted === false && again.style === 'plus-classic', { opened, after: again.style });
+    check('8: the style the form opened on is remembered too, still unlatched',
+      opened === 'fast-retro' && again.acted === false && again.style === 'fast-retro', { opened, after: again.style });
     const visit2 = createFormVisit();
     visit2.rememberStyle('user_a', 'pro-fantasy');
     visit2.rememberStyle(null, 'fast-retro');
@@ -753,7 +747,7 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     visit3.rememberStyle('user_a', 'not-a-style');
     const unknown = mountForm(visit3, 'user_a');
     check('8: no userId reads empty and writes nothing (what is held stays); an unknown remembered id opens on the default',
-      empty && kept && unknown.style === 'plus-classic' && unknown.acted === false, { empty, kept, unknown: unknown.style });
+      empty && kept && unknown.style === 'fast-retro' && unknown.acted === false, { empty, kept, unknown: unknown.style });
   }
 
   // Fix round 2, A (audit N1; HQ -090 ruling 1): any edit of the form is an
@@ -784,18 +778,18 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     check('8: A: after a reference image is added, 8 to 508 leaves the style, the size and Background unchanged',
       kept(refs) && refs.after.style === 'fast-retro' && refs.after.refs === 1 && refs.after.bg === true, refs);
     const none = run(() => {});
-    check('8: A: with no edit, 8 to 508 still moves to Classic and its size (the harness runs the size effect)',
+    check('8: A: with no edit, 8 to 508 stays on Retro Arcade at its size, unlatched (the harness runs the size effect)',
       none.opened === 'fast-retro' && none.edited.w === getStyleById('fast-retro').defaultWidth
-      && none.after.style === 'plus-classic' && none.acted === false && none.after.w === getStyleById('plus-classic').defaultWidth, none);
+      && none.after.style === 'fast-retro' && none.acted === false && none.after.w === getStyleById('fast-retro').defaultWidth, none);
   }
 
   // Fix round 2, C (audit N6; HQ -090 ruling 3): the form's own note
   // expression shows the note only on the two opening styles.
   {
-    const known10 = affordableNote({ balance: 10, emailListClaimed: false, emailListClaimKnown: true });
+    const known3 = affordableNote({ balance: 3, emailListClaimed: false, emailListClaimKnown: true });
     const noteOn = (styleId) => {
       const f = mountForm(createFormVisit(), 'user_a');
-      f.balance(10);
+      f.balance(3);
       if (styleId !== null) f.choose(styleId);
       return { style: f.style, note: f.formNote() };
     };
@@ -805,9 +799,9 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
     // G1: the animation styles left Create for Animate from Text, so the
     // fourth case is another style Create offers.
     const anim = noteOn('pro-platformer');
-    check('8: C: at balance 10 the note is the known sentence on fast-retro and plus-classic, and null on a third style',
-      known10 === 'You have 10 tokens: Retro Arcade is ready at 5. Classic Pixel Art needs 16 (+3 a day, +5 for the newsletter).'
-      && opened.style === 'fast-retro' && opened.note === known10 && classic.style === 'plus-classic' && classic.note === known10
+    check('8: C: at balance 3 the note is the known sentence on Retro Arcade only, and null on Classic and on other styles',
+      known3 === 'You have 3 tokens. Retro Arcade needs 5 (+3 a day, +5 for the newsletter).'
+      && opened.style === 'fast-retro' && opened.note === known3 && classic.style === 'plus-classic' && classic.note === null
       && third.style === 'pro-fantasy' && third.note === null && anim.style === 'pro-platformer' && anim.note === null, { opened, classic, third, anim });
     check('8: C: the form checks the opening styles through OPENING_CANDIDATES, not ids typed again',
       /const balanceNote = serverBalanceKnown && \(OPENING_CANDIDATES as readonly string\[\]\)\.includes\(selectedStyleId\)\s*\?/.test(stripComments(formSrc))
@@ -839,10 +833,10 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'
       pickerIds = new Function('OFFERED_STYLES', 'GENERATION_STYLES', g)(OFFERED_STYLES, GENERATION_STYLES).flatMap((c) => c.styles.map((s) => s.id));
     } catch { pickerIds = ['missing']; }
     check('8: E: anim-8dir remembered in the visit opens on the default, and Recent read from this account drops it',
-      opened === 'plus-classic' && JSON.stringify(recentAtOpen) === '["pro-fantasy"]' && JSON.stringify(readRecent(accountRecentStorage(browser, 'user_a'), GENERATION_STYLES.map((s) => s.id))) === '["anim-8dir","pro-fantasy"]',
+      opened === 'fast-retro' && JSON.stringify(recentAtOpen) === '["pro-fantasy"]' && JSON.stringify(readRecent(accountRecentStorage(browser, 'user_a'), GENERATION_STYLES.map((s) => s.id))) === '["anim-8dir","pro-fantasy"]',
       { opened, recentAtOpen });
     check('8: E: chooseStyle(\'anim-8dir\') changes nothing: no style, no latch, no Recent, no visit write, no announcement',
-      before === after && f.style === 'plus-classic' && f.acted === false && f.announced() === '', { before, after });
+      before === after && f.style === 'fast-retro' && f.acted === false && f.announced() === '', { before, after });
     // G1: the picker holds Create Sprite's styles, the offered ones that are
     // not animations (Animate from Text has those).
     check('8: E: the picker\'s groups (StylePicker\'s own code) hold the 15 offered styles that are not animations, and not anim-8dir',

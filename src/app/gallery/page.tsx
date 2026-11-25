@@ -30,12 +30,14 @@ import {
   clearFailedLine,
   clearGallery,
   clearKeptLine,
+  clearStaleLine,
   clearLabel,
   clearNoneLine,
   clearedLine,
   CLEARED_HEADING,
   countLine,
   matchesFilter,
+  entryKind,
   noneAtEndLine,
   noneYetLine,
   noneNextLine,
@@ -1156,7 +1158,7 @@ export default function GalleryPage() {
       mark('failed');
       setAnnounce(DELETE_FAILED_LINE);
       sendSlicerAgain();
-    } else if (outcome === 'unknown') {
+    } else if (outcome === 'unknown' || outcome === 'stale') {
       heldSlicerRef.current = null;
       // A Clear on its way first gets its last answer (AUDIT r3, L3-1).
       if (clearBusyRef.current) await clearEndRef.current;
@@ -1252,12 +1254,15 @@ export default function GalleryPage() {
           }
           return deleteOutcome({ ok: resp.ok, status: resp.status, body: null }, false);
         },
-        deleteOne: async (jobId) => {
-          // An empty id would address "delete everything".
-          if (!jobId) return 'refused';
+        deleteOne: async (jobId, kind) => {
+          // An empty id, or "." or "..", would address "delete everything"
+          // (AUDIT ext-mediums r2 L7).
+          if (!jobId || jobId === '.' || jobId === '..') return 'refused';
           const token = await getToken();
           if (!token) return 'refused';
-          const resp = await fetch(`/api/gallery/${encodeURIComponent(jobId)}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+          // With the kind this Clear counted it as: the server refuses an
+          // entry of another kind (HQ 2026-11-25-079).
+          const resp = await fetch(`/api/gallery/${encodeURIComponent(jobId)}?kind=${encodeURIComponent(kind)}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
           return deleteOutcome({ ok: resp.ok, status: resp.status, body: resp.ok ? null : await resp.json().catch(() => null) }, true);
         },
         removed: (ids, all) => {
@@ -1283,6 +1288,7 @@ export default function GalleryPage() {
       if (result.state === 'count-failed') setClearNote(clearFailedLine(kind));
       else if (result.state === 'none') setClearNote(clearNoneLine(kind));
       else if (result.state === 'partial' || result.state === 'failed') setClearNote(clearKeptLine(result.kept, result.asked, kind));
+      else if (result.state === 'stale') setClearNote(clearStaleLine(result, kind));
       // An answer was lost: "nothing was deleted" would be a guess. Read
       // the gallery again and show what is there.
       else if (result.state === 'unconfirmed') {
@@ -1324,7 +1330,7 @@ export default function GalleryPage() {
 
   const filteredEntries = useMemo(() => {
     if (filter === 'all') return entries;
-    return entries.filter((e) => e.mode === filter);
+    return entries.filter((e) => matchesFilter(e, filter));
   }, [entries, filter]);
 
   // Render: loading. Today's grid with skeleton cards, so the page shows its
@@ -1608,6 +1614,8 @@ interface GalleryCardProps {
 }
 
 function GalleryCard({ entry, imageUrl, onDownload, onSendToSlicer, onDelete, state }: GalleryCardProps) {
+  // Created or Animated by what the card holds (external audit SB-24).
+  const kind = entryKind(entry);
   const ready = !!imageUrl;
   // Waiting for its own Delete: the card is dimmed and its controls do
   // nothing, but keep the focus (DESIGN 2026-11-14-147).
@@ -1637,7 +1645,7 @@ function GalleryCard({ entry, imageUrl, onDownload, onSendToSlicer, onDelete, st
       // nothing when activated, so a repeated Enter is harmless.
       tabIndex={-1}
       role="group"
-      aria-label={`${entry.prompt}, ${entry.mode === 'create' ? 'Created' : 'Animated'}`}
+      aria-label={`${entry.prompt}, ${kind === 'create' ? 'Created' : 'Animated'}`}
       aria-busy={busy || undefined}
       className={`group bg-bg-elevated rounded-lg border border-border-subtle overflow-hidden flex flex-col focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-accent-amber ${busy ? 'opacity-60' : ''}`}
     >
@@ -1645,12 +1653,15 @@ function GalleryCard({ entry, imageUrl, onDownload, onSendToSlicer, onDelete, st
         {/* Mode badge */}
         <Badge
           className={`absolute top-2 left-2 z-10 ${
-            entry.mode === 'create' ? 'bg-accent-amber text-bg-primary' : 'bg-accent-teal text-bg-primary'
+            kind === 'create' ? 'bg-accent-amber text-bg-primary' : 'bg-accent-teal text-bg-primary'
           }`}
         >
-          {entry.mode === 'create' ? 'Created' : (
+          {kind === 'create' ? 'Created' : (
             <>
-              <Play size={10} className="inline mr-1" />
+              {/* The play mark only where the card plays: an animate job.
+                  Animate from Text cards show the sheet (AUDIT ext-mediums r1
+                  L5; DESIGN 2026-11-25-074 (a)). */}
+              {entry.mode === 'animate' && <Play size={10} className="inline mr-1" aria-hidden="true" />}
               Animated
             </>
           )}

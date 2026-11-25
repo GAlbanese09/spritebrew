@@ -38,7 +38,7 @@ export default function Header({ onMenuClick, menuOpen, menuButtonRef }: HeaderP
         aria-label="Menu"
         aria-expanded={menuOpen}
         aria-controls="app-sidebar"
-        className="lg:hidden p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"
+        className="lg:hidden p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center"
       >
         <Menu size={20} aria-hidden="true" />
       </button>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
 import { UploadCloud, FilePlus, FolderOpen, Image as ImageIcon, AlertCircle, RotateCcw } from 'lucide-react';
 import UploadZone from './UploadZone';
 import EditorRefusalText from './EditorRefusalText';
@@ -10,6 +10,7 @@ import {
   editorDimsRejectionMessage,
 } from '@/components/sprites/editorStore';
 import type { SpriteProjectSource } from '@/lib/spriteProject';
+import { dropForResize, sendToResize } from '@/lib/editorResizeHandoff';
 import { draftHeading, draftListLine, draftSentence, type RecoveryManifestV1 } from '@/lib/editorRecovery';
 
 /**
@@ -66,6 +67,9 @@ export default function EditorLanding({
   // draft the user had restored since).
   const choiceRef = useRef(0);
   const uploadRef = useRef<{ file: File; choice: number } | null>(null);
+  // The file the editor refused as too large, handed to /resize if its link
+  // is followed, so it need not be chosen again (external audit SB-06).
+  const refusedRef = useRef<File | null>(null);
   const liveRef = useRef(false);
   useLayoutEffect(() => {
     liveRef.current = true;
@@ -93,8 +97,19 @@ export default function EditorLanding({
     onProjectReady(dataUrl, size, size, { kind: 'blank' });
   }
 
+  // The refusal's "Resize page" link hands the refused file to /resize.
+  // Only a plain click stays in this tab; a new tab or window starts empty
+  // (AUDIT ext-mediums r1 L4).
+  const followResize = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (refusedRef.current) sendToResize(refusedRef.current);
+  };
+
   function handleUploadStart(file: File) {
     uploadRef.current = { file, choice: ++choiceRef.current };
+    // Another file: one left waiting for /resize is dropped (AUDIT ext-mediums r1 L4).
+    refusedRef.current = null;
+    dropForResize();
     onChoose?.();
   }
 
@@ -109,9 +124,11 @@ export default function EditorLanding({
     if (!dimsWithinEditorLimits(w, h)) {
       // Revoke the blob URL we won't be using.
       URL.revokeObjectURL(blobUrl);
+      refusedRef.current = file;
       setUploadError(editorDimsRejectionMessage(w, h, 'page'));
       return;
     }
+    refusedRef.current = null;
     setUploadError(null);
     onProjectReady(blobUrl, w, h, { kind: 'upload' });
   }
@@ -243,7 +260,7 @@ export default function EditorLanding({
               <div className="rounded-md border border-red-500/30 bg-red-500/5 p-3 flex items-start gap-2">
                 <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
                 <p className="text-[11px] font-mono text-text-secondary leading-relaxed flex-1 min-w-0">
-                  <EditorRefusalText message={uploadError} />
+                  <EditorRefusalText message={uploadError} onResize={followResize} />
                 </p>
                 <button
                   onClick={() => setUploadError(null)}

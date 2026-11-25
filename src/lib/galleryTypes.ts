@@ -30,6 +30,24 @@ export interface GalleryEntryV1 {
  *
  * Pages side: read-only — we never construct gen: keys for writing.
  */
+/**
+ * What a card holds, for the filters, the paging and the badge (external
+ * audit SB-24): an animate job, or a create job whose style is an animation
+ * (Animate from Text, and the Create form's animation styles before it), is
+ * Animated; any other create job is Created. Worked out on read, so old and
+ * new records agree. The job's own mode still decides how its picture is
+ * stored and downloaded. Shared by the Gallery page and the single delete
+ * route's kind check (HQ 2026-11-25-079).
+ */
+export function entryKind(entry: GalleryEntryV1): JobMode | null {
+  if (entry.mode === 'animate') return 'animate';
+  // A mode the Gallery does not know (none today) is neither kind, so no
+  // kind's Clear reaches it without someone deciding so (AUDIT
+  // ext-mediums r1 L3). A record without a style counts by its mode.
+  if (entry.mode !== 'create') return null;
+  return typeof entry.style === 'string' && entry.style.startsWith('animation__') ? 'animate' : 'create';
+}
+
 export const GALLERY_KV_PREFIX = 'gen:';
 
 /**

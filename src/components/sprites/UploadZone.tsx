@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState, type DragEvent } from 'react';
 import { UploadCloud, X, AlertCircle } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import { droppedNote, pickDropped } from '@/lib/dropFiles';
 
 const ACCEPTED_TYPES = ['image/png', 'image/webp', 'image/gif'];
 const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -19,6 +20,8 @@ interface UploadZoneProps {
 export default function UploadZone({ onImageLoaded, onLoadStart, currentImage, onRemove }: UploadZoneProps) {
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Several files dropped: which one opened (external audit SB-13).
+  const [dropNote, setDropNote] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const processFile = useCallback(
@@ -54,8 +57,10 @@ export default function UploadZone({ onImageLoaded, onLoadStart, currentImage, o
     (e: DragEvent) => {
       e.preventDefault();
       setDragOver(false);
-      const file = e.dataTransfer.files[0];
-      if (file) processFile(file);
+      const picked = pickDropped(Array.from(e.dataTransfer.files), (f) => ACCEPTED_TYPES.includes(f.type));
+      if (!picked) return;
+      setDropNote(droppedNote(picked.count, picked.file.name));
+      processFile(picked.file);
     },
     [processFile]
   );
@@ -73,7 +78,10 @@ export default function UploadZone({ onImageLoaded, onLoadStart, currentImage, o
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
-      if (file) processFile(file);
+      if (file) {
+        setDropNote(null);
+        processFile(file);
+      }
       // reset so same file can be re-selected
       e.target.value = '';
     },
@@ -108,9 +116,15 @@ export default function UploadZone({ onImageLoaded, onLoadStart, currentImage, o
             <p className="text-xs font-mono text-text-muted mt-1">
               Configure frame size below, then slice.
             </p>
+            {dropNote && (
+              <p className="text-xs font-mono text-accent-amber mt-1">{dropNote}</p>
+            )}
           </div>
           <button
-            onClick={onRemove}
+            onClick={() => {
+              setDropNote(null);
+              onRemove();
+            }}
             className="ml-auto sm:ml-0 flex-shrink-0 p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"
             title="Remove image"
           >

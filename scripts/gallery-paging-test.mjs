@@ -107,7 +107,7 @@ function page(list, filter = 'all', options = {}) {
 
 check('the page size is the most the list API answers', GALLERY_PAGE_SIZE === 50 && PASS_MIN_CARDS === 12 && PASS_MAX_PAGES === 4);
 
-check('a filter matches by mode; All matches everything',
+check('a filter matches by kind; All matches everything',
   matchesFilter({ mode: 'create' }, 'all') && matchesFilter({ mode: 'animate' }, 'all') &&
   matchesFilter({ mode: 'create' }, 'create') && !matchesFilter({ mode: 'create' }, 'animate'));
 
@@ -853,7 +853,7 @@ check('L5: a press of "Load more" or "Try again", or a page that arrives while t
   /else if \(armed\) void runPass\('more'\);/.test(gallery) && /void runPass\('filter'\);/.test(gallery) && gallery.match(/runPass\('more', true\)/g)?.length === 1 &&
   /if \(!card\) return;\s*card\.focus\(\{ preventScroll: true \}\);\s*card\.scrollIntoView\(\{ block: 'nearest' \}\);\s*\}, \[entries\]\);/.test(gallery) &&
   !/querySelector<HTMLElement>\('button/.test(gallery) &&
-  /<div\s*data-gallery-card=\{entry\.jobId\}\s*tabIndex=\{-1\}\s*role="group"\s*aria-label=\{`\$\{entry\.prompt\}, \$\{entry\.mode === 'create' \? 'Created' : 'Animated'\}`\}/.test(gallery));
+  /<div\s*data-gallery-card=\{entry\.jobId\}\s*tabIndex=\{-1\}\s*role="group"\s*aria-label=\{`\$\{entry\.prompt\}, \$\{kind === 'create' \? 'Created' : 'Animated'\}`\}/.test(gallery));
 check('a yes to Clear, or to a card\'s Delete, drops a waiting Send to Slicer only when its own generation is among those to delete',
   /onSendToSlicer=\{\(\) => \{\s*slicerJobRef\.current = entry\.jobId;\s*return handleSendToSlicer\(entry\);\s*\}\}/.test(gallery) &&
   /ask: \(question, ids\) => \{\s*const yes = confirm\(question\);\s*if \(yes && slicerJobRef\.current !== null && ids\.includes\(slicerJobRef\.current\)\) setSlicerAside\(\);\s*return yes;\s*\},/.test(clear) &&
@@ -866,7 +866,7 @@ check('G2-11: a Send to Slicer set aside at a yes is sent again when its generat
   /const entry = heldSlicerRef\.current;\s*heldSlicerRef\.current = null;\s*if \(!entry \|\| goneRef\.current\.has\(entry\.jobId\) \|\| slicerJobRef\.current !== null\) return;\s*slicerJobRef\.current = entry\.jobId;\s*void handleSendToSlicer\(entry\);/.test(gallery) &&
   /ended\(\);\s*if \(alive\(\)\) sendSlicerAgain\(\);/.test(clear) &&
   /else if \(result\.state === 'unconfirmed'\) \{\s*heldSlicerRef\.current = null;\s*reload\(clearUnconfirmedLine\(\)\);/.test(clear) &&
-  /\} else if \(outcome === 'unknown'\) \{\s*heldSlicerRef\.current = null;/.test(single));
+  /\} else if \(outcome === 'unknown' \|\| outcome === 'stale'\) \{\s*heldSlicerRef\.current = null;/.test(single));
 // Clear in the page: the module does it; the page only hands it its calls.
 check('M6: Clear is the module\'s, whole: the page counts nothing, asks nothing and deletes nothing outside it',
   /const result = await clearGallery\(\{/.test(clear) && gallery.match(/clearGallery\(/g)?.length === 1 &&
@@ -874,7 +874,7 @@ check('M6: Clear is the module\'s, whole: the page counts nothing, asks nothing 
   gallery.match(/method: 'DELETE'/g)?.length === 3);
 check('GP-A: each delete fetches its sign-in token at the call, inside the port; its answer is read by the module\'s rule; ids are encoded and an empty id is never sent (G2-9)',
   /deleteAll: async \(\) => \{\s*const token = await getToken\(\);\s*if \(!token\) return 'refused';\s*const resp = await fetch\('\/api\/gallery', \{ method: 'DELETE', headers: \{ Authorization: `Bearer \$\{token\}` \} \}\);[\s\S]*?return deleteOutcome\(\{ ok: resp\.ok, status: resp\.status, body: null \}, false\);\s*\},/.test(clear) &&
-  /deleteOne: async \(jobId\) => \{\s*if \(!jobId\) return 'refused';\s*const token = await getToken\(\);\s*if \(!token\) return 'refused';\s*const resp = await fetch\(`\/api\/gallery\/\$\{encodeURIComponent\(jobId\)\}`, \{ method: 'DELETE', headers: \{ Authorization: `Bearer \$\{token\}` \} \}\);\s*return deleteOutcome\(\{ ok: resp\.ok, status: resp\.status, body: resp\.ok \? null : await resp\.json\(\)\.catch\(\(\) => null\) \}, true\);\s*\},/.test(clear) &&
+  /deleteOne: async \(jobId, kind\) => \{\s*(?:\/\/[^\n]*\s*)*if \(!jobId \|\| jobId === '\.' \|\| jobId === '\.\.'\) return 'refused';\s*const token = await getToken\(\);\s*if \(!token\) return 'refused';\s*(?:\/\/[^\n]*\s*)*const resp = await fetch\(`\/api\/gallery\/\$\{encodeURIComponent\(jobId\)\}\?kind=\$\{encodeURIComponent\(kind\)\}`, \{ method: 'DELETE', headers: \{ Authorization: `Bearer \$\{token\}` \} \}\);\s*return deleteOutcome\(\{ ok: resp\.ok, status: resp\.status, body: resp\.ok \? null : await resp\.json\(\)\.catch\(\(\) => null\) \}, true\);\s*\},/.test(clear) &&
   clear.match(/await getToken\(\)/g)?.length === 3 && clear.indexOf('await getToken()') > clear.indexOf('const result = await clearGallery({') &&
   !/resp\.status === 404/.test(gallery));
 check('GP-A, G2-1: nothing leaves the page before the server has deleted it: cards go only through dropCards, called from the module\'s "removed" for Clear and for a single Delete',
@@ -908,7 +908,7 @@ check('G2-1: a single Delete is the module\'s, whole: it asks first, its token i
   /if \(!jobId \|\| cardBusyRef\.current\.has\(jobId\)\) return;/.test(single) && /const outcome = await deleteEntry\(\{/.test(single) && gallery.match(/deleteEntry\(/g)?.length === 1 &&
   /send: async \(\) => \{\s*const token = await getToken\(\);\s*if \(!token\) return 'refused';\s*const resp = await fetch\(`\/api\/gallery\/\$\{encodeURIComponent\(jobId\)\}`, \{ method: 'DELETE', headers: \{ Authorization: `Bearer \$\{token\}` \} \}\);\s*return deleteOutcome\(\{ ok: resp\.ok, status: resp\.status, body: resp\.ok \? null : await resp\.json\(\)\.catch\(\(\) => null\) \}, true\);\s*\},/.test(single) &&
   single.indexOf("confirm('Delete this generation?") < single.indexOf('await getToken()') &&
-  /if \(outcome === 'refused'\) \{\s*mark\('failed'\);\s*setAnnounce\(DELETE_FAILED_LINE\);\s*sendSlicerAgain\(\);\s*\} else if \(outcome === 'unknown'\) \{\s*heldSlicerRef\.current = null;\s*if \(clearBusyRef\.current\) await clearEndRef\.current;\s*if \(alive\(\)\) reload\(clearUnconfirmedLine\(\)\);\s*\} else \{\s*sendSlicerAgain\(\);\s*\}/.test(single) &&
+  /if \(outcome === 'refused'\) \{\s*mark\('failed'\);\s*setAnnounce\(DELETE_FAILED_LINE\);\s*sendSlicerAgain\(\);\s*\} else if \(outcome === 'unknown' \|\| outcome === 'stale'\) \{\s*heldSlicerRef\.current = null;\s*(?:\/\/[^\n]*\s*)*if \(clearBusyRef\.current\) await clearEndRef\.current;\s*if \(alive\(\)\) reload\(clearUnconfirmedLine\(\)\);\s*\} else \{\s*sendSlicerAgain\(\);\s*\}/.test(single) &&
   /state=\{cardState\[entry\.jobId\]\}/.test(gallery) && /const busy = state === 'busy';/.test(gallery) &&
   /onClick=\{busy \? undefined : onDelete\}\s*aria-disabled=\{busy \|\| undefined\}/.test(gallery) &&
   /\{state === 'failed'\s*\? <p className="text-xs text-accent-amber">\{DELETE_FAILED_LINE\}<\/p>\s*: <p className="text-xs text-text-muted">\{relativeTime\(entry\.createdAt\)\}<\/p>\}/.test(gallery) &&

@@ -36,6 +36,8 @@ check('3: the drawer has its id and name; the close button is named',
   /id="app-sidebar"/.test(sidebar) && /aria-label="Main navigation"/.test(sidebar) && /aria-label="Close menu"/.test(sidebar));
 check('3b: the sidebar\'s link list reads as "Main navigation" too (DESIGN 2026-11-25-042)',
   /<nav aria-label="Main navigation" className="flex-1 px-3 py-4 space-y-1">/.test(sidebar));
+check('3c: by touch the menu button and the close button are 44 px (PILOT 2026-11-25-054)',
+  /aria-label="Menu"[\s\S]{0,200}pointer-coarse:min-h-11 pointer-coarse:min-w-11/.test(header) && /aria-label="Close menu"[\s\S]{0,200}pointer-coarse:min-h-11 pointer-coarse:min-w-11/.test(sidebar));
 check('4: opening moves focus to the close button', /if \(open\) closeButtonRef\.current\?\.focus\(\);/.test(sidebar));
 check('5: the close button and the backdrop close and put focus back on the opener; a link closes without it',
   (sidebar.match(/onClick=\{\(\) => onClose\(true\)\}/g) ?? []).length === 2 && !/onClick=\{onClose\}/.test(sidebar)

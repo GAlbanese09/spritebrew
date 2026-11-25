@@ -18,6 +18,7 @@ import {
   sizeText,
   type SizeChoice,
 } from './pixelResize';
+import { EDITOR_MAX_DIMENSION, EDITOR_MAX_PIXELS } from './editorConstants';
 
 /** One cap for downloads and /resize, a side (B2). */
 export const RESIZE_SIDE_CAP = DOWNLOAD_SIDE_CAP;
@@ -27,13 +28,25 @@ export const RESIZE_TYPES: readonly string[] = Object.freeze(['image/png', 'imag
 export const RESIZE_ACCEPT = '.png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif';
 
 /** B5's words for the page, in one place. */
+const EDITOR_SQUARE = Math.floor(Math.sqrt(EDITOR_MAX_PIXELS));
+const EDITOR_LIMIT_WORDS = `${EDITOR_MAX_PIXELS.toLocaleString('en-US')} pixels, such as ${EDITOR_SQUARE} by ${EDITOR_SQUARE}`;
+
 export const RESIZE_WORDS = Object.freeze({
   title: 'Resize pixel art',
   lead: 'Shrink or grow pixel art without blurring it. Free, no account, and your image never leaves your browser.',
   drop: 'Drop an image here or choose a file',
   choose: 'Choose a file',
   another: 'Choose another',
-  hint: `PNG, JPEG, WebP or GIF, up to ${DOWNLOAD_SIDE_CAP} px a side.`,
+  hint: `PNG, JPEG, WebP or GIF, up to ${DOWNLOAD_SIDE_CAP} px a side. A GIF uses its first frame.`,
+  // The way back to the editor (external audit SB-06).
+  edit: 'Edit resized image',
+  // They name the editor's limit, a pixel count, with a square of that many
+  // as the example; both from EDITOR_MAX_PIXELS (DESIGN 2026-11-25-063, -074).
+  editTooLarge: `Too large for the editor, which opens up to ${EDITOR_LIMIT_WORDS}. Choose a smaller size to edit it.`,
+  fromEditor: (width: number, height: number) =>
+    `The editor opens up to ${EDITOR_LIMIT_WORDS}, so ${width} by ${height} px is chosen.`,
+  // A GIF with more than one frame, once loaded (external audit SB-05).
+  gifStill: (frames: number) => `This GIF has ${frames} frames. Only the first is resized, and the download is a still PNG.`,
   tooLarge: `That image is larger than ${DOWNLOAD_SIDE_CAP} px a side. Try a smaller one.`,
   wrongType: 'That file is not a PNG, JPEG, WebP or GIF. Choose another.',
   unreadable: 'That image could not be read. Choose another.',
@@ -301,4 +314,67 @@ export function downloadName(fileName: string, size: { width: number; height: nu
   if (!size) return `${base}.png`;
   const tag = size.width === size.height ? `${size.width}px` : `${size.width}x${size.height}px`;
   return `${base}-${tag}.png`;
+}
+
+/**
+ * How many frames a GIF holds, read from its blocks (external audit SB-05);
+ * 0 for anything that is not a whole GIF. The page decodes only the first
+ * frame, so it says so when there are more.
+ */
+export function gifFrameCount(bytes: Uint8Array): number {
+  const b = bytes;
+  const n = b.length;
+  if (n < 13) return 0;
+  const sig = String.fromCharCode(b[0], b[1], b[2], b[3], b[4], b[5]);
+  if (sig !== 'GIF87a' && sig !== 'GIF89a') return 0;
+  let i = 13;
+  if (b[10] & 0x80) i += 3 * (1 << ((b[10] & 0x07) + 1));
+  // Skips a run of sub-blocks; the index after its zero-length end, or -1.
+  const skipBlocks = (at: number): number => {
+    let j = at;
+    while (j < n) {
+      const len = b[j];
+      if (len === 0) return j + 1;
+      j += len + 1;
+    }
+    return -1;
+  };
+  let frames = 0;
+  while (i < n) {
+    const tag = b[i];
+    if (tag === 0x3b) return frames;
+    if (tag === 0x21) {
+      if (i + 2 > n) return 0;
+      i = skipBlocks(i + 2);
+    } else if (tag === 0x2c) {
+      if (i + 10 > n) return 0;
+      const flags = b[i + 9];
+      i += 10;
+      if (flags & 0x80) i += 3 * (1 << ((flags & 0x07) + 1));
+      i = skipBlocks(i + 1);
+      if (i < 0) return 0;
+      frames++;
+    } else {
+      return 0;
+    }
+    if (i < 0) return 0;
+  }
+  return 0;
+}
+
+/** Whether the editor opens an image of this size (its own limits). */
+export function fitsEditor(width: number, height: number): boolean {
+  return width <= EDITOR_MAX_DIMENSION && height <= EDITOR_MAX_DIMENSION && width * height <= EDITOR_MAX_PIXELS;
+}
+
+/**
+ * The size /resize picks for an image the editor refused (external audit
+ * SB-06): the largest smaller size whose whole image the editor opens, or
+ * null when it already opens the start or no offered size fits.
+ */
+export function editorPick(unit: Unit): SizeChoice | null {
+  const whole = (c: SizeChoice) => fitsEditor(c.width * unit.columns, c.height * unit.rows);
+  const { down } = sizeRows(unit);
+  if (down.length > 0 && down[0].direction === 'same' && whole(down[0])) return null;
+  return down.find((c) => c.direction === 'down' && !c.overCap && whole(c)) ?? null;
 }

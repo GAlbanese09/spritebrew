@@ -167,15 +167,15 @@ const want = [
 const placed = want.map(([f, tag, w]) => [f, places(src(f), tag), w]).filter(([, got, w]) => JSON.stringify(got) !== JSON.stringify(w));
 check("L13: each caller names where its refusal shows: an upload on /editor, the page's words; the handoff from a result card, the card's; the editor body the place its caller gives, at both of its checks: a result card's words from the card, none of either way out from /upload's frames or the Animate character, /editor's on /editor (AUDIT r1 M1)",
   calls(landing).length === 1 && /, 'page'\)/.test(calls(landing)[0])
-  && calls(handoff).length === 1 && /, 'card'\)/.test(calls(handoff)[0])
+  && calls(handoff).length === 2 && calls(handoff).every((c) => /, 'card'\)/.test(c))
   && calls(body).length === 2 && calls(body).every((c) => /, refusalPlace\)\)?;$/.test(c)) && !/layout === 'modal' \? 'card'/.test(body)
   && /refusalPlace: EditorRefusalPlace;/.test(modal) && placed.length === 0,
   [calls(landing), calls(handoff), calls(body), placed]);
 
 // Each refusal is reached only through its own check: the check and the words take the same size, one after the other.
 const guarded = (t) => [...t.matchAll(/if \(!dimsWithinEditorLimits\(([^)]*)\)\) \{\n(?:[^\n]*\n){0,3}?[^\n]*editorDimsRejectionMessage\(([^,]*, [^,)]*)/g)].filter((m) => m[1] === m[2]).length;
-const guards = [[landing, 1], [handoff, 1], [body, 2]].map(([t, n]) => [guarded(t), (t.match(/dimsWithinEditorLimits\(/g) ?? []).length, n]);
-check('L14: every caller checks the size before it shows the words, with the same size, at each of its checks (the /editor upload, the handoff, the editor body twice; AUDIT r1 L1)',
+const guards = [[landing, 1], [handoff, 2], [body, 2]].map(([t, n]) => [guarded(t), (t.match(/dimsWithinEditorLimits\(/g) ?? []).length, n]);
+check('L14: every caller checks the size before it shows the words, with the same size, at each of its checks (the /editor upload, the two handoffs: Generate\'s and /resize\'s (external audit SB-06), the editor body twice; AUDIT r1 L1)',
   guards.every(([g, uses, n]) => g === n && uses === n), guards);
 
 // ---- /editor's way out: the Resize page, as a link (HQ room 2026-11-17-062) ----
@@ -201,7 +201,7 @@ check('L16: those words show "Resize page" as the one link, to /resize, and read
   [asShown[0], othersShown.filter((h) => /<a /.test(h))]);
 const bare = (t, name) => new RegExp(`^\\s*\\{${name}\\}\\s*$`, 'm').test(t);
 check("L17: /editor's upload refusal and the editor body's refusal both show through it, and neither shows its message bare",
-  /<EditorRefusalText message=\{uploadError\} \/>/.test(landing) && /<EditorRefusalText message=\{loadError\} \/>/.test(body)
+  /<EditorRefusalText message=\{uploadError\}(?: onResize=\{[^\n]*\})? \/>/.test(landing) && /<EditorRefusalText message=\{loadError\} \/>/.test(body)
   && !bare(landing, 'uploadError') && !bare(body, 'loadError')
   && /import EditorRefusalText from '\.\/EditorRefusalText';/.test(landing) && /import EditorRefusalText from '\.\/EditorRefusalText';/.test(body));
 

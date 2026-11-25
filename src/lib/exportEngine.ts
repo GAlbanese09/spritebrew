@@ -12,6 +12,7 @@ import { loadImage } from '@/lib/spriteUtils';
 import { exportNames } from '@/lib/exportNames';
 import { godotFloat, godotString, tagRanges, wholePx } from '@/lib/exportPresets';
 import { asepriteDocumentFrom, encodeAseprite, type AseAnimationInput } from '@/lib/asepriteWriter';
+import { RPG_COLS, RPG_ROWS, rpgCutNote, rpgRows } from '@/lib/rpgDirections';
 
 export interface ExportOptions {
   animations: SpriteAnimation[];
@@ -329,17 +330,16 @@ export async function exportRPGMaker(opts: RPGMakerOptions): Promise<{ warnings:
   const { animations, frameDataUrls, rpgFrameWidth, rpgFrameHeight, directionMap, sheetName } = opts;
   const warnings: string[] = [];
 
-  const COLS = 3;
-  const ROWS = 4;
+  const COLS = RPG_COLS;
+  const ROWS = RPG_ROWS;
+
+  // The same rows the page previews (external audit SB-07).
+  const rows = rpgRows(directionMap, animations, (id) => frameDataUrls.has(id));
 
   // A sheet with no direction drawn would be a blank PNG: say so and
   // download nothing (external audit SB-02). The page keeps Download off in
   // that case too.
-  const drawable = directionMap.slice(0, ROWS).some((id) => {
-    const anim = id ? animations.find((a) => a.id === id) : null;
-    return !!anim && anim.frames.length > 0;
-  });
-  if (!drawable) {
+  if (!rows.some((r) => r !== null)) {
     warnings.push('No direction is set to a checked animation, so no sheet was downloaded.');
     return { warnings };
   }
@@ -351,24 +351,16 @@ export async function exportRPGMaker(opts: RPGMakerOptions): Promise<{ warnings:
   ctx.imageSmoothingEnabled = false;
 
   for (let row = 0; row < ROWS; row++) {
-    const animId = directionMap[row];
-    const anim = animId ? animations.find((a) => a.id === animId) : null;
-
-    if (!anim || anim.frames.length === 0) {
-      // Leave row blank
-      continue;
-    }
-
-    const canvases = await loadFrameCanvases(anim.frames, frameDataUrls, rpgFrameWidth, rpgFrameHeight);
-
-    if (canvases.length > COLS) {
-      warnings.push(`"${anim.name}" has ${canvases.length} frames but RPG Maker uses 3 per direction. Extra frames ignored.`);
-    }
-
+    const r = rows[row];
+    if (!r) continue; // an empty row, on purpose
+    const anim = animations.find((a) => a.id === r.animId)!;
+    const withImage = anim.frames.filter((f) => frameDataUrls.has(f.id)).length;
+    const cut = rpgCutNote(anim.name, withImage);
+    if (cut) warnings.push(cut);
+    const frames = r.frameIds.map((id) => anim.frames.find((f) => f.id === id)!);
+    const canvases = await loadFrameCanvases(frames, frameDataUrls, rpgFrameWidth, rpgFrameHeight);
     for (let col = 0; col < COLS; col++) {
-      // Repeat/pad frames to fill 3 columns
-      const frameCanvas = canvases[col % canvases.length];
-      ctx.drawImage(frameCanvas, col * rpgFrameWidth, row * rpgFrameHeight);
+      ctx.drawImage(canvases[col], col * rpgFrameWidth, row * rpgFrameHeight);
     }
   }
 

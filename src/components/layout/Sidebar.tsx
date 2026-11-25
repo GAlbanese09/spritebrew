@@ -106,7 +106,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             type="button"
             onClick={() => onClose(true)}
             aria-label="Close menu"
-            className="lg:hidden p-1 text-text-muted hover:text-text-primary cursor-pointer"
+            className="lg:hidden p-1 text-text-muted hover:text-text-primary cursor-pointer pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center"
           >
             <X size={18} aria-hidden="true" />
           </button>

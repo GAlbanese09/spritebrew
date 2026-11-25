@@ -6,7 +6,7 @@
  * to read and what to say; it has no React and no DOM, and every read is
  * passed in, so the tests drive the real paths offline.
  */
-import type { GalleryEntryV1, JobMode } from '@/lib/galleryTypes';
+import { entryKind, type GalleryEntryV1, type JobMode } from '@/lib/galleryTypes';
 
 /** The most the list API answers in one page. */
 export const GALLERY_PAGE_SIZE = 50;
@@ -28,8 +28,12 @@ export interface GalleryListPage {
  *  read fails. */
 export type ReadGalleryPage = (cursor: string | null) => Promise<GalleryListPage>;
 
+// entryKind lives in galleryTypes, shared with the delete route's kind check
+// (HQ 2026-11-25-079); exported here too for the page and the tests.
+export { entryKind };
+
 export function matchesFilter(entry: GalleryEntryV1, filter: GalleryFilter): boolean {
-  return filter === 'all' || entry.mode === filter;
+  return filter === 'all' || entryKind(entry) === filter;
 }
 
 /** The entries of `page` whose ids are not in `known`, in the page's order,
@@ -262,11 +266,20 @@ export function clearLabel(filter: GalleryFilter): string {
 
 /** The words of the question "Clear" asks, with the true count. `others` is
  *  how many generations of another kind stay (a filter's Clear only). */
-export function clearQuestion(count: number, filter: GalleryFilter, others = 0): string {
+export function clearQuestion(count: number, filter: GalleryFilter, others = 0, moved = 0): string {
   const kind = filter === 'all' ? '' : `${kindOf(filter)} `;
   const all = count === 1 ? '1' : `all ${count}`;
+  // Under Animated, how many of the set used to sit under Created: Animate
+  // from Text results and older Creates made with an animation style. A
+  // record does not say which of the two it is (both used the same styles),
+  // so the combined form (HQ 2026-11-25-076 (b); DESIGN 2026-11-25-080).
+  const includes = filter !== 'animate' || moved <= 0 ? ''
+    // A set of one that is itself moved says what it is (AUDIT ext-mediums r2 L8).
+    : count === 1 ? ' It is an Animate from Text result or an older Create made with an animation style.'
+    : moved === 1 ? ' It includes 1 Animate from Text result or older Create made with an animation style.'
+    : ` It includes ${moved} Animate from Text results and older Creates made with an animation style.`;
   const stay = filter === 'all' || others <= 0 ? '' : others === 1 ? ' The other 1 stays.' : ` The other ${others} stay.`;
-  return `Delete ${all} ${kind}generation${count === 1 ? '' : 's'}?${stay} This cannot be undone.`;
+  return `Delete ${all} ${kind}generation${count === 1 ? '' : 's'}?${includes}${stay} This cannot be undone.`;
 }
 
 /** What Clear says while it reads the rest of the list. */
@@ -328,12 +341,32 @@ export function clearKeptLine(kept: number, asked: number, filter: GalleryFilter
   return `Deleted ${asked - kept} of ${asked} ${kind}generations. The other ${kept === 1 ? 'one is' : `${kept} are`} still here: press ${clearLabel(filter)} to try again.`;
 }
 
+/** What Clear says when the server refused some of its deletes because the
+ *  page counted them by an older rule (HQ 2026-11-25-079): what happened
+ *  first, then the way on, in the server's words. */
+export function clearStaleLine(r: { asked: number; deleted: number; stale?: number; refused?: number }, filter: GalleryFilter): string {
+  const stale = r.stale ?? 0;
+  const refused = r.refused ?? 0;
+  const kind = filter === 'all' ? '' : `${kindOf(filter)} `;
+  const were = (n: number) => (n === 1 ? 'was' : 'were');
+  // DESIGN 2026-11-25-082. With sign-in refusals among them, "out of date"
+  // names only the stale ones (AUDIT ext-mediums r2 L1), in DESIGN -087's
+  // words. A stale Clear is always a kind's Clear, of two or more here.
+  if (refused > 0) {
+    if (r.deleted === 0) return `None of the ${r.asked} ${kind}generations were deleted: ${stale} because this page is out of date, and ${refused} because the request did not go through. Reload the Gallery and try again.`;
+    return `Deleted ${r.deleted} of ${r.asked} ${kind}generations. ${stale} ${were(stale)} not deleted, because this page is out of date, and ${refused} did not go through. Reload the Gallery and try again.`;
+  }
+  if (r.deleted === 0) return 'Nothing was deleted, because this page is out of date. Reload the Gallery and try again.';
+  return `Deleted ${r.deleted} of ${r.asked} ${kind}generations. The other ${stale} ${were(stale)} not deleted, because this page is out of date. Reload the Gallery and try again.`;
+}
+
 /** What a delete call found out. deleted: the server deleted it, or says in
  *  its own words that it is not there. refused: the server said no before
  *  touching anything (the sign-in was not accepted). unknown: anything else,
  *  a 5xx, an answer that is not the route's, or no answer at all; the
- *  server may have deleted and failed to say so. */
-export type DeleteOutcome = 'deleted' | 'refused' | 'unknown';
+ *  server may have deleted and failed to say so. stale: the single route
+ *  refused an entry of another kind than the Clear's, deleting nothing. */
+export type DeleteOutcome = 'deleted' | 'refused' | 'unknown' | 'stale';
 
 /** Reads a delete's answer. A 404 counts as gone only when it is the single
  *  delete route's own (its JSON body says `deleted: false`): a 404 from
@@ -341,7 +374,12 @@ export type DeleteOutcome = 'deleted' | 'refused' | 'unknown';
 export function deleteOutcome(answer: { ok: boolean; status: number; body: unknown }, single: boolean): DeleteOutcome {
   if (answer.ok) return 'deleted';
   if (answer.status === 401 || answer.status === 403) return 'refused';
-  const body = answer.body as { deleted?: unknown } | null;
+  // The single route refused an entry of another kind than the Clear's: the
+  // page's rule is out of date; nothing was deleted (HQ 2026-11-25-079).
+  // Only the route's own answer, its body marked (AUDIT ext-mediums r2 L2):
+  // any other 409 proves nothing.
+  const body = answer.body as { deleted?: unknown; stale?: unknown } | null;
+  if (single && answer.status === 409 && typeof body === 'object' && body !== null && body.stale === true) return 'stale';
   if (single && answer.status === 404 && typeof body === 'object' && body !== null && body.deleted === false) return 'deleted';
   return 'unknown';
 }
@@ -410,8 +448,10 @@ export interface ClearPorts {
   /** "Delete everything". The token is fetched inside, at the call, so
    *  never before the person's answer. */
   deleteAll: () => Promise<DeleteOutcome>;
-  /** One generation. The token is fetched inside, at each call. */
-  deleteOne: (jobId: string) => Promise<DeleteOutcome>;
+  /** One generation, with the kind the Clear counted it as; the server
+   *  refuses an entry of another kind (HQ 2026-11-25-079). The token is
+   *  fetched inside, at each call. */
+  deleteOne: (jobId: string, kind: JobMode) => Promise<DeleteOutcome>;
   /** The server has deleted these: take them off the page. */
   removed: (ids: string[], all: boolean) => void;
   /** What the button and its line show while Clear works. */
@@ -428,7 +468,11 @@ export interface ClearResult {
    *  sent). done: all deleted. partial: the server refused some. failed: it
    *  refused all. unconfirmed: at least one answer was lost or was not a
    *  plain yes or no, so what is left is not known. */
-  state: 'none' | 'count-failed' | 'declined' | 'dropped' | 'done' | 'partial' | 'failed' | 'unconfirmed';
+  state: 'none' | 'count-failed' | 'declined' | 'dropped' | 'done' | 'partial' | 'failed' | 'unconfirmed' | 'stale';
+  /** Refused by the server as of another kind (the page's rule is out of date). */
+  stale?: number;
+  /** Refused before anything was touched (the sign-in was not accepted). */
+  refused?: number;
   /** The number in the question. */
   asked: number;
   deleted: number;
@@ -473,7 +517,8 @@ export async function clearGallery(ports: ClearPorts): Promise<ClearResult> {
   if (targets.length === 0) return result('none');
   const asked = targets.length;
   const ids = targets.map((e) => e.jobId);
-  if (!ports.ask(clearQuestion(asked, ports.filter, everything.length - asked), ids)) return result('declined', asked);
+  const moved = ports.filter === 'animate' ? targets.filter((e) => e.mode === 'create').length : 0;
+  if (!ports.ask(clearQuestion(asked, ports.filter, everything.length - asked, moved), ids)) return result('declined', asked);
 
   ports.phase('deleting', asked);
   const send = async (call: () => Promise<DeleteOutcome>): Promise<DeleteOutcome> => {
@@ -486,7 +531,8 @@ export async function clearGallery(ports: ClearPorts): Promise<ClearResult> {
   if (ports.filter === 'all') {
     const outcome = await send(ports.deleteAll);
     if (outcome === 'refused') return result('failed', asked);
-    if (outcome === 'unknown') return result('unconfirmed', asked, 0, asked);
+    // Only a delete is done; anything else might not be (AUDIT ext-mediums r2 L4).
+    if (outcome !== 'deleted') return result('unconfirmed', asked, 0, asked);
     ports.removed(ids, true);
     return result('done', asked, asked);
   }
@@ -494,8 +540,11 @@ export async function clearGallery(ports: ClearPorts): Promise<ClearResult> {
   // its own delete is answered. Once the visit has ended nothing more is
   // sent: the page that asked is gone, and so may be the account.
   const queue = [...ids];
+  const kind = ports.filter as JobMode;
   let deleted = 0;
   let unknown = 0;
+  let stale = 0;
+  let refused = 0;
   let ended = false;
   const worker = async (): Promise<void> => {
     for (let jobId = queue.shift(); jobId !== undefined; jobId = queue.shift()) {
@@ -503,17 +552,22 @@ export async function clearGallery(ports: ClearPorts): Promise<ClearResult> {
         ended = true;
         return;
       }
-      const outcome = await send(() => ports.deleteOne(jobId as string));
+      const outcome = await send(() => ports.deleteOne(jobId as string, kind));
       if (outcome === 'deleted') {
         deleted += 1;
         ports.removed([jobId], false);
       } else if (outcome === 'unknown') {
         unknown += 1;
+      } else if (outcome === 'stale') {
+        stale += 1;
+      } else {
+        refused += 1;
       }
     }
   };
   await Promise.all(Array.from({ length: CLEAR_WORKERS }, worker));
   if (ended) return result('dropped', asked, deleted, unknown);
   if (unknown > 0) return result('unconfirmed', asked, deleted, unknown);
+  if (stale > 0) return { ...result('stale', asked, deleted), stale, refused };
   return result(deleted === asked ? 'done' : deleted === 0 ? 'failed' : 'partial', asked, deleted);
 }

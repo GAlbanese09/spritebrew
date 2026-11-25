@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -40,35 +40,51 @@ const NAV_ITEMS = [
 
 interface SidebarProps {
   open: boolean;
-  onClose: () => void;
+  /** Closes the drawer; `restoreFocus` puts focus back on the menu button
+   *  (not after a link, which leaves the page). */
+  onClose: (restoreFocus: boolean) => void;
 }
 
 export default function Sidebar({ open, onClose }: SidebarProps) {
   const pathname = usePathname();
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const close = () => onClose(false);
+
+  // Opening the drawer moves focus into it (external audit SB-18).
+  useEffect(() => {
+    if (open) closeButtonRef.current?.focus();
+  }, [open]);
 
   return (
     <>
       {/* Mobile overlay */}
       {open && (
         <div
+          aria-hidden="true"
           className="fixed inset-0 z-40 bg-black/60 lg:hidden"
-          onClick={onClose}
+          onClick={() => onClose(true)}
         />
       )}
 
+      {/* Below 1024 px a closed drawer is hidden, so it is out of the tab
+          order and the accessibility tree (external audit SB-18). Opening
+          shows it at once, so focus can move in; closing hides it when the
+          slide ends. From 1024 px it is the sidebar. */}
       <aside
+        id="app-sidebar"
+        aria-label="Main navigation"
         className={`
           fixed top-0 left-0 z-50 flex h-full w-[var(--sidebar-width)] flex-col
           overflow-y-auto overscroll-contain
           border-r border-border-default bg-bg-secondary
-          transition-transform duration-200 ease-in-out
-          lg:translate-x-0
-          ${open ? 'translate-x-0' : '-translate-x-full'}
+          duration-200 ease-in-out
+          lg:visible lg:translate-x-0
+          ${open ? 'visible translate-x-0 transition-transform' : 'max-lg:invisible -translate-x-full transition-[transform,visibility]'}
         `}
       >
         {/* Logo */}
         <div className="flex items-center justify-between px-5 py-5 border-b border-border-subtle">
-          <Link href="/" className="flex items-center gap-3" onClick={onClose}>
+          <Link href="/" className="flex items-center gap-3" onClick={close}>
             <BrewIcon />
             <span className="font-display text-[11px] text-accent-amber leading-tight tracking-wide">
               Sprite<br />Brew
@@ -86,15 +102,18 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             BETA
           </a>
           <button
-            onClick={onClose}
+            ref={closeButtonRef}
+            type="button"
+            onClick={() => onClose(true)}
+            aria-label="Close menu"
             className="lg:hidden p-1 text-text-muted hover:text-text-primary cursor-pointer"
           >
-            <X size={18} />
+            <X size={18} aria-hidden="true" />
           </button>
         </div>
 
         {/* Nav links */}
-        <nav className="flex-1 px-3 py-4 space-y-1">
+        <nav aria-label="Main navigation" className="flex-1 px-3 py-4 space-y-1">
           {NAV_ITEMS.map(({ href, label, icon: Icon, soon }) => {
             const active = pathname === href;
             const className = `
@@ -121,7 +140,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             // /buy-tokens uses <a> to avoid Next.js RSC prefetch 404s on Cloudflare
             if (href === '/buy-tokens') {
               return (
-                <a key={href} href={href} onClick={onClose} className={className}>
+                <a key={href} href={href} onClick={close} className={className}>
                   {children}
                 </a>
               );
@@ -131,7 +150,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
               <Link
                 key={href}
                 href={soon ? '#' : href}
-                onClick={soon ? (e) => e.preventDefault() : onClose}
+                onClick={soon ? (e) => e.preventDefault() : close}
                 className={className}
               >
                 {children}
@@ -183,7 +202,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         <div className="px-5 py-3 border-t border-border-subtle space-y-1.5">
           <a
             href="/updates"
-            onClick={onClose}
+            onClick={close}
             title="See all updates"
             aria-label={`SpriteBrew v${CURRENT_VERSION}, see all updates`}
             className="block text-[10px] text-text-muted font-mono uppercase tracking-widest hover:text-text-secondary transition-colors"
@@ -191,15 +210,15 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             SpriteBrew v{CURRENT_VERSION}
           </a>
           <div className="flex gap-2 text-[9px] font-mono">
-            <a href="/privacy" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
+            <a href="/privacy" onClick={close} className="text-text-muted hover:text-text-secondary transition-colors">
               Privacy
             </a>
             <span className="text-text-muted/40">&middot;</span>
-            <a href="/terms" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
+            <a href="/terms" onClick={close} className="text-text-muted hover:text-text-secondary transition-colors">
               Terms
             </a>
             <span className="text-text-muted/40">&middot;</span>
-            <a href="/refund-policy" onClick={onClose} className="text-text-muted hover:text-text-secondary transition-colors">
+            <a href="/refund-policy" onClick={close} className="text-text-muted hover:text-text-secondary transition-colors">
               Refunds
             </a>
             <span className="text-text-muted/40">&middot;</span>

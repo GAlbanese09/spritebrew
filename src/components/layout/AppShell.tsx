@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import Sidebar from './Sidebar';
 import Header from './Header';
@@ -15,9 +15,38 @@ interface AppShellProps {
   children: ReactNode;
 }
 
+// From this width the navigation is the always-visible sidebar (Tailwind's
+// lg); below it, a drawer.
+const WIDE_QUERY = '(min-width: 1024px)';
+function subscribeWide(onChange: () => void) {
+  const mq = window.matchMedia(WIDE_QUERY);
+  mq.addEventListener('change', onChange);
+  return () => mq.removeEventListener('change', onChange);
+}
+const wideNow = () => window.matchMedia(WIDE_QUERY).matches;
+const wideOnServer = () => false;
+
 export default function AppShell({ children }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const pathname = usePathname();
+  const wide = useSyncExternalStore(subscribeWide, wideNow, wideOnServer);
+  // The open drawer covers the page below 1024 px: the page behind it is
+  // inert, Escape closes it, and focus goes back to the menu button
+  // (external audit SB-18).
+  const drawerModal = sidebarOpen && !wide;
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const closeSidebar = useCallback((restoreFocus: boolean) => {
+    setSidebarOpen(false);
+    if (restoreFocus) requestAnimationFrame(() => menuButtonRef.current?.focus());
+  }, []);
+  useEffect(() => {
+    if (!drawerModal) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeSidebar(true);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [drawerModal, closeSidebar]);
   // /editor renders flush below the Header (no page padding, no main scroll)
   // so its h-editor-page grid fills exactly the visible area and the mobile
   // bottom toolbar doesn't get pushed below the fold by AppShell padding.
@@ -53,11 +82,11 @@ export default function AppShell({ children }: AppShellProps) {
           from PixelEditorBody so the vars are populated well before any modal
           opens. Landing route bypasses AppShell entirely and doesn't need it. */}
       <ViewportVars />
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar open={sidebarOpen} onClose={closeSidebar} />
 
-      <div className="flex min-w-0 flex-1 flex-col lg:ml-[var(--sidebar-width)]">
+      <div className="flex min-w-0 flex-1 flex-col lg:ml-[var(--sidebar-width)]" inert={drawerModal}>
         <GenerationPauseBanner />
-        <Header onMenuClick={() => setSidebarOpen(true)} />
+        <Header onMenuClick={() => setSidebarOpen(true)} menuOpen={sidebarOpen} menuButtonRef={menuButtonRef} />
 
         {/* `relative`: <main> is the page's scroller, and it has to be the
             containing block for what it holds. Without it, an absolutely

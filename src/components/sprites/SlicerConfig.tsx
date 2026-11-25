@@ -9,6 +9,7 @@ import { useSpriteStore } from '@/stores/spriteStore';
 import { useCanvasFitScale } from '@/lib/useCanvasFitScale';
 import Button from '@/components/ui/Button';
 import { wholeNumberIn } from '@/lib/exportPresets';
+import { framesAlong } from '@/lib/sliceGrid';
 
 interface SanityWarning {
   message: string;
@@ -75,11 +76,10 @@ export default function SlicerConfig({
   const previewWrapperRef = useRef<HTMLDivElement>(null);
   const previewScale = useCanvasFitScale(imageWidth, previewWrapperRef, { maxWidth: 600 });
 
-  // Live frame count — uses safe Math.max(0, ...) so an oversized frame width
-  // produces 0 columns instead of negative numbers.
-  const safeStep = (size: number) => (size > 0 ? size + padding : 1);
-  const columns = Math.max(0, Math.floor((imageWidth - offsetX) / safeStep(frameWidth)));
-  const rows = Math.max(0, Math.floor((imageHeight - offsetY) / safeStep(frameHeight)));
+  // Live frame count, from the one calculation the overlay, the size presets
+  // and the slice share (sliceGrid.ts).
+  const columns = framesAlong(imageWidth, frameWidth, padding, offsetX);
+  const rows = framesAlong(imageHeight, frameHeight, padding, offsetY);
   const totalFrames = frameLimit !== null ? Math.min(columns * rows, frameLimit) : columns * rows;
 
   // Generated animations carry their geometry in the sheet hints. The result
@@ -283,9 +283,7 @@ export default function SlicerConfig({
   /** Compute how many frames a given preset would produce on the current image. */
   const presetFrameCount = useCallback(
     (presetW: number, presetH: number): number => {
-      const cols = Math.max(0, Math.floor((imageWidth - offsetX) / (presetW + padding)));
-      const rowsCount = Math.max(0, Math.floor((imageHeight - offsetY) / (presetH + padding)));
-      return cols * rowsCount;
+      return framesAlong(imageWidth, presetW, padding, offsetX) * framesAlong(imageHeight, presetH, padding, offsetY);
     },
     [imageWidth, imageHeight, offsetX, offsetY, padding]
   );

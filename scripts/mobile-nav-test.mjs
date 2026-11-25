@@ -30,10 +30,12 @@ function check(name, ok) {
 check('1: the closed drawer is hidden below 1024 px (out of the tab order and the accessibility tree), and visible from 1024 px',
   /\$\{open \? 'visible translate-x-0 transition-transform' : 'max-lg:invisible -translate-x-full transition-\[transform,visibility\]'\}/.test(sidebar)
   && /lg:visible lg:translate-x-0/.test(sidebar));
-check('2: the opener is named, says whether the drawer is open, and names what it opens',
-  /aria-label="Open menu"/.test(header) && /aria-expanded=\{menuOpen\}/.test(header) && /aria-controls="app-sidebar"/.test(header) && /ref=\{menuButtonRef\}/.test(header));
+check('2: the opener is named "Menu" (DESIGN 2026-11-25-042), says whether the drawer is open, and names what it opens',
+  /aria-label="Menu"/.test(header) && !/Open menu/.test(header) && /aria-expanded=\{menuOpen\}/.test(header) && /aria-controls="app-sidebar"/.test(header) && /ref=\{menuButtonRef\}/.test(header));
 check('3: the drawer has its id and name; the close button is named',
   /id="app-sidebar"/.test(sidebar) && /aria-label="Main navigation"/.test(sidebar) && /aria-label="Close menu"/.test(sidebar));
+check('3b: the sidebar\'s link list reads as "Main navigation" too (DESIGN 2026-11-25-042)',
+  /<nav aria-label="Main navigation" className="flex-1 px-3 py-4 space-y-1">/.test(sidebar));
 check('4: opening moves focus to the close button', /if \(open\) closeButtonRef\.current\?\.focus\(\);/.test(sidebar));
 check('5: the close button and the backdrop close and put focus back on the opener; a link closes without it',
   (sidebar.match(/onClick=\{\(\) => onClose\(true\)\}/g) ?? []).length === 2 && !/onClick=\{onClose\}/.test(sidebar)

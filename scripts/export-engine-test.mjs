@@ -154,7 +154,7 @@ function lastZipText(suffix) {
   globalThis.__draws = 0;
   const blank = await engine.exportRPGMaker(opts([idle], { rpgFrameWidth: 48, rpgFrameHeight: 48, directionMap: ['w', null, null, null] }));
   check('RPG Maker: no direction with a checked animation downloads nothing and says why',
-    captured.length === before && blank.warnings.length === 1 && /direction/i.test(blank.warnings[0]), { downloads: captured.length - before, warnings: blank.warnings });
+    captured.length === before && blank.warnings.length === 1 && blank.warnings[0] === 'No direction is set to a checked animation, so no sheet was downloaded.', { downloads: captured.length - before, warnings: blank.warnings });
   globalThis.__draws = 0;
   const one = await engine.exportRPGMaker(opts([idle], { rpgFrameWidth: 48, rpgFrameHeight: 48, directionMap: ['i', null, null, null] }));
   const file = captured[captured.length - 1];

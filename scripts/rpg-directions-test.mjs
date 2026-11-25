@@ -67,6 +67,17 @@ if (R) {
     /const rpgBlank = selectedEngine === 'rpgmaker' && !rpgHasRow\(directionMap, activeAnimations\);/.test(cfg)
     && /disabled=\{exporting \|\| totalFrames === 0 \|\| rpgBlank\}/.test(cfg)
     && /\{rpgBlank && \(/.test(cfg));
+  // DESIGN 2026-11-25-042: the line sits under the off button, names where
+  // the menus are, is tied to the button, and is 12 px.
+  const line = 'Set at least one direction under Direction mapping to a checked animation to download the sheet.';
+  const iLine = cfg.indexOf(line);
+  const iButton = cfg.indexOf('disabled={exporting || totalFrames === 0 || rpgBlank}');
+  check('2f: the line\'s words, once, under the Download button', iLine > 0 && cfg.indexOf(line, iLine + 1) < 0 && iButton > 0 && iLine > iButton
+    && !/Set at least one direction to a checked animation/.test(cfg));
+  check('2g: the Download button is described by the line while it is off, and the line is 12 px',
+    /aria-describedby=\{rpgBlank \? rpgBlankId : undefined\}/.test(cfg)
+    && /<p id=\{rpgBlankId\} className="text-xs font-mono text-accent-amber/.test(cfg)
+    && /const rpgBlankId = useId\(\);/.test(cfg));
 }
 
 console.log(fail ? `\n${fail} FAILED, ${pass} passed` : `\nall pass (${pass} cases)`);

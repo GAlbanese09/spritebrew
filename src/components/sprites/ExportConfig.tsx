@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef, useId } from 'react';
 import {
   Download,
   Check,
@@ -179,6 +179,7 @@ export default function ExportConfig() {
   // (external audit SB-02).
   const rpgMap = useMemo(() => rpgMapInUse(directionMap, activeAnimations), [directionMap, activeAnimations]);
   const rpgBlank = selectedEngine === 'rpgmaker' && !rpgHasRow(directionMap, activeAnimations);
+  const rpgBlankId = useId();
 
   const toggleAnim = useCallback((id: string) => {
     setSelectedAnims((prev) => {
@@ -631,11 +632,6 @@ export default function ExportConfig() {
             <p className="text-[10px] font-mono text-text-muted">
               Output: {rpgFrameW * 3}x{rpgFrameH * 4}px sheet &middot; Filename prefixed with $
             </p>
-            {rpgBlank && (
-              <p className="text-[10px] font-mono text-accent-amber">
-                Set at least one direction to a checked animation to download the sheet.
-              </p>
-            )}
           </div>
         )}
 
@@ -721,12 +717,14 @@ export default function ExportConfig() {
         </div>
       )}
 
-      {/* Export button */}
-      <div className="flex justify-end">
+      {/* Export button; while RPG Maker has no direction to draw, the line
+          under it says why it is off (DESIGN 2026-11-25-042). */}
+      <div className="flex flex-col items-end gap-2">
         <Button
           size="lg"
           onClick={handleExport}
           disabled={exporting || totalFrames === 0 || rpgBlank}
+          aria-describedby={rpgBlank ? rpgBlankId : undefined}
         >
           {exporting ? (
             <>
@@ -740,6 +738,11 @@ export default function ExportConfig() {
             </>
           )}
         </Button>
+        {rpgBlank && (
+          <p id={rpgBlankId} className="text-xs font-mono text-accent-amber text-right">
+            Set at least one direction under Direction mapping to a checked animation to download the sheet.
+          </p>
+        )}
       </div>
     </div>
   );

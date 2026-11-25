@@ -113,7 +113,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         </div>
 
         {/* Nav links */}
-        <nav className="flex-1 px-3 py-4 space-y-1">
+        <nav aria-label="Main navigation" className="flex-1 px-3 py-4 space-y-1">
           {NAV_ITEMS.map(({ href, label, icon: Icon, soon }) => {
             const active = pathname === href;
             const className = `

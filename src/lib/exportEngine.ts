@@ -340,7 +340,7 @@ export async function exportRPGMaker(opts: RPGMakerOptions): Promise<{ warnings:
     return !!anim && anim.frames.length > 0;
   });
   if (!drawable) {
-    warnings.push('No direction has a checked animation, so no sheet was downloaded.');
+    warnings.push('No direction is set to a checked animation, so no sheet was downloaded.');
     return { warnings };
   }
 

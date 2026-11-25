@@ -35,7 +35,7 @@ export default function Header({ onMenuClick, menuOpen, menuButtonRef }: HeaderP
         ref={menuButtonRef}
         type="button"
         onClick={onMenuClick}
-        aria-label="Open menu"
+        aria-label="Menu"
         aria-expanded={menuOpen}
         aria-controls="app-sidebar"
         className="lg:hidden p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover cursor-pointer"

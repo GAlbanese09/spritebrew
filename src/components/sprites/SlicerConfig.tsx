@@ -496,7 +496,7 @@ export default function SlicerConfig({
                   disabled={!g}
                   className={`px-3 py-1.5 rounded text-xs font-mono transition-colors
                     ${!g
-                      ? 'bg-bg-elevated text-text-muted/50 cursor-not-allowed border border-border-subtle/50'
+                      ? 'bg-bg-elevated text-text-disabled cursor-not-allowed border border-border-subtle/50'
                       : active
                         ? 'bg-accent-amber text-bg-primary cursor-pointer'
                         : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover hover:text-text-primary border border-border-subtle cursor-pointer'
@@ -551,7 +551,7 @@ export default function SlicerConfig({
         ) : (
           <p className="text-xs font-mono text-text-muted">
             &rarr; <span className="text-accent-amber font-semibold">{totalFrames}</span> frames
-            <span className="text-text-muted/70"> ({columns} cols × {rows} rows)</span>
+            <span className="text-text-muted"> ({columns} cols × {rows} rows)</span>
           </p>
         )}
         <Button size="lg" onClick={handleSlice} disabled={totalFrames === 0}>

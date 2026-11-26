@@ -122,7 +122,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                   ${active
                     ? 'bg-accent-amber-glow text-accent-amber text-glow-amber'
                     : soon
-                      ? 'text-text-muted cursor-default'
+                      ? 'text-text-disabled cursor-default'
                       : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
                   }
                 `;
@@ -130,7 +130,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
               <>
                 <Icon
                   size={18}
-                  className={active ? 'text-accent-amber' : soon ? 'text-text-muted' : 'text-text-muted group-hover:text-text-secondary'}
+                  className={active ? 'text-accent-amber' : soon ? 'text-text-disabled' : 'text-text-muted group-hover:text-text-primary'}
                 />
                 <span className="flex-1">{label}</span>
                 {soon && <Badge variant="muted">Soon</Badge>}
@@ -170,7 +170,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           >
             <MessageCircle
               size={18}
-              className="text-text-muted group-hover:text-text-secondary"
+              className="text-text-muted group-hover:text-text-primary"
             />
             <span>Feedback</span>
           </a>
@@ -205,24 +205,24 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             onClick={close}
             title="See all updates"
             aria-label={`SpriteBrew v${CURRENT_VERSION}, see all updates`}
-            className="block text-[10px] text-text-muted font-mono uppercase tracking-widest hover:text-text-secondary transition-colors"
+            className="block text-[10px] text-text-muted font-mono uppercase tracking-widest hover:text-text-primary transition-colors"
           >
             SpriteBrew v{CURRENT_VERSION}
           </a>
           <div className="flex gap-2 text-[9px] font-mono">
-            <a href="/privacy" onClick={close} className="text-text-muted hover:text-text-secondary transition-colors">
+            <a href="/privacy" onClick={close} className="text-text-muted hover:text-text-primary transition-colors">
               Privacy
             </a>
             <span className="text-text-muted/40">&middot;</span>
-            <a href="/terms" onClick={close} className="text-text-muted hover:text-text-secondary transition-colors">
+            <a href="/terms" onClick={close} className="text-text-muted hover:text-text-primary transition-colors">
               Terms
             </a>
             <span className="text-text-muted/40">&middot;</span>
-            <a href="/refund-policy" onClick={close} className="text-text-muted hover:text-text-secondary transition-colors">
+            <a href="/refund-policy" onClick={close} className="text-text-muted hover:text-text-primary transition-colors">
               Refunds
             </a>
             <span className="text-text-muted/40">&middot;</span>
-            <a href={FEEDBACK_URL} target="_blank" rel="noopener noreferrer" className="text-text-muted hover:text-text-secondary transition-colors">
+            <a href={FEEDBACK_URL} target="_blank" rel="noopener noreferrer" className="text-text-muted hover:text-text-primary transition-colors">
               Feedback
             </a>
           </div>
